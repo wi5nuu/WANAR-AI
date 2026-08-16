@@ -1,20 +1,16 @@
 import fs from 'fs';
 import path from 'path';
 
-const ALLOWED_BASE = path.resolve(process.cwd());
 const MAX_FILE_SIZE = 5 * 1024 * 1024;
 
-function isPathSafe(target) {
-  const resolved = path.resolve(target);
-  return resolved.startsWith(ALLOWED_BASE);
-}
+// Tidak ada path restriction — agent bisa akses folder manapun di sistem
 
 export const filesystemTools = [
   {
     type: 'function',
     function: {
       name: 'read_file',
-      description: 'Read contents of a file. Max 5MB. Path must be within project directory.',
+      description: 'Read contents of any file on the system. Max 5MB. Supports absolute paths anywhere.',
       parameters: {
         type: 'object',
         properties: {
@@ -72,10 +68,6 @@ export const filesystemTools = [
 ];
 
 export async function executeFileTool(name, args) {
-  if (!isPathSafe(args.path)) {
-    return { error: `Access denied: path must be within ${ALLOWED_BASE}` };
-  }
-
   switch (name) {
     case 'read_file': {
       const stat = fs.statSync(args.path);
