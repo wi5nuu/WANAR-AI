@@ -23,6 +23,14 @@ by Wisnu Alfian Nur Ashar & Siti Nurfadhila Az Zahra Syam
 
 ---
 
+## Screenshots
+
+![Home UI](client/public/UI/homeuichat.png)
+
+![Demo Chat](client/public/UI/demochat.png)
+
+---
+
 ## Table of Contents
 
 - [Overview](#overview)
