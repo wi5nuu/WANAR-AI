@@ -256,6 +256,7 @@ const EVENT_ICON = {
   'job:form_detected':    { icon: '◈', color: '#6366f1' },
   'job:fields':           { icon: '≡', color: '#94a3b8' },
   'job:filling':          { icon: '✎', color: '#6366f1' },
+  'job:field_filled':     { icon: '·', color: '#6366f1' },
   'job:submitted':        { icon: '✓', color: '#22c55e' },
   'job:review':           { icon: '⚠', color: '#f59e0b' },
   'job:skip':             { icon: '↷', color: '#94a3b8' },
@@ -282,7 +283,8 @@ function eventToText(event) {
     case 'job:form_detected': return `Form terdeteksi: ${p.formType} (${p.url})`;
     case 'job:fields':        return `${p.fieldCount} field form ditemukan`;
     case 'job:filling':       return `Mengisi ${p.fieldCount} field untuk ${p.company}`;
-    case 'job:submitted':     return `✓ TERKIRIM: ${p.company} — ${p.title} (confidence ${p.confidence}%)`;
+    case 'job:field_filled':  return `  → ${p.label}: ${p.preview}`;
+    case 'job:submitted':     return `TERKIRIM: ${p.company} — ${p.title} (confidence ${p.confidence}%)`;
     case 'job:review':        return `Review dibutuhkan: ${p.company} — ${p.reason}`;
     case 'job:skip':          return `Dilewati: ${p.company} — ${p.reason}`;
     case 'job:captcha':         return p.solving ? `🤖 CAPTCHA di ${p.company} — mencoba solve otomatis via audio...` : `⚠ CAPTCHA di ${p.company} — selesaikan di browser lalu agent lanjut otomatis`;

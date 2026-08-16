@@ -694,7 +694,14 @@ async function processJob(jobId, page, profile, options = {}) {
     } else {
       // Auto-fill + submit + verify
       emit(sid, 'job:filling', { jobId, company: job.company, title: job.title, fieldCount: fieldMapping.length });
-      await autoFillForm(page, fieldMapping, coverLetter, formType);
+
+      // Emit per-field ke live feed agar user bisa pantau real-time
+      const fieldEmit = (label, value) => {
+        const preview = String(value).length > 40 ? String(value).substring(0, 40) + '...' : String(value);
+        emit(sid, 'job:field_filled', { jobId, company: job.company, label, preview });
+      };
+
+      await autoFillForm(page, fieldMapping, coverLetter, formType, fieldEmit);
       await page.waitForTimeout(1000);
 
       const result = await submitFormAndVerify(page, formType);
@@ -733,127 +740,218 @@ async function processJob(jobId, page, profile, options = {}) {
 }
 
 // ── Core: Auto-fill Google Form ───────────────────────────────────────────
-async function fillGoogleForm(page, fieldMapping, coverLetter) {
-  // Tunggu semua pertanyaan Google Forms render
-  await page.waitForTimeout(1500);
+// Strategi baru: scan seluruh DOM Google Forms sekali, lalu fill berdasarkan
+// posisi/index field secara langsung — jauh lebih reliabel dari label matching
+async function fillGoogleForm(page, fieldMapping, coverLetter, emitFn) {
+  // Tunggu semua pertanyaan render penuh
+  await page.waitForTimeout(2000);
 
-  // Ambil semua question container dari DOM Google Forms
-  // Selector priority: .freebirdFormviewerViewItemsItemItem (modern), fallback [data-params]
-  const itemSelector = '.freebirdFormviewerViewItemsItemItem, [data-item-id]';
+  // Simulasi gerakan mouse natural (anti-bot detection)
+  await page.mouse.move(400 + Math.random() * 200, 300 + Math.random() * 100);
+  await page.waitForTimeout(300);
 
+  // Scan semua question container sekaligus dari DOM
+  // Ambil semua input/textarea/listbox yang visible di halaman
+  const questions = await page.evaluate(() => {
+    const result = [];
+    // Cari semua container pertanyaan
+    const containerSelectors = [
+      '.freebirdFormviewerViewItemsItemItem',
+      '[data-item-id]',
+      '.Qr7Oae',
+      '.freebirdFormviewerComponentsQuestionBaseRoot',
+    ];
+    let containers = [];
+    for (const sel of containerSelectors) {
+      containers = Array.from(document.querySelectorAll(sel));
+      if (containers.length > 0) break;
+    }
+
+    for (let i = 0; i < containers.length; i++) {
+      const c = containers[i];
+      // Ambil label
+      const labelEl = c.querySelector(
+        '.M7eMe, .freebirdFormviewerViewItemsItemItemTitle, [role="heading"], ' +
+        '.aDTYNe, .HoXoMd, span[dir="auto"]'
+      );
+      const label = labelEl?.textContent?.trim() || '';
+
+      // Detect tipe input
+      const shortInput = c.querySelector('input[type="text"], input:not([type="radio"]):not([type="checkbox"]):not([type="file"]):not([type="hidden"])');
+      const textarea   = c.querySelector('textarea');
+      const listbox    = c.querySelector('[role="listbox"]');
+      const radios     = c.querySelectorAll('[role="radio"]');
+      const checkboxes = c.querySelectorAll('[role="checkbox"]');
+
+      let type = 'unknown';
+      let radioOptions = [];
+      if (textarea)          type = 'textarea';
+      else if (shortInput)   type = 'text';
+      else if (listbox)      type = 'dropdown';
+      else if (radios.length > 0) {
+        type = 'radio';
+        radioOptions = Array.from(radios).map(r =>
+          (r.getAttribute('data-value') || r.textContent?.trim() || '').toLowerCase()
+        );
+      }
+      else if (checkboxes.length > 0) type = 'checkbox';
+
+      result.push({ index: i, label, type, radioOptions });
+    }
+    return result;
+  });
+
+  if (!questions || questions.length === 0) return;
+
+  // Match field mapping ke question DOM berdasarkan label similarity
   for (const field of fieldMapping) {
     if (field.skipField || field.isFile) continue;
     const value = field.isEssay && coverLetter ? coverLetter : field.mappedValue;
     if (!value) continue;
 
+    // Cari question yang paling cocok labelnya dengan field.label
+    let bestMatch = null;
+    let bestScore = 0;
+    const fieldLabelLower = (field.label || '').toLowerCase();
+
+    for (const q of questions) {
+      if (q.type === 'unknown') continue;
+      const qLabelLower = q.label.toLowerCase();
+      // Exact match
+      if (qLabelLower === fieldLabelLower) { bestMatch = q; break; }
+      // Partial match score
+      const words = fieldLabelLower.split(/\s+/).filter(w => w.length > 2);
+      const matches = words.filter(w => qLabelLower.includes(w)).length;
+      const score = words.length > 0 ? matches / words.length : 0;
+      if (score > bestScore && score > 0.4) { bestScore = score; bestMatch = q; }
+    }
+
+    // Fallback: match berdasarkan tipe field jika tidak ada label match
+    if (!bestMatch) {
+      const isTextArea = field.type === 'textarea' || field.isEssay;
+      bestMatch = questions.find(q =>
+        isTextArea ? q.type === 'textarea' : q.type === 'text'
+      );
+    }
+
+    if (!bestMatch) continue;
+
     try {
-      // Cari container yang teksnya cocok dengan label field
-      const containers = page.locator(itemSelector);
-      const count = await containers.count();
-      let filled = false;
-
-      for (let i = 0; i < count; i++) {
-        const container = containers.nth(i);
-        const containerText = (await container.textContent().catch(() => '')).toLowerCase();
-
-        // Match label — cek 15 karakter pertama untuk toleransi
-        const labelLower = (field.label || '').toLowerCase();
-        const labelShort = labelLower.substring(0, 15).trim();
-        if (!labelShort || !containerText.includes(labelShort)) continue;
-
-        // ── Short answer ──
-        const shortInput = container.locator('input[type="text"]').first();
-        if (await shortInput.count() > 0) {
-          await shortInput.scrollIntoViewIfNeeded();
-          await shortInput.click();
-          await shortInput.fill('');
-          await shortInput.type(value, { delay: 25 + Math.random() * 35 });
-          filled = true; break;
-        }
-
-        // ── Paragraph / textarea ──
-        const textarea = container.locator('textarea').first();
-        if (await textarea.count() > 0) {
-          await textarea.scrollIntoViewIfNeeded();
-          await textarea.click();
-          await textarea.fill('');
-          await textarea.type(value, { delay: 20 + Math.random() * 30 });
-          filled = true; break;
-        }
-
-        // ── Dropdown ──
-        const listbox = container.locator('[role="listbox"]').first();
-        if (await listbox.count() > 0) {
-          await listbox.scrollIntoViewIfNeeded();
-          await listbox.click();
-          await page.waitForTimeout(600);
-          // Cari option yang paling mirip dengan value
-          const options = page.locator('[role="option"]');
-          const optCount = await options.count();
-          for (let j = 0; j < optCount; j++) {
-            const optText = (await options.nth(j).textContent().catch(() => '')).toLowerCase();
-            if (optText.includes(value.toLowerCase().substring(0, 8))) {
-              await options.nth(j).click();
-              filled = true; break;
-            }
-          }
-          if (!filled) {
-            // Pilih opsi pertama yang bukan placeholder
-            if (optCount > 1) { await options.nth(1).click(); filled = true; }
-            else await page.keyboard.press('Escape');
-          }
-          break;
-        }
-
-        // ── Radio button ──
-        const radios = container.locator('[role="radio"]');
-        const radioCount = await radios.count();
-        if (radioCount > 0) {
-          // Cari radio yang teksnya paling mirip
-          let bestRadio = null;
-          for (let j = 0; j < radioCount; j++) {
-            const rText = (await radios.nth(j).textContent().catch(() => '')).toLowerCase();
-            if (rText.includes(value.toLowerCase().substring(0, 6))) { bestRadio = j; break; }
-          }
-          const target = radios.nth(bestRadio !== null ? bestRadio : 0);
-          await target.scrollIntoViewIfNeeded();
-          await target.click();
-          filled = true; break;
-        }
-
-        // ── Checkbox ──
-        const checkboxes = container.locator('[role="checkbox"]');
-        if (await checkboxes.count() > 0) {
-          const first = checkboxes.first();
-          await first.scrollIntoViewIfNeeded();
-          await first.click();
-          filled = true; break;
-        }
-      }
-
-      // Fallback: gunakan selector dari extractFormFields jika ada
-      if (!filled && field.selector) {
-        const el = page.locator(field.selector).first();
-        if (await el.count() > 0) {
-          const tag = await el.evaluate(n => n.tagName.toLowerCase()).catch(() => '');
-          if (tag === 'select') {
-            await el.selectOption({ label: value }).catch(() => el.selectOption({ value }).catch(() => {}));
-          } else {
-            await el.scrollIntoViewIfNeeded();
-            await el.click();
-            await el.fill('');
-            await el.type(value, { delay: 25 + Math.random() * 35 });
-          }
-        }
-      }
-
-      await page.waitForTimeout(300 + Math.random() * 400);
+      await fillGoogleFormQuestion(page, bestMatch, value, field);
+      if (emitFn) emitFn(field.label, value);
+      await page.waitForTimeout(400 + Math.random() * 600);
     } catch { /* lanjut ke field berikutnya */ }
   }
 }
 
+// Fill satu pertanyaan Google Forms berdasarkan index container
+async function fillGoogleFormQuestion(page, question, value, field) {
+  // Re-query container by index setiap kali (DOM bisa berubah setelah interaksi)
+  const containerSelectors = [
+    '.freebirdFormviewerViewItemsItemItem',
+    '[data-item-id]',
+    '.Qr7Oae',
+    '.freebirdFormviewerComponentsQuestionBaseRoot',
+  ];
+
+  let container = null;
+  for (const sel of containerSelectors) {
+    const all = page.locator(sel);
+    const count = await all.count();
+    if (count > question.index) {
+      container = all.nth(question.index);
+      break;
+    }
+  }
+  if (!container) return;
+
+  await container.scrollIntoViewIfNeeded();
+  await page.waitForTimeout(200);
+
+  // Simulasi mouse hover sebelum isi
+  const box = await container.boundingBox().catch(() => null);
+  if (box) {
+    await page.mouse.move(
+      box.x + box.width * 0.3 + Math.random() * box.width * 0.4,
+      box.y + box.height * 0.3 + Math.random() * box.height * 0.4
+    );
+    await page.waitForTimeout(150);
+  }
+
+  if (question.type === 'text') {
+    const input = container.locator('input[type="text"], input:not([type="radio"]):not([type="checkbox"]):not([type="file"]):not([type="hidden"])').first();
+    await input.click({ force: true });
+    await page.waitForTimeout(200);
+    // Triple-click untuk select all, lalu type
+    await input.click({ clickCount: 3 });
+    await input.fill('');
+    await page.keyboard.type(value, { delay: 30 + Math.random() * 40 });
+
+  } else if (question.type === 'textarea') {
+    const ta = container.locator('textarea').first();
+    await ta.click({ force: true });
+    await page.waitForTimeout(200);
+    await ta.click({ clickCount: 3 });
+    await ta.fill('');
+    await page.keyboard.type(value, { delay: 20 + Math.random() * 30 });
+
+  } else if (question.type === 'dropdown') {
+    const listbox = container.locator('[role="listbox"]').first();
+    await listbox.click({ force: true });
+    await page.waitForTimeout(800);
+    // Cari option yang paling cocok
+    const options = page.locator('[role="option"]');
+    const optCount = await options.count();
+    let filled = false;
+    const valueLower = value.toLowerCase();
+    for (let i = 0; i < optCount; i++) {
+      const optText = (await options.nth(i).textContent().catch(() => '')).toLowerCase();
+      if (optText.includes(valueLower) || valueLower.includes(optText.replace(/\s+/g, ''))) {
+        await options.nth(i).click();
+        filled = true;
+        break;
+      }
+    }
+    if (!filled && optCount > 1) {
+      await options.nth(1).click(); // pilih opsi kedua (skip placeholder)
+    } else if (!filled) {
+      await page.keyboard.press('Escape');
+    }
+
+  } else if (question.type === 'radio') {
+    const radios = container.locator('[role="radio"]');
+    const radioCount = await radios.count();
+    const valueLower = value.toLowerCase();
+    let bestIdx = 0;
+    let bestScore = -1;
+    for (let i = 0; i < radioCount; i++) {
+      const rText = (await radios.nth(i).textContent().catch(() => '')).toLowerCase();
+      // Exact match
+      if (rText === valueLower) { bestIdx = i; break; }
+      // Common patterns: ya/tidak, laki/perempuan, dll
+      if (valueLower.includes('laki') && (rText.includes('laki') || rText === 'l')) { bestIdx = i; break; }
+      if (valueLower.includes('perempuan') && (rText.includes('perempuan') || rText === 'p')) { bestIdx = i; break; }
+      if (valueLower.includes('ya') && rText === 'ya') { bestIdx = i; break; }
+      if (valueLower.includes('tidak') && rText === 'tidak') { bestIdx = i; break; }
+      // Score partial
+      const score = valueLower.split('').filter(c => rText.includes(c)).length;
+      if (score > bestScore) { bestScore = score; bestIdx = i; }
+    }
+    const target = radios.nth(bestIdx);
+    await target.scrollIntoViewIfNeeded();
+    await target.click({ force: true });
+
+  } else if (question.type === 'checkbox') {
+    const first = container.locator('[role="checkbox"]').first();
+    await first.scrollIntoViewIfNeeded();
+    await first.click({ force: true });
+  }
+}
+
+
+
 // ── Core: Auto-fill generic form ──────────────────────────────────────────
-async function fillGenericForm(page, fieldMapping, coverLetter) {
+async function fillGenericForm(page, fieldMapping, coverLetter, emitFn) {
   for (const field of fieldMapping) {
     if (!field.selector) continue;
     const value = field.isEssay && coverLetter ? coverLetter : field.mappedValue;
@@ -861,16 +959,19 @@ async function fillGenericForm(page, fieldMapping, coverLetter) {
     try {
       const el = page.locator(field.selector).first();
       if (await el.count() === 0) continue;
+      await el.scrollIntoViewIfNeeded();
+      await page.waitForTimeout(200);
       if (field.type === 'select') {
         await el.selectOption({ label: value }).catch(() => el.selectOption({ value }));
       } else if (field.isFile) {
-        // Skip file upload — masuk review queue
         continue;
       } else {
         await el.click();
+        await el.click({ clickCount: 3 });
         await el.fill('');
-        await el.type(value, { delay: 30 + Math.random() * 40 });
+        await page.keyboard.type(value, { delay: 30 + Math.random() * 40 });
       }
+      if (emitFn) emitFn(field.label, value);
       await page.waitForTimeout(200 + Math.random() * 400);
     } catch {}
   }
@@ -879,20 +980,59 @@ async function fillGenericForm(page, fieldMapping, coverLetter) {
 // ── Core: Submit form dan verifikasi ──────────────────────────────────────
 async function submitFormAndVerify(page, formType) {
   try {
-    // Cari tombol submit
-    const submitBtn = page.locator(
-      'button[type="submit"], input[type="submit"], ' +
-      '[role="button"]:has-text("Submit"), [role="button"]:has-text("Kirim"), ' +
-      'button:has-text("Submit"), button:has-text("Kirim"), ' +
-      'button:has-text("Send"), button:has-text("Apply")'
-    ).first();
+    // Scroll ke bawah halaman dulu agar semua field terisi dan tombol submit visible
+    await page.evaluate(() => window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' }));
+    await page.waitForTimeout(1000);
 
-    if (await submitBtn.count() === 0) return { submitted: false, reason: 'Tombol submit tidak ditemukan' };
+    // Simulasi gerakan mouse natural ke area bawah halaman sebelum klik
+    const viewportSize = page.viewportSize() || { width: 1280, height: 720 };
+    await page.mouse.move(
+      viewportSize.width * 0.4 + Math.random() * viewportSize.width * 0.2,
+      viewportSize.height * 0.7 + Math.random() * viewportSize.height * 0.2
+    );
+    await page.waitForTimeout(400);
+
+    // Cari tombol submit — Google Forms pakai [role="button"] bukan <button>
+    // Coba selector spesifik Google Forms dulu, lalu generic
+    const submitSelectors = [
+      '[role="button"]:has-text("Kirim")',
+      '[role="button"]:has-text("Submit")',
+      '[role="button"]:has-text("Send")',
+      'button:has-text("Kirim")',
+      'button:has-text("Submit")',
+      'button:has-text("Send")',
+      'button:has-text("Apply")',
+      'button[type="submit"]',
+      'input[type="submit"]',
+    ];
+
+    let submitBtn = null;
+    for (const sel of submitSelectors) {
+      const el = page.locator(sel).first();
+      if (await el.count() > 0) {
+        submitBtn = el;
+        break;
+      }
+    }
+
+    if (!submitBtn) return { submitted: false, reason: 'Tombol submit tidak ditemukan' };
 
     await submitBtn.scrollIntoViewIfNeeded();
-    await page.waitForTimeout(500);
-    await submitBtn.click();
-    await page.waitForTimeout(3000);
+    await page.waitForTimeout(600);
+
+    // Hover dulu, lalu klik (lebih natural, menghindari bot detection)
+    const btnBox = await submitBtn.boundingBox().catch(() => null);
+    if (btnBox) {
+      await page.mouse.move(
+        btnBox.x + btnBox.width * 0.3 + Math.random() * btnBox.width * 0.4,
+        btnBox.y + btnBox.height * 0.2 + Math.random() * btnBox.height * 0.6
+      );
+      await page.waitForTimeout(300);
+    }
+
+    await submitBtn.click({ force: true });
+    // Tunggu navigasi atau perubahan halaman setelah submit
+    await page.waitForTimeout(4000);
 
     // Verifikasi submission berhasil
     const currentUrl = page.url();
@@ -942,11 +1082,11 @@ ${profile.email || ''}`;
 }
 
 // ── Core: Auto-fill form (router) ──────────────────────────────────────────
-async function autoFillForm(page, fieldMapping, coverLetter, formType) {
+async function autoFillForm(page, fieldMapping, coverLetter, formType, emitFn) {
   if (formType === 'google_form') {
-    await fillGoogleForm(page, fieldMapping, coverLetter);
+    await fillGoogleForm(page, fieldMapping, coverLetter, emitFn);
   } else {
-    await fillGenericForm(page, fieldMapping, coverLetter);
+    await fillGenericForm(page, fieldMapping, coverLetter, emitFn);
   }
 }
 
