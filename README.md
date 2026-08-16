@@ -1,284 +1,188 @@
-﻿# 🤖 Wanar AI v1.0
+﻿<div align="center">
 
-**Professional AI Agent with Dual Provider Support**  
-Yunwu.ai (GPT-4o / Claude / Gemini) + Puter.js (Free Claude API)
+<img src="client/public/logo.png" alt="Wanar AI Logo" width="120" />
+
+# Wanar AI v2.0
+
+**Platform AI Chat Multi-Provider + Autonomous Job Application Agent**
+
+Dibuat oleh **Wisnu Alfian Nur Ashar**
+
+[![Node.js](https://img.shields.io/badge/Node.js-18+-339933?style=flat-square&logo=node.js)](https://nodejs.org)
+[![React](https://img.shields.io/badge/React-19-61DAFB?style=flat-square&logo=react)](https://react.dev)
+[![Playwright](https://img.shields.io/badge/Playwright-1.x-45ba4b?style=flat-square)](https://playwright.dev)
+[![SQLite](https://img.shields.io/badge/SQLite-WAL-003B57?style=flat-square&logo=sqlite)](https://sqlite.org)
+[![License](https://img.shields.io/badge/License-Private-red?style=flat-square)](./LICENSE)
+
+</div>
 
 ---
 
-## 📋 Daftar Isi
+## Tampilan UI
 
-- [Instalasi](#-instalasi)
-- [Cara Menjalankan](#-cara-menjalankan)
-- [Mode CLI (Terminal)](#-mode-cli-terminal)
-- [Mode Web Server (Chatbot UI)](#-mode-web-server-chatbot-ui)
-- [Dual Provider System](#-dual-provider-system)
-- [Commands CLI](#-commands-cli)
-- [Available Models](#-available-models)
-- [Struktur Project](#-struktur-project)
-- [Troubleshooting](#-troubleshooting)
+![Wanar AI Chat Interface](client/public/UI/chatui.png)
 
 ---
 
-## ⚡ Instalasi
+## Deskripsi
+
+Wanar AI adalah platform AI pribadi yang menggabungkan:
+
+- **AI Chat** dengan 53+ model dari berbagai provider (Claude, GPT-4o, Gemini, DeepSeek, dll)
+- **Job Application Agent** — crawl lowongan kerja, deteksi form, isi otomatis, dan submit lamaran tanpa campur tangan manual
+- **Database lokal** berbasis SQLite — semua data tersimpan di mesin kamu sendiri, tidak ada yang dikirim ke server luar
+
+---
+
+## Fitur Utama
+
+### AI Chat
+- Multi-provider: OpenAgentic (53 model), NVIDIA, Puter.js (gratis)
+- Streaming SSE real-time
+- Session history dengan sidebar
+- Provider & model selector langsung dari input bar
+- Context window management otomatis
+
+### Job Application Agent
+- Crawl halaman listing lowongan (Linktree, Glints, Jobstreet, dll)
+- Deteksi Google Forms secara otomatis
+- Isi form otomatis: nama, email, nomor HP, universitas, jurusan, IPK, LinkedIn, dll
+- Generate cover letter personal per perusahaan
+- Submit + verifikasi konfirmasi halaman
+- Mode CDP: connect ke Chrome yang sudah login untuk hindari CAPTCHA
+- Audio CAPTCHA solver gratis (tanpa API key berbayar)
+- Live feed SSE — monitor setiap langkah secara real-time
+- Review queue untuk field yang perlu persetujuan manual
+- Trusted Mode: auto-submit jika confidence field ≥85%
+
+### Keamanan & Privasi
+- Semua data tersimpan lokal di SQLite (tidak ada cloud sync)
+- API key dibaca dari `.env` — tidak pernah hardcoded
+- Database tidak pernah di-push ke GitHub
+
+---
+
+## Instalasi
 
 ### Prasyarat
-- Node.js 18+ (download di [nodejs.org](https://nodejs.org))
-- NPM (sudah termasuk dengan Node.js)
 
-### Langkah Instalasi
+- Node.js 18+ — [nodejs.org](https://nodejs.org)
+- Google Chrome (untuk mode CDP)
+- Windows 10/11
 
-`ash
-# 1. Pindah ke folder project
-cd D:\wanar-ai
+### Setup
 
-# 2. Install dependencies (hanya sekali)
+```bash
+# 1. Clone repo
+git clone https://github.com/wi5nuu/WANAR-AI.git
+cd WANAR-AI
+
+# 2. Install dependencies backend
 npm install
-`
 
----
+# 3. Install dependencies frontend
+cd client && npm install && cd ..
 
-## 🚀 Cara Menjalankan
+# 4. Salin template environment
+cp .env.example .env
+# Edit .env dan isi API key kamu
 
-Ada **3 cara** untuk menjalankan Wanar AI:
+# 5. Build frontend
+cd client && npm run build && cd ..
 
-### 📟 Mode CLI (Terminal)
-
-Chat langsung dari terminal Windows/PowerShell:
-
-`ash
-# Cara 1 - Langsung
-node src/cli.js
-
-# Cara 2 - Via npm script
-npm run cli
-`
-
-**Tampilan:**
-`
-╔═══════════════════════════════════════════════════════════╗
-║                    WANAR AI v1.0                          ║
-║         Professional AI Agent Terminal Interface          ║
-╚═══════════════════════════════════════════════════════════╝
-
-Current Provider: YUNWU
-Available Models: gpt-4o, gpt-4-turbo, claude-3-5-sonnet, gemini-2.0-flash
-
-Commands:
-  /help        - Show help
-  /provider    - Switch provider (yunwu/puter)
-  /model       - Change model
-  /clear       - Clear conversation history
-  /info        - Show provider info
-  /exit        - Exit Wanar AI
-
-You: Halo, siapa kamu?
-Wanar AI: Halo! Saya Wanar AI, asisten AI profesional Anda...
-
-[YUNWU - gpt-4o] Tokens: 58
-`
-
-### 🌐 Mode Web Server (Chatbot UI)
-
-Buka di browser dengan tampilan chat modern:
-
-`ash
-# Cara 1 - Langsung
+# 6. Jalankan server
 node src/server.js
+```
 
-# Cara 2 - Via npm script
-npm run web
-`
-
-Setelah server berjalan, buka browser dan akses:
-`
-http://localhost:3000
-`
-
-**Fitur Web UI:**
-- Tampilan chat modern dengan tema dark
-- Dropdown untuk pilih provider (Yunwu.ai / Puter.js)
-- Dropdown untuk pilih model
-- Tombol Clear Chat
-- Riwayat percakapan
-
-### 🎯 Mode Interaktif (Pilih sendiri)
-
-Pilih antara CLI atau Web Server saat startup:
-
-`ash
-# Cara 1 - Langsung
-node src/index.js
-
-# Cara 2 - Via npm script
-npm start
-`
-
-Nanti akan muncul pilihan:
-`
-=======================================================
-  WANAR AI v1.0 - Professional AI Agent
-  Dual Provider: Yunwu.ai + Puter.js
-=======================================================
-
-Select interface:
-  1) Terminal CLI  - Chat directly in terminal
-  2) Web Server   - Open web interface in browser
-
-Enter choice (1 or 2):
-`
+Buka browser di `http://localhost:3000`
 
 ---
 
-## 🔄 Dual Provider System
+## Konfigurasi `.env`
 
-Wanar AI mendukung **dua provider AI** yang bisa dipilih sesuai kebutuhan:
+```env
+# Provider utama
+OPENAGENTIC_API_KEY=your_key_here
+OPENAGENTIC_BASE_URL=https://openagentic.id/api/v1
 
-### Provider 1: Yunwu.ai
-- **Models:** GPT-4o, GPT-4-turbo, Claude 3.5 Sonnet, Gemini 2.0 Flash
-- **Cocok untuk:** Semua kebutuhan, performa stabil
-- **Konfigurasi:** Sudah terisi API key (.env)
+# NVIDIA (opsional)
+NVIDIA_API_KEY=your_key_here
 
-### Provider 2: Puter.js
-- **Models:** Claude Fable 5, Claude Sonnet 5, Claude Opus 4.8, Claude Haiku 4.5
-- **Cocok untuk:** Akses Claude gratis tanpa API key
-- **Catatan:** Hanya berfungsi di Web UI (browser)
+# Server
+PORT=3000
+HOST=localhost
 
-### Cara Switch Provider
+# Batas penggunaan harian
+DAILY_TOKEN_LIMIT=300000000
+DAILY_COST_LIMIT_USD=50
+```
 
-**Di CLI (Terminal):**
-`ash
-# Cek provider saat ini
-/provider
-
-# Ganti ke Puter.js
-/provider puter
-
-# Ganti ke Yunwu.ai
-/provider yunwu
-
-# Lihat model yang tersedia
-/model
-`
-
-**Di Web UI:**
-- Gunakan dropdown "Provider" di bagian atas
-- Pilih "Yunwu.ai" atau "Puter.js"
-- Model akan otomatis menyesuaikan
+Lihat `.env.example` untuk daftar lengkap konfigurasi.
 
 ---
 
-## ⌨️ Commands CLI
+## Cara Pakai Job Agent
 
-| Command | Fungsi | Contoh |
-|---------|--------|--------|
-| /help | Menampilkan bantuan | /help |
-| /provider | Cek atau ganti provider | /provider puter |
-| /model | Lihat model tersedia | /model |
-| /clear | Hapus riwayat chat | /clear |
-| /info | Info detail provider | /info |
-| /exit | Keluar dari Wanar AI | /exit |
+1. Buka `http://localhost:3000/job-agent`
+2. Klik **Launch Chrome CDP** — agent akan connect ke Chrome yang sudah login Google
+3. Klik **Sesi Baru**
+4. Isi URL listing lowongan (contoh: `https://linktr.ee/icc_pu`)
+5. Centang **Trusted Mode** untuk auto-submit langsung
+6. Klik **Mulai** dan monitor live feed
 
 ---
 
-## 🧠 Available Models
+## Struktur Project
 
-### Yunwu.ai
-| Model | Provider | Deskripsi |
-|-------|----------|-----------|
-| gpt-4o | OpenAI | Model paling stabil & cepat (default) |
-| gpt-4-turbo | OpenAI | GPT-4 versi turbo |
-| claude-3-5-sonnet-20241022 | Anthropic | Claude Sonnet terbaru |
-| gemini-2.0-flash | Google | Gemini 2.0 Flash |
-
-### Puter.js (Free Claude)
-| Model | Provider | Deskripsi |
-|-------|----------|-----------|
-| claude-fable-5 | Anthropic | Claude paling canggih |
-| claude-sonnet-5 | Anthropic | Claude Sonnet 5 (default) |
-| claude-opus-4.8-fast | Anthropic | Claude Opus mode cepat |
-| claude-opus-4-8 | Anthropic | Claude Opus standar |
-| claude-haiku-4-5 | Anthropic | Claude Haiku ringan |
-
----
-
-## 📁 Struktur Project
-
-`
-D:\wanar-ai
+```
+wanar-ai/
+├── client/                    # Frontend React + Vite
+│   ├── src/
+│   │   ├── components/        # JobAgent, Chat, Sidebar, dll
+│   │   └── styles/
+│   └── public/
+│       ├── logo.png
+│       └── UI/chatui.png
+├── src/                       # Backend Node.js Express
+│   ├── server.js              # Entry point + semua endpoint
+│   ├── ai-manager.js          # Multi-provider AI manager
+│   ├── database.js            # SQLite CRUD
+│   └── tools/
+│       ├── job-agent.js       # Engine autonomous job agent
+│       ├── browser.js         # Playwright browser tools
+│       └── registry.js        # Tool registry
 ├── config/
-│   └── config.js              # Dual provider configuration
-├── src/
-│   ├── index.js               # Main entry point
-│   ├── cli.js                 # Terminal CLI interface
-│   ├── server.js              # Web server
-│   ├── ai-manager.js          # AI provider manager
-│   └── providers/
-│       ├── yunwu.js           # Yunwu.ai provider
-│       └── puter.js           # Puter.js provider (Free Claude API)
-├── public/
-│   ├── index.html             # Web UI
-│   ├── css/style.css          # Styling
-│   └── js/app.js              # Frontend logic
-├── .env                       # Environment variables
-├── .env.example               # Template environment
-└── package.json               # Dependencies
-`
+│   └── config.js              # Provider configuration
+├── .env.example               # Template konfigurasi
+└── package.json
+```
 
 ---
 
-## 🔧 Troubleshooting
+## Tech Stack
 
-### Error: 'node' is not recognized
-Install Node.js dari https://nodejs.org (pilih LTS version)
-
-### Error: Cannot find module 'express'
-`ash
-cd D:\wanar-ai
-npm install
-`
-
-### Error: Port 3000 already in use
-Edit file .env dan ganti PORT=3000 ke port lain (misal PORT=4000)
-
-### Error: etch is not defined
-Update Node.js ke versi 18+:
-`ash
-node --version
-`
-
-### API Yunwu.ai tidak merespon
-`ash
-# Test API key
-curl https://yunwu.ai/v1/chat/completions ^
-  -H "Content-Type: application/json" ^
-  -H "Authorization: Bearer YOUR_API_KEY" ^
-  -d "{\"model\":\"gpt-4o\",\"messages\":[{\"role\":\"user\",\"content\":\"test\"}]}"
-`
-
-### Puter.js tidak berfungsi di CLI
-Puter.js membutuhkan browser environment. Gunakan **Mode Web Server** (
-pm run web) untuk menggunakan Puter.js.
+| Layer | Teknologi |
+|-------|-----------|
+| Backend | Node.js, Express, SQLite (better-sqlite3) |
+| Frontend | React 19, Vite, CSS Variables |
+| Browser Automation | Playwright (Chromium + CDP) |
+| AI Providers | OpenAgentic, NVIDIA, Puter.js |
+| Realtime | Server-Sent Events (SSE) |
+| Database | SQLite WAL mode (lokal) |
 
 ---
 
-## 📝 Quick Reference
+## Catatan Keamanan
 
-`ash
-# Install dependencies
-cd D:\wanar-ai && npm install
-
-# Mode CLI (terminal interaktif)
-npm run cli
-
-# Mode Web (buka di browser http://localhost:3000)
-npm run web
-
-# Mode pilihan (pilih CLI atau Web)
-npm start
-`
+- File `.env` tidak pernah di-push ke GitHub (ada di `.gitignore`)
+- Database SQLite (`data/`) tidak di-push — berisi data pribadi
+- Repo ini bersifat **Private** — tidak untuk distribusi publik
+- Jangan share API key kamu kepada siapapun
 
 ---
 
-**Wanar AI v1.0**  
-Professional AI Agent | Ashar Grosir Perfume Management System  
-Dibuat: 18 Juli 2026
+<div align="center">
+
+**Wanar AI v2.0** — Dibuat oleh Wisnu Alfian Nur Ashar · 2026
+
+</div>
