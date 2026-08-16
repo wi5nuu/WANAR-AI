@@ -1173,7 +1173,11 @@ export async function startJobSession(sessionId, options = {}) {
     activeSessions.get(String(sessionId)).browser = browser;
     activeSessions.get(String(sessionId)).page = page;
 
-    // Step 1: Crawl listing
+    // Simpan ctx agar processJob bisa buka tab baru
+    const browserCtx = activeSessions.get(String(sessionId)).ctx ||
+      (usingCDP ? browser.contexts()[0] : null);
+
+    // Step 1: Crawl listing — pakai page utama untuk crawl saja
     emit(sessionId, 'session:crawling', { url: session.source_url });
     const jobs = await crawlListingPage(session.source_url, page);
     for (const j of jobs) {
@@ -1182,7 +1186,7 @@ export async function startJobSession(sessionId, options = {}) {
     db.updateJobSession(sessionId, { total: jobs.length });
     emit(sessionId, 'session:crawled', { count: jobs.length, jobs: jobs.slice(0, 10) });
 
-    // Step 2: Process each job
+    // Step 2: Process each job — setiap job dapat tab Chrome sendiri
     const queue = db.getJobQueue('pending', 500);
     let idx = 0;
     for (const job of queue) {
@@ -1192,7 +1196,27 @@ export async function startJobSession(sessionId, options = {}) {
       }
       idx++;
       emit(sessionId, 'session:progress', { current: idx, total: queue.length, company: job.company, title: job.title });
-      await processJob(job.id, page, profile, { ...options, sessionId });
+
+      // Buka tab baru untuk setiap job
+      let jobPage = null;
+      try {
+        const ctx = browserCtx || (browser.contexts && browser.contexts()[0]);
+        if (ctx) {
+          jobPage = await ctx.newPage();
+          await injectStealth(jobPage);
+          emit(sessionId, 'session:browser', { message: `Tab baru dibuka untuk: ${job.company}` });
+        }
+      } catch {
+        // Fallback: reuse page utama jika tidak bisa buka tab baru
+        jobPage = page;
+      }
+
+      await processJob(job.id, jobPage || page, profile, { ...options, sessionId });
+
+      // Tutup tab setelah selesai (jangan tutup page utama)
+      if (jobPage && jobPage !== page) {
+        await jobPage.close().catch(() => {});
+      }
 
       // Update session counters
       const stats = db.getJobQueueStats();
