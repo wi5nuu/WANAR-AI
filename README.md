@@ -1,159 +1,149 @@
 ﻿<div align="center">
 
-<img src="client/public/logo.png" alt="Wanar AI Logo" width="120" />
+<img src="client/public/logo.png" alt="Wanar AI" width="100" />
 
 # Wanar AI v2.0
 
-**Platform AI Chat Multi-Provider + Autonomous Job Application Agent**
+**Enterprise AI Chat Platform + Autonomous Job Application Agent**
 
-Dibuat oleh **Wisnu Alfian Nur Ashar**
+by Wisnu Alfian Nur Ashar
 
-[![Node.js](https://img.shields.io/badge/Node.js-18+-339933?style=flat-square&logo=node.js)](https://nodejs.org)
-[![React](https://img.shields.io/badge/React-19-61DAFB?style=flat-square&logo=react)](https://react.dev)
-[![Playwright](https://img.shields.io/badge/Playwright-1.x-45ba4b?style=flat-square)](https://playwright.dev)
-[![SQLite](https://img.shields.io/badge/SQLite-WAL-003B57?style=flat-square&logo=sqlite)](https://sqlite.org)
-[![License](https://img.shields.io/badge/License-Private-red?style=flat-square)](./LICENSE)
+![Node.js](https://img.shields.io/badge/Node.js-18+-339933?style=flat-square&logo=node.js&logoColor=white)
+![React](https://img.shields.io/badge/React-19-61DAFB?style=flat-square&logo=react&logoColor=black)
+![Playwright](https://img.shields.io/badge/Playwright-Automation-45ba4b?style=flat-square)
+![SQLite](https://img.shields.io/badge/SQLite-Local%20DB-003B57?style=flat-square&logo=sqlite)
+![License](https://img.shields.io/badge/License-Private-red?style=flat-square)
 
 </div>
 
 ---
 
-## Tampilan UI
-
-![Wanar AI Chat Interface](client/public/UI/chatui.png)
+![Wanar AI Interface](client/public/UI/chatui.png)
 
 ---
 
-## Deskripsi
+## Overview
 
-Wanar AI adalah platform AI pribadi yang menggabungkan:
+Wanar AI is a self-hosted AI platform that runs entirely on your local machine. It combines a professional multi-model AI chat interface with an autonomous job application agent capable of crawling job listings, detecting application forms, filling them out, and submitting — all without manual intervention.
 
-- **AI Chat** dengan 53+ model dari berbagai provider (Claude, GPT-4o, Gemini, DeepSeek, dll)
-- **Job Application Agent** — crawl lowongan kerja, deteksi form, isi otomatis, dan submit lamaran tanpa campur tangan manual
-- **Database lokal** berbasis SQLite — semua data tersimpan di mesin kamu sendiri, tidak ada yang dikirim ke server luar
+All data stays local. No cloud sync. No third-party data collection.
 
 ---
 
-## Fitur Utama
+## Features
 
 ### AI Chat
-- Multi-provider: OpenAgentic (53 model), NVIDIA, Puter.js (gratis)
-- Streaming SSE real-time
-- Session history dengan sidebar
-- Provider & model selector langsung dari input bar
-- Context window management otomatis
+
+- 53+ models from multiple providers: Claude (Anthropic), GPT-4o, Gemini, DeepSeek, Llama, and more
+- Real-time streaming via Server-Sent Events
+- Session history with sidebar navigation
+- Provider and model selector in the input bar
+- Automatic context window management and summarization
 
 ### Job Application Agent
-- Crawl halaman listing lowongan (Linktree, Glints, Jobstreet, dll)
-- Deteksi Google Forms secara otomatis
-- Isi form otomatis: nama, email, nomor HP, universitas, jurusan, IPK, LinkedIn, dll
-- Generate cover letter personal per perusahaan
-- Submit + verifikasi konfirmasi halaman
-- Mode CDP: connect ke Chrome yang sudah login untuk hindari CAPTCHA
-- Audio CAPTCHA solver gratis (tanpa API key berbayar)
-- Live feed SSE — monitor setiap langkah secara real-time
-- Review queue untuk field yang perlu persetujuan manual
-- Trusted Mode: auto-submit jika confidence field ≥85%
 
-### Keamanan & Privasi
-- Semua data tersimpan lokal di SQLite (tidak ada cloud sync)
-- API key dibaca dari `.env` — tidak pernah hardcoded
-- Database tidak pernah di-push ke GitHub
+- Crawl job listing pages (Linktree, Glints, Jobstreet, LinkedIn, and more)
+- Automatic Google Forms detection and field extraction
+- Smart field mapping to your profile: name, email, phone, university, major, GPA, LinkedIn, etc.
+- Auto-generated cover letter per company and position
+- Form fill and submit with confirmation page verification
+- Chrome CDP integration — connects to your already-logged-in Chrome to avoid CAPTCHA
+- Audio CAPTCHA solver (free, no paid API required)
+- Real-time live feed monitoring for every step
+- Review queue for fields requiring manual approval
+- Trusted Mode: auto-submit when field confidence is 85% or above
+
+### Privacy & Security
+
+- SQLite database stored locally — never pushed to any server
+- API keys loaded from `.env` file — never hardcoded
+- `.gitignore` prevents all sensitive files from being committed
 
 ---
 
-## Instalasi
+## Installation
 
-### Prasyarat
+### Requirements
 
-- Node.js 18+ — [nodejs.org](https://nodejs.org)
-- Google Chrome (untuk mode CDP)
+- Node.js 18 or higher — [nodejs.org](https://nodejs.org)
+- Google Chrome (for CDP mode)
 - Windows 10/11
 
 ### Setup
 
 ```bash
-# 1. Clone repo
+# Clone the repository
 git clone https://github.com/wi5nuu/WANAR-AI.git
 cd WANAR-AI
 
-# 2. Install dependencies backend
+# Install backend dependencies
 npm install
 
-# 3. Install dependencies frontend
+# Install frontend dependencies
 cd client && npm install && cd ..
 
-# 4. Salin template environment
+# Copy environment template
 cp .env.example .env
-# Edit .env dan isi API key kamu
+# Fill in your API keys in .env
 
-# 5. Build frontend
+# Build the frontend
 cd client && npm run build && cd ..
 
-# 6. Jalankan server
+# Start the server
 node src/server.js
 ```
 
-Buka browser di `http://localhost:3000`
+Open your browser at `http://localhost:3000`
 
 ---
 
-## Konfigurasi `.env`
+## Environment Configuration
+
+Copy `.env.example` to `.env` and fill in your keys. The minimum required configuration:
 
 ```env
-# Provider utama
 OPENAGENTIC_API_KEY=your_key_here
 OPENAGENTIC_BASE_URL=https://openagentic.id/api/v1
-
-# NVIDIA (opsional)
-NVIDIA_API_KEY=your_key_here
-
-# Server
 PORT=3000
-HOST=localhost
-
-# Batas penggunaan harian
-DAILY_TOKEN_LIMIT=300000000
-DAILY_COST_LIMIT_USD=50
 ```
 
-Lihat `.env.example` untuk daftar lengkap konfigurasi.
+See `.env.example` for the full list of available options. Never commit your `.env` file.
 
 ---
 
-## Cara Pakai Job Agent
+## Using the Job Agent
 
-1. Buka `http://localhost:3000/job-agent`
-2. Klik **Launch Chrome CDP** — agent akan connect ke Chrome yang sudah login Google
-3. Klik **Sesi Baru**
-4. Isi URL listing lowongan (contoh: `https://linktr.ee/icc_pu`)
-5. Centang **Trusted Mode** untuk auto-submit langsung
-6. Klik **Mulai** dan monitor live feed
+1. Open `http://localhost:3000/job-agent`
+2. Click **Launch Chrome CDP** to connect the agent to your logged-in Chrome browser
+3. Go to **New Session**
+4. Enter a job listing URL (e.g. a Linktree page with company career links)
+5. Enable **Trusted Mode** for automatic submission without manual approval
+6. Click **Start** and monitor progress in the live feed
 
 ---
 
-## Struktur Project
+## Project Structure
 
 ```
 wanar-ai/
-├── client/                    # Frontend React + Vite
+├── client/                     # React + Vite frontend
 │   ├── src/
-│   │   ├── components/        # JobAgent, Chat, Sidebar, dll
+│   │   ├── components/         # JobAgent, Chat, Sidebar, Profile, etc.
 │   │   └── styles/
 │   └── public/
 │       ├── logo.png
 │       └── UI/chatui.png
-├── src/                       # Backend Node.js Express
-│   ├── server.js              # Entry point + semua endpoint
-│   ├── ai-manager.js          # Multi-provider AI manager
-│   ├── database.js            # SQLite CRUD
+├── src/                        # Node.js Express backend
+│   ├── server.js               # Main server and all API endpoints
+│   ├── ai-manager.js           # Multi-provider AI orchestration
+│   ├── database.js             # SQLite schema and CRUD operations
 │   └── tools/
-│       ├── job-agent.js       # Engine autonomous job agent
-│       ├── browser.js         # Playwright browser tools
-│       └── registry.js        # Tool registry
+│       ├── job-agent.js        # Autonomous job application engine
+│       ├── browser.js          # Playwright browser automation
+│       └── registry.js         # Tool registration
 ├── config/
-│   └── config.js              # Provider configuration
-├── .env.example               # Template konfigurasi
+│   └── config.js               # Provider and model configuration
+├── .env.example                # Environment template (no real keys)
 └── package.json
 ```
 
@@ -161,28 +151,29 @@ wanar-ai/
 
 ## Tech Stack
 
-| Layer | Teknologi |
-|-------|-----------|
-| Backend | Node.js, Express, SQLite (better-sqlite3) |
-| Frontend | React 19, Vite, CSS Variables |
-| Browser Automation | Playwright (Chromium + CDP) |
+| Layer | Technology |
+|-------|------------|
+| Backend | Node.js, Express |
+| Frontend | React 19, Vite |
+| Database | SQLite via better-sqlite3 (WAL mode) |
+| Browser Automation | Playwright (Chromium + Chrome CDP) |
 | AI Providers | OpenAgentic, NVIDIA, Puter.js |
-| Realtime | Server-Sent Events (SSE) |
-| Database | SQLite WAL mode (lokal) |
+| Realtime Updates | Server-Sent Events (SSE) |
+| Security | Helmet, CORS, Rate Limiting |
 
 ---
 
-## Catatan Keamanan
+## Important Notes
 
-- File `.env` tidak pernah di-push ke GitHub (ada di `.gitignore`)
-- Database SQLite (`data/`) tidak di-push — berisi data pribadi
-- Repo ini bersifat **Private** — tidak untuk distribusi publik
-- Jangan share API key kamu kepada siapapun
+- The `.env` file containing API keys is excluded from version control
+- The `data/` directory containing the SQLite database is excluded from version control
+- This repository is private and intended for personal use only
+- Do not share your API keys or database files
 
 ---
 
 <div align="center">
 
-**Wanar AI v2.0** — Dibuat oleh Wisnu Alfian Nur Ashar · 2026
+Wanar AI v2.0 — Wisnu Alfian Nur Ashar — 2026
 
 </div>
