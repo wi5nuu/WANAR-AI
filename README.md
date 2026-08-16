@@ -25,6 +25,8 @@ by Wisnu Alfian Nur Ashar & Siti Nurfadhila Az Zahra Syam
 
 ![Demo Chat](client/public/UI/demochat.png)
 
+![CLI](client/public/UI/cli.png)
+
 </div>
 
 ---
