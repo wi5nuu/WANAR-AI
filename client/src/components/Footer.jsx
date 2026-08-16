@@ -29,7 +29,7 @@ export default function Footer({ provider, model, route }) {
           WebkitTextFillColor: 'transparent',
           backgroundClip: 'text'
         }}>
-          Wanar AI v1.0.1
+          Powered by Wanar AI v1.0.1 · by Wisnu & Zahra
         </span>
       </span>
 

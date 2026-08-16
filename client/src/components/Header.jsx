@@ -45,7 +45,7 @@ export default function Header({
             Wanar AI v1.0.1
           </div>
           <div className="header-subtitle">
-            by Wisnu Alfian Nur Ashar
+            by Wisnu Alfian Nur Ashar & Siti Nurfadhila Az Zahra Syam
           </div>
         </div>
       </div>

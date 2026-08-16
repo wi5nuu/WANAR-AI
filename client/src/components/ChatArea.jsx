@@ -209,7 +209,7 @@ function WelcomeScreen({ onQuickAction }) {
         color: 'var(--text-secondary)',
         marginBottom: '36px',
       }}>
-        Wanar AI v1.0.1 — Personal AI Agent kamu siap bekerja
+        Wanar AI v1.0.1 — dibuat dengan cinta oleh Wisnu & Zahra
       </p>
 
       {/* Quick Action Grid */}
