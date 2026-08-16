@@ -5,11 +5,12 @@
   "main": "src/index.js",
   "type": "module",
   "bin": {
-    "wanar": "./src/cli.js",
-    "wanarai": "./src/cli.js"
+    "wanar": "./bin/wanar.js",
+    "wanarai": "./bin/wanarai.js"
   },
   "files": [
     "src/",
+    "bin/",
     "config/",
     "client/dist/",
     ".env.example",
