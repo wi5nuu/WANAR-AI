@@ -19,15 +19,13 @@ by Wisnu Alfian Nur Ashar & Siti Nurfadhila Az Zahra Syam
 
 ---
 
-![Wanar AI Interface](client/public/UI/chatui.png)
-
----
-
-## Screenshots
+<div align="center">
 
 ![Home UI](client/public/UI/homeuichat.png)
 
 ![Demo Chat](client/public/UI/demochat.png)
+
+</div>
 
 ---
 
