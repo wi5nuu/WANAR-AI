@@ -15,7 +15,7 @@ const _require = createRequire(import.meta.url);
 const pdfParse = _require('pdf-parse');
 
 import config from '../config/config.js';
-import AIManager, { WANAR_SYSTEM_PROMPT } from './ai-manager.js';
+import AIManager, { WANAR_SYSTEM_PROMPT, WANAR_SYSTEM_PROMPT_WEB } from './ai-manager.js';
 import * as db from './database.js';
 import { getToolDefinitions, executeTool } from './tools/registry.js';
 import * as providerRegistry from './providers/registry.js';
@@ -418,7 +418,7 @@ app.post('/api/chat', rateLimiters.chat, asyncHandler(async (req, res) => {
   } catch (_) {}
 
   const { messages: truncatedMessages } = ctxManager.getTruncatedMessages(
-    messages, model, WANAR_SYSTEM_PROMPT + tokenContext
+    messages, model, WANAR_SYSTEM_PROMPT_WEB + tokenContext
   );
 
   const cacheKey = `chat:${provider}:${model || 'default'}:${truncatedMessages.slice(-2).map(m => m.content.slice(0, 100)).join('|')}`;
@@ -430,7 +430,7 @@ app.post('/api/chat', rateLimiters.chat, asyncHandler(async (req, res) => {
   const tools = getToolDefinitions();
   let result;
   if (provider === 'openagentic') {
-    result = await aiManager.openagenticProvider.chat(truncatedMessages, { model, tools, systemPrompt: WANAR_SYSTEM_PROMPT + tokenContext });
+    result = await aiManager.openagenticProvider.chat(truncatedMessages, { model, tools, systemPrompt: WANAR_SYSTEM_PROMPT_WEB + tokenContext });
   } else if (provider === 'nvidia') {
     result = await aiManager.nvidiaProvider.chat(truncatedMessages, { model, tools, top_p: req.body.top_p ?? 1, seed: req.body.seed });
   } else if (provider === 'vector') {
@@ -477,7 +477,7 @@ app.post('/api/chat', rateLimiters.chat, asyncHandler(async (req, res) => {
         }
 
         const providerCall = async (msgs) => {
-          if (provider === 'openagentic') return aiManager.openagenticProvider.chat(msgs, { model, tools, systemPrompt: WANAR_SYSTEM_PROMPT + tokenContext });
+          if (provider === 'openagentic') return aiManager.openagenticProvider.chat(msgs, { model, tools, systemPrompt: WANAR_SYSTEM_PROMPT_WEB + tokenContext });
           if (provider === 'nvidia') return aiManager.nvidiaProvider.chat(msgs, { model, tools, top_p: req.body.top_p ?? 1, seed: req.body.seed });
           if (provider === 'vector') return aiManager.vectorProvider.chat(msgs, { model, tools });
           const cp = providerRegistry.createDynamicProvider(provider);
@@ -530,7 +530,7 @@ app.post('/api/chat/stream', rateLimiters.chat, asyncHandler(async (req, res) =>
   const messages = req.body.messages.map(m => ({ role: m.role, content: sanitize(m.content) }));
   const sessionId = req.body.session_id || null;
 
-  let systemPrompt = WANAR_SYSTEM_PROMPT;
+  let systemPrompt = WANAR_SYSTEM_PROMPT_WEB;
 
   if (ragEngine.enabled && ragEngine.initialized) {
     const lastUserMsg = messages.filter(m => m.role === 'user').pop();
