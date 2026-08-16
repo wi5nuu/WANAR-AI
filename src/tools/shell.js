@@ -1,7 +1,7 @@
 import { execSync, spawn } from 'child_process';
 import path from 'path';
 
-const ALLOWED_BASE = path.resolve(process.cwd());
+const DEFAULT_WORKDIR = process.cwd();
 const MAX_OUTPUT = 100 * 1024;
 const TIMEOUT_MS = 30000;
 
@@ -10,7 +10,7 @@ export const shellTools = [
     type: 'function',
     function: {
       name: 'bash',
-      description: 'Execute a shell command in the project directory. Output truncated to 100KB.',
+      description: 'Execute a shell command. Supports any working directory on the system. Output truncated to 100KB.',
       parameters: {
         type: 'object',
         properties: {
