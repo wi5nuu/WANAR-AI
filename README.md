@@ -6,7 +6,7 @@
 
 **Professional AI Chat Platform + Autonomous Job Application Agent**
 
-by Wisnu Alfian Nur Ashar
+by Wisnu Alfian Nur Ashar & Siti Nurfadhila Az Zahra Syam
 
 ![Node.js](https://img.shields.io/badge/Node.js-18+-339933?style=flat-square&logo=node.js&logoColor=white)
 ![React](https://img.shields.io/badge/React-19-61DAFB?style=flat-square&logo=react&logoColor=black)
@@ -350,6 +350,15 @@ wanar-ai/
 - Audio CAPTCHA solver (free, no API key required)
 - Chrome CDP launcher button in Job Agent UI
 - Expand `FIELD_MAP` with 30+ Indonesian field patterns
+- Add global CLI commands `wanarai` and `wanar` via npm global install
+- Add `wanarai --new` / `wanarai -n` to start a fresh session
+- Auto-resume last session on startup with message count and timestamp
+- Interactive model and provider menus with arrow-key navigation and search
+- Real-time streaming output — AI response displayed per chunk in terminal
+- Tool call output displayed inline (bash, read_file, etc.)
+- Separate system prompts for CLI (plain text) and Web (markdown)
+- Remove filesystem and shell path restrictions — agent can access any folder
+- Add co-creator: Siti Nurfadhila Az Zahra Syam
 
 ### v1.0.0
 - Initial release
@@ -364,6 +373,6 @@ wanar-ai/
 
 <div align="center">
 
-Wanar AI v1.0.1 — Wisnu Alfian Nur Ashar — 2026
+Wanar AI v1.0.1 — Wisnu Alfian Nur Ashar & Siti Nurfadhila Az Zahra Syam — 2026
 
 </div>
