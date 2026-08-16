@@ -1,7 +1,7 @@
 {
   "name": "wanar-ai",
-  "version": "2.0.0",
-  "description": "Wanar AI v2.0 - Enterprise-Grade AI Agent by Wisnu Alfian Nur Ashar | Multi-provider orchestration (OpenAgentic, NVIDIA, Vector) with unlimited context management, intelligent routing, and advanced analytics",
+  "version": "1.0.1",
+  "description": "Wanar AI v1.0.1 - Professional AI Chat Platform + Autonomous Job Application Agent by Wisnu Alfian Nur Ashar",
   "main": "src/index.js",
   "type": "module",
   "scripts": {
