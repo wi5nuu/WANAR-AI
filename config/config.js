@@ -1,5 +1,12 @@
 ﻿import dotenv from 'dotenv';
+import path from 'path';
+import os from 'os';
+
+// Baca .env dari beberapa lokasi — prioritas dari atas ke bawah:
+// 1. Folder project (development)
+// 2. ~/.wanar-ai/.env (global install via npm)
 dotenv.config();
+dotenv.config({ path: path.join(os.homedir(), '.wanar-ai', '.env') });
 
 const config = {
   openagentic: {
