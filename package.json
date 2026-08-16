@@ -1,13 +1,20 @@
 {
   "name": "wanar-ai",
-  "version": "1.0.1",
-  "description": "Wanar AI v1.0.1 - Professional AI Chat Platform + Autonomous Job Application Agent by Wisnu Alfian Nur Ashar",
+  "version": "1.0.2",
+  "description": "Wanar AI v1.0.1 - Professional AI Chat Platform + CLI Agent by Wisnu Alfian Nur Ashar & Siti Nurfadhila Az Zahra Syam",
   "main": "src/index.js",
   "type": "module",
   "bin": {
     "wanar": "./src/cli.js",
     "wanarai": "./src/cli.js"
   },
+  "files": [
+    "src/",
+    "config/",
+    "client/dist/",
+    ".env.example",
+    "README.md"
+  ],
   "scripts": {
     "start": "node src/index.js",
     "cli": "node src/cli.js",
