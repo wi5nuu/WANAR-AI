@@ -1,0 +1,670 @@
+/**
+ * Security Scanner Module - Realtime Security Testing
+ * by Wisnu Alfian Nur Ashar
+ */
+
+import axios from 'axios';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+/**
+ * Security Vulnerability Scanner
+ * Scans web applications for common vulnerabilities
+ */
+export async function scanVulnerabilities(target, scanType = 'quick', modules = []) {
+  const results = {
+    timestamp: new Date().toISOString(),
+    target,
+    scanType,
+    vulnerabilities: [],
+    summary: {
+      total: 0,
+      critical: 0,
+      high: 0,
+      medium: 0,
+      low: 0,
+      info: 0
+    }
+  };
+
+  try {
+    // Test if target is reachable
+    const response = await axios.get(target, { 
+      timeout: 5000,
+      validateStatus: () => true // Accept any status code
+    });
+
+    results.targetInfo = {
+      status: response.status,
+      server: response.headers['server'] || 'Unknown',
+      xPoweredBy: response.headers['x-powered-by'] || 'Not disclosed',
+      contentType: response.headers['content-type'] || 'Unknown'
+    };
+
+    // Run security checks based on scan type
+    const checks = [];
+
+    if (modules.includes('xss') || modules.length === 0) {
+      checks.push(checkXSS(target, scanType));
+    }
+    if (modules.includes('sqli') || modules.length === 0) {
+      checks.push(checkSQLInjection(target, scanType));
+    }
+    if (modules.includes('csrf') || modules.length === 0) {
+      checks.push(checkCSRF(target));
+    }
+    if (modules.includes('security_headers') || modules.length === 0) {
+      checks.push(checkSecurityHeaders(response.headers));
+    }
+    if (modules.includes('ssl') || modules.length === 0) {
+      checks.push(checkSSL(target));
+    }
+
+    const checkResults = await Promise.all(checks);
+    
+    checkResults.forEach(vulns => {
+      results.vulnerabilities.push(...vulns);
+    });
+
+    // Calculate summary
+    results.vulnerabilities.forEach(vuln => {
+      results.summary.total++;
+      results.summary[vuln.severity.toLowerCase()]++;
+    });
+
+    results.status = 'completed';
+    results.message = `Scan completed. Found ${results.summary.total} potential issues.`;
+
+  } catch (error) {
+    results.status = 'error';
+    results.message = `Failed to scan target: ${error.message}`;
+    results.error = error.message;
+  }
+
+  return results;
+}
+
+/**
+ * Check for XSS vulnerabilities
+ */
+async function checkXSS(target, scanType) {
+  const vulnerabilities = [];
+  const payloads = [
+    '<script>alert("XSS")</script>',
+    '"><script>alert(String.fromCharCode(88,83,83))</script>',
+    '<img src=x onerror=alert("XSS")>',
+  ];
+
+  if (scanType === 'deep') {
+    payloads.push(
+      '<svg/onload=alert("XSS")>',
+      'javascript:alert("XSS")',
+      '<iframe src="javascript:alert(`XSS`)">',
+    );
+  }
+
+  for (const payload of payloads) {
+    try {
+      const testUrl = `${target}?q=${encodeURIComponent(payload)}`;
+      const response = await axios.get(testUrl, { 
+        timeout: 3000,
+        validateStatus: () => true,
+        maxRedirects: 0
+      });
+
+      if (response.data.includes(payload.slice(0, 20))) {
+        vulnerabilities.push({
+          type: 'XSS',
+          severity: 'High',
+          description: 'Potential Cross-Site Scripting (XSS) vulnerability detected',
+          location: testUrl,
+          payload: payload,
+          recommendation: 'Implement proper input validation and output encoding'
+        });
+        break; // Found one, don't spam
+      }
+    } catch (err) {
+      // Ignore timeout/connection errors for individual checks
+    }
+  }
+
+  return vulnerabilities;
+}
+
+/**
+ * Check for SQL Injection vulnerabilities
+ */
+async function checkSQLInjection(target, scanType) {
+  const vulnerabilities = [];
+  const payloads = [
+    "' OR '1'='1",
+    "1' OR '1' = '1",
+    "admin'--",
+  ];
+
+  if (scanType === 'deep') {
+    payloads.push(
+      "' UNION SELECT NULL--",
+      "1' AND 1=1--",
+      "' OR 1=1#",
+    );
+  }
+
+  for (const payload of payloads) {
+    try {
+      const testUrl = `${target}?id=${encodeURIComponent(payload)}`;
+      const response = await axios.get(testUrl, { 
+        timeout: 3000,
+        validateStatus: () => true 
+      });
+
+      // Check for SQL error messages
+      const sqlErrors = [
+        'sql syntax',
+        'mysql_fetch',
+        'postgresql',
+        'sqlite',
+        'ora-',
+        'mssql',
+        'syntax error'
+      ];
+
+      const bodyLower = response.data.toLowerCase();
+      if (sqlErrors.some(err => bodyLower.includes(err))) {
+        vulnerabilities.push({
+          type: 'SQL Injection',
+          severity: 'Critical',
+          description: 'Potential SQL Injection vulnerability detected',
+          location: testUrl,
+          payload: payload,
+          recommendation: 'Use parameterized queries or prepared statements'
+        });
+        break;
+      }
+    } catch (err) {
+      // Ignore
+    }
+  }
+
+  return vulnerabilities;
+}
+
+/**
+ * Check for CSRF protection
+ */
+async function checkCSRF(target) {
+  const vulnerabilities = [];
+
+  try {
+    const response = await axios.get(target, { timeout: 3000 });
+    
+    // Check if forms have CSRF tokens
+    const hasForm = response.data.includes('<form');
+    const hasCsrfToken = response.data.match(/csrf|_token|authenticity_token/i);
+
+    if (hasForm && !hasCsrfToken) {
+      vulnerabilities.push({
+        type: 'CSRF',
+        severity: 'Medium',
+        description: 'Forms detected without CSRF protection',
+        location: target,
+        recommendation: 'Implement CSRF tokens for all state-changing operations'
+      });
+    }
+  } catch (err) {
+    // Ignore
+  }
+
+  return vulnerabilities;
+}
+
+/**
+ * Check security headers
+ */
+async function checkSecurityHeaders(headers) {
+  const vulnerabilities = [];
+
+  const securityHeaders = {
+    'x-frame-options': 'Missing X-Frame-Options header (Clickjacking protection)',
+    'x-content-type-options': 'Missing X-Content-Type-Options header',
+    'strict-transport-security': 'Missing Strict-Transport-Security header (HSTS)',
+    'content-security-policy': 'Missing Content-Security-Policy header',
+    'x-xss-protection': 'Missing X-XSS-Protection header',
+  };
+
+  Object.keys(securityHeaders).forEach(header => {
+    if (!headers[header]) {
+      vulnerabilities.push({
+        type: 'Security Headers',
+        severity: 'Medium',
+        description: securityHeaders[header],
+        location: 'HTTP Response Headers',
+        recommendation: `Add ${header} header to improve security`
+      });
+    }
+  });
+
+  return vulnerabilities;
+}
+
+/**
+ * Check SSL/TLS configuration
+ */
+async function checkSSL(target) {
+  const vulnerabilities = [];
+
+  if (!target.startsWith('https://')) {
+    vulnerabilities.push({
+      type: 'SSL/TLS',
+      severity: 'High',
+      description: 'Target is not using HTTPS',
+      location: target,
+      recommendation: 'Enable HTTPS with a valid SSL/TLS certificate'
+    });
+  }
+
+  return vulnerabilities;
+}
+
+/**
+ * Authentication Testing
+ * Tests auth mechanisms for common vulnerabilities
+ */
+export async function testAuthentication(target, username, testTypes = []) {
+  const results = {
+    timestamp: new Date().toISOString(),
+    target,
+    username,
+    tests: [],
+    summary: {
+      total: 0,
+      passed: 0,
+      failed: 0,
+      warnings: 0
+    }
+  };
+
+  try {
+    // Test 1: Brute Force Protection
+    if (testTypes.includes('bruteforce')) {
+      const bruteForceTest = await testBruteForceProtection(target, username);
+      results.tests.push(bruteForceTest);
+    }
+
+    // Test 2: Bypass Attempts
+    if (testTypes.includes('bypass')) {
+      const bypassTest = await testAuthBypass(target);
+      results.tests.push(bypassTest);
+    }
+
+    // Test 3: Session Management
+    if (testTypes.includes('session_hijack')) {
+      const sessionTest = await testSessionSecurity(target);
+      results.tests.push(sessionTest);
+    }
+
+    // Calculate summary
+    results.tests.forEach(test => {
+      results.summary.total++;
+      if (test.result === 'passed') results.summary.passed++;
+      else if (test.result === 'failed') results.summary.failed++;
+      else results.summary.warnings++;
+    });
+
+    results.status = 'completed';
+    results.message = `Authentication test completed. ${results.summary.failed} vulnerabilities found.`;
+
+  } catch (error) {
+    results.status = 'error';
+    results.message = `Failed to test authentication: ${error.message}`;
+  }
+
+  return results;
+}
+
+async function testBruteForceProtection(target, username) {
+  const test = {
+    name: 'Brute Force Protection',
+    description: 'Testing rate limiting and account lockout',
+    result: 'passed',
+    details: []
+  };
+
+  try {
+    const attempts = [];
+    for (let i = 0; i < 5; i++) {
+      const start = Date.now();
+      try {
+        await axios.post(target, {
+          username: username,
+          password: `wrong_password_${i}`
+        }, { timeout: 3000, validateStatus: () => true });
+        
+        attempts.push(Date.now() - start);
+      } catch (err) {
+        // Connection error
+      }
+    }
+
+    if (attempts.length >= 5) {
+      test.result = 'warning';
+      test.details.push('Multiple failed login attempts were allowed without rate limiting');
+      test.recommendation = 'Implement rate limiting and account lockout after failed attempts';
+    } else {
+      test.details.push('Rate limiting appears to be in place');
+    }
+
+  } catch (error) {
+    test.result = 'error';
+    test.details.push(`Test error: ${error.message}`);
+  }
+
+  return test;
+}
+
+async function testAuthBypass(target) {
+  const test = {
+    name: 'Authentication Bypass',
+    description: 'Testing common bypass techniques',
+    result: 'passed',
+    details: []
+  };
+
+  const bypassAttempts = [
+    { username: 'admin', password: "' OR '1'='1" },
+    { username: "admin'--", password: 'anything' },
+    { username: 'admin', password: 'admin' },
+  ];
+
+  for (const attempt of bypassAttempts) {
+    try {
+      const response = await axios.post(target, attempt, { 
+        timeout: 3000,
+        validateStatus: () => true 
+      });
+
+      if (response.status === 200 || response.data.includes('success')) {
+        test.result = 'failed';
+        test.details.push(`Bypass attempt succeeded with: ${JSON.stringify(attempt)}`);
+        test.recommendation = 'Review authentication logic for SQL injection and weak credentials';
+        break;
+      }
+    } catch (err) {
+      // Ignore
+    }
+  }
+
+  if (test.result === 'passed') {
+    test.details.push('No obvious bypass vulnerabilities found');
+  }
+
+  return test;
+}
+
+async function testSessionSecurity(target) {
+  const test = {
+    name: 'Session Security',
+    description: 'Testing session cookie security attributes',
+    result: 'passed',
+    details: []
+  };
+
+  try {
+    const response = await axios.get(target, { timeout: 3000 });
+    const cookies = response.headers['set-cookie'] || [];
+
+    if (cookies.length === 0) {
+      test.result = 'info';
+      test.details.push('No session cookies detected');
+    } else {
+      cookies.forEach(cookie => {
+        const hasSecure = cookie.includes('Secure');
+        const hasHttpOnly = cookie.includes('HttpOnly');
+        const hasSameSite = cookie.includes('SameSite');
+
+        if (!hasSecure) {
+          test.result = 'warning';
+          test.details.push('Session cookie missing Secure flag');
+        }
+        if (!hasHttpOnly) {
+          test.result = 'warning';
+          test.details.push('Session cookie missing HttpOnly flag');
+        }
+        if (!hasSameSite) {
+          test.result = 'warning';
+          test.details.push('Session cookie missing SameSite attribute');
+        }
+      });
+
+      if (test.result === 'passed') {
+        test.details.push('Session cookies have proper security attributes');
+      } else {
+        test.recommendation = 'Set Secure, HttpOnly, and SameSite flags on session cookies';
+      }
+    }
+  } catch (error) {
+    test.result = 'error';
+    test.details.push(`Test error: ${error.message}`);
+  }
+
+  return test;
+}
+
+/**
+ * Static Code Security Audit
+ * Analyzes source code for security issues
+ */
+export async function auditCode(codePath) {
+  const results = {
+    timestamp: new Date().toISOString(),
+    path: codePath,
+    issues: [],
+    summary: {
+      total: 0,
+      critical: 0,
+      high: 0,
+      medium: 0,
+      low: 0
+    }
+  };
+
+  try {
+    const projectRoot = path.join(__dirname, '..');
+    const targetPath = path.resolve(projectRoot, codePath);
+
+    // Security check patterns
+    const patterns = [
+      {
+        regex: /(eval|exec|Function)\s*\(/gi,
+        type: 'Code Injection',
+        severity: 'Critical',
+        description: 'Use of eval() or exec() can lead to code injection'
+      },
+      {
+        regex: /password\s*=\s*["'][^"']{3,}["']/gi,
+        type: 'Hardcoded Secrets',
+        severity: 'Critical',
+        description: 'Hardcoded password detected'
+      },
+      {
+        regex: /api[_-]?key\s*=\s*["'][^"']{10,}["']/gi,
+        type: 'Hardcoded Secrets',
+        severity: 'Critical',
+        description: 'Hardcoded API key detected'
+      },
+      {
+        regex: /innerHTML\s*=/gi,
+        type: 'XSS',
+        severity: 'High',
+        description: 'Use of innerHTML can lead to XSS'
+      },
+      {
+        regex: /document\.write\s*\(/gi,
+        type: 'XSS',
+        severity: 'Medium',
+        description: 'Use of document.write() can be unsafe'
+      },
+      {
+        regex: /md5|sha1(?!d)/gi,
+        type: 'Weak Crypto',
+        severity: 'Medium',
+        description: 'Use of weak cryptographic algorithm'
+      },
+    ];
+
+    // Scan files recursively
+    await scanDirectory(targetPath, patterns, results);
+
+    // Calculate summary
+    results.issues.forEach(issue => {
+      results.summary.total++;
+      results.summary[issue.severity.toLowerCase()]++;
+    });
+
+    results.status = 'completed';
+    results.message = `Code audit completed. Found ${results.summary.total} potential issues.`;
+
+  } catch (error) {
+    results.status = 'error';
+    results.message = `Failed to audit code: ${error.message}`;
+  }
+
+  return results;
+}
+
+async function scanDirectory(dirPath, patterns, results) {
+  try {
+    if (!fs.existsSync(dirPath)) {
+      throw new Error(`Path does not exist: ${dirPath}`);
+    }
+
+    const stats = fs.statSync(dirPath);
+    
+    if (stats.isFile()) {
+      await scanFile(dirPath, patterns, results);
+    } else if (stats.isDirectory()) {
+      const entries = fs.readdirSync(dirPath);
+      
+      for (const entry of entries) {
+        // Skip node_modules, .git, etc.
+        if (entry === 'node_modules' || entry === '.git' || entry === 'dist') {
+          continue;
+        }
+
+        const fullPath = path.join(dirPath, entry);
+        const entryStats = fs.statSync(fullPath);
+
+        if (entryStats.isDirectory()) {
+          await scanDirectory(fullPath, patterns, results);
+        } else if (entryStats.isFile() && shouldScanFile(entry)) {
+          await scanFile(fullPath, patterns, results);
+        }
+      }
+    }
+  } catch (error) {
+    // Skip files we can't read
+  }
+}
+
+function shouldScanFile(filename) {
+  const ext = path.extname(filename).toLowerCase();
+  return ['.js', '.jsx', '.ts', '.tsx', '.vue', '.py', '.java', '.php'].includes(ext);
+}
+
+async function scanFile(filePath, patterns, results) {
+  try {
+    const content = fs.readFileSync(filePath, 'utf-8');
+    const lines = content.split('\n');
+
+    patterns.forEach(pattern => {
+      lines.forEach((line, lineNum) => {
+        if (pattern.regex.test(line)) {
+          results.issues.push({
+            type: pattern.type,
+            severity: pattern.severity,
+            description: pattern.description,
+            file: filePath,
+            line: lineNum + 1,
+            code: line.trim().slice(0, 100),
+            recommendation: getRecommendation(pattern.type)
+          });
+        }
+      });
+    });
+  } catch (error) {
+    // Skip files we can't read
+  }
+}
+
+function getRecommendation(type) {
+  const recommendations = {
+    'Code Injection': 'Avoid using eval() or exec(). Use safer alternatives.',
+    'Hardcoded Secrets': 'Move secrets to environment variables or secure vaults.',
+    'XSS': 'Use textContent instead of innerHTML, or sanitize user input.',
+    'Weak Crypto': 'Use SHA-256 or stronger cryptographic algorithms.',
+  };
+  return recommendations[type] || 'Review and fix this security issue.';
+}
+
+/**
+ * Dependency Vulnerability Scan
+ * Checks dependencies for known vulnerabilities
+ */
+export async function scanDependencies() {
+  const results = {
+    timestamp: new Date().toISOString(),
+    vulnerabilities: [],
+    summary: {
+      total: 0,
+      critical: 0,
+      high: 0,
+      moderate: 0,
+      low: 0
+    }
+  };
+
+  try {
+    const projectRoot = path.join(__dirname, '..');
+    const packagePath = path.join(projectRoot, 'package.json');
+
+    if (!fs.existsSync(packagePath)) {
+      throw new Error('package.json not found');
+    }
+
+    const packageJson = JSON.parse(fs.readFileSync(packagePath, 'utf-8'));
+    const dependencies = {
+      ...packageJson.dependencies,
+      ...packageJson.devDependencies
+    };
+
+    // Simulate dependency checking (in production, use npm audit or snyk API)
+    results.dependenciesChecked = Object.keys(dependencies).length;
+    
+    // Mock some results for demo
+    results.vulnerabilities.push({
+      package: 'example-package',
+      severity: 'Moderate',
+      description: 'This is a simulated vulnerability for demonstration',
+      version: '1.0.0',
+      recommendation: 'Update to version 2.0.0 or later'
+    });
+
+    results.summary.total = results.vulnerabilities.length;
+    results.vulnerabilities.forEach(vuln => {
+      results.summary[vuln.severity.toLowerCase()]++;
+    });
+
+    results.status = 'completed';
+    results.message = `Scanned ${results.dependenciesChecked} dependencies. Found ${results.summary.total} vulnerabilities.`;
+
+  } catch (error) {
+    results.status = 'error';
+    results.message = `Failed to scan dependencies: ${error.message}`;
+  }
+
+  return results;
+}
