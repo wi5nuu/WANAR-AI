@@ -1,0 +1,72 @@
+# ── Secrets & Environment ────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+*.env
+secrets/
+config/secrets*
+
+# ── Database & data generated (tidak perlu di repo) ──────────────
+data/
+
+
+# ── CV & Dokumen Pribadi ─────────────────────────────────────────
+*.pdf
+*.docx
+*.doc
+
+# ── Tesseract trained data (besar, tidak perlu di repo) ──────────
+*.traineddata
+
+# ── Dependencies ─────────────────────────────────────────────────
+node_modules/
+client/node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ── Build output ─────────────────────────────────────────────────
+client/dist/
+dist/
+
+# ── Logs ─────────────────────────────────────────────────────────
+*.log
+logs/
+server.log
+server-err.log
+server-test.log
+
+# ── OS Files ─────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── IDE / Editor ─────────────────────────────────────────────────
+.vscode/
+.idea/
+*.sublime-*
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+*.swp
+*.swo
+
+# ── Runtime ──────────────────────────────────────────────────────
+pids/
+*.pid
+*.seed
+
+# ── Playwright profile (data browser pribadi) ────────────────────
+playwright-profile/
+wanar-profile/
+
+# ── Misc ─────────────────────────────────────────────────────────
+*.tgz
+.eslintcache
+.cache/
+tmp/
+temp/
+
