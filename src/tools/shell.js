@@ -2,8 +2,82 @@ import { execSync, spawn } from 'child_process';
 import path from 'path';
 
 const DEFAULT_WORKDIR = process.cwd();
+const ALLOWED_BASE = process.cwd(); // Only allow commands within project directory
 const MAX_OUTPUT = 100 * 1024;
 const TIMEOUT_MS = 30000;
+
+// Dangerous commands that should be blocked
+const DANGEROUS_COMMANDS = [
+  'rm -rf /',
+  'rm -rf /*',
+  'format',
+  'del /f /s /q',
+  'shutdown',
+  'reboot',
+  'halt',
+  'poweroff',
+  'init 0',
+  'init 6',
+  ':(){ :|:& };:',  // Fork bomb
+  'dd if=',
+  'mkfs',
+  'fdisk',
+  'parted',
+  'chmod 777 /',
+  'chown -R',
+  '> /dev/sda',
+  '> /dev/hda',
+];
+
+// Blocked command patterns (regex)
+const BLOCKED_PATTERNS = [
+  /rm\s+-rf\s+\//,  // rm -rf /
+  /rm\s+-rf\s+\*\s*/,  // rm -rf *
+  /sudo\s+rm/,
+  /chmod\s+777\s+\//,
+  /chown\s+-R\s+/,
+  /mkfs\./,
+  /dd\s+if=/,
+  /:\(\)\s*\{/,  // Fork bomb pattern
+];
+
+function sanitizeCommand(command) {
+  if (!command || typeof command !== 'string') {
+    throw new Error('Command must be a non-empty string');
+  }
+
+  const trimmed = command.trim();
+  
+  // Check for dangerous commands
+  const lowerCmd = trimmed.toLowerCase();
+  for (const dangerous of DANGEROUS_COMMANDS) {
+    if (lowerCmd.includes(dangerous.toLowerCase())) {
+      throw new Error(`Command blocked: dangerous operation detected (${dangerous})`);
+    }
+  }
+
+  // Check blocked patterns
+  for (const pattern of BLOCKED_PATTERNS) {
+    if (pattern.test(trimmed)) {
+      throw new Error(`Command blocked: matches dangerous pattern`);
+    }
+  }
+
+  // Prevent directory traversal in workdir
+  return trimmed;
+}
+
+function validateWorkdir(workdir) {
+  const resolved = path.resolve(workdir);
+  const allowed = path.resolve(ALLOWED_BASE);
+  
+  // Ensure workdir is within allowed base
+  if (!resolved.startsWith(allowed)) {
+    throw new Error(`Workdir must be within project directory: ${allowed}`);
+  }
+  
+  return resolved;
+}
 
 export const shellTools = [
   {
@@ -41,11 +115,34 @@ export const shellTools = [
 export async function executeShellTool(name, args) {
   switch (name) {
     case 'bash': {
-      const workdir = path.resolve(args.workdir || ALLOWED_BASE);
+      let command;
+      try {
+        command = sanitizeCommand(args.command);
+      } catch (error) {
+        return {
+          exitCode: -1,
+          stdout: '',
+          stderr: '',
+          error: error.message,
+        };
+      }
+      
+      let workdir;
+      try {
+        workdir = validateWorkdir(args.workdir || ALLOWED_BASE);
+      } catch (error) {
+        return {
+          exitCode: -1,
+          stdout: '',
+          stderr: '',
+          error: error.message,
+        };
+      }
+      
       const timeout = Math.min(args.timeout || TIMEOUT_MS, 120000);
 
       try {
-        const output = execSync(args.command, {
+        const output = execSync(command, {
           cwd: workdir,
           encoding: 'utf8',
           maxBuffer: MAX_OUTPUT,
@@ -72,7 +169,18 @@ export async function executeShellTool(name, args) {
     }
 
     case 'npm': {
-      return executeShellTool('bash', { command: `npm ${args.args}`, workdir: args.workdir, timeout: args.timeout });
+      let npmArgs;
+      try {
+        npmArgs = sanitizeCommand(args.args);
+      } catch (error) {
+        return {
+          exitCode: -1,
+          stdout: '',
+          stderr: '',
+          error: error.message,
+        };
+      }
+      return executeShellTool('bash', { command: `npm ${npmArgs}`, workdir: args.workdir, timeout: args.timeout });
     }
 
     default:
