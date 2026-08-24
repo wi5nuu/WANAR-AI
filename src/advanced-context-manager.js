@@ -167,8 +167,6 @@ export default class AdvancedContextManager {
       // Archive to L3 (database or vector store)
       this.archiveToL3(removed);
     }
-
-    console.log(`[Context Manager] Compressed ${messagesToCompress.length} messages to L2. L1: ${this.stats.l1Tokens} tokens, L2: ${this.stats.l2Tokens} tokens`);
   }
 
   /**
