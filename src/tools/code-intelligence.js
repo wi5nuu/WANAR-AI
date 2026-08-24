@@ -132,7 +132,63 @@ async function codeAnalysis(args) {
 
     } else if (stats.isDirectory()) {
       results.message = 'Directory analysis - scanning all files';
-      // TODO: Implement directory scanning
+      
+      // Scan directory for code files
+      const codeFiles = [];
+      const scanDir = (dirPath) => {
+        const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+        for (const entry of entries) {
+          const fullPath = path.join(dirPath, entry.name);
+          if (entry.isDirectory()) {
+            // Skip node_modules, .git, and other common directories
+            if (!['node_modules', '.git', 'dist', 'build', '.cache'].includes(entry.name)) {
+              scanDir(fullPath);
+            }
+          } else if (entry.isFile()) {
+            // Only analyze code files
+            const ext = path.extname(entry.name);
+            if (['.js', '.jsx', '.ts', '.tsx', '.py', '.java', '.cpp', '.c', '.go', '.rs'].includes(ext)) {
+              codeFiles.push(fullPath);
+            }
+          }
+        }
+      };
+      
+      scanDir(file_path);
+      results.files_analyzed = codeFiles.length;
+      results.files = codeFiles.map(f => path.relative(file_path, f));
+      
+      // Aggregate statistics from all files
+      let totalComplexity = 0;
+      let totalIssues = 0;
+      let totalLines = 0;
+      
+      for (const filePath of codeFiles.slice(0, 50)) { // Limit to 50 files to avoid timeout
+        try {
+          const content = fs.readFileSync(filePath, 'utf8');
+          const lines = content.split('\n');
+          totalLines += lines.length;
+          
+          if (analysis_type === 'complexity' || analysis_type === 'full') {
+            const complexity = analyzeComplexity(content);
+            totalComplexity += complexity.cyclomatic;
+          }
+          
+          if (analysis_type === 'maintainability' || analysis_type === 'full') {
+            const maintainability = analyzeMaintainability(content, lines);
+            totalIssues += maintainability.issues.length;
+          }
+        } catch (err) {
+          // Skip files that can't be read
+          console.warn(`Skipping ${filePath}: ${err.message}`);
+        }
+      }
+      
+      results.summary = {
+        total_lines: totalLines,
+        average_complexity: codeFiles.length > 0 ? (totalComplexity / Math.min(codeFiles.length, 50)).toFixed(2) : 0,
+        total_issues: totalIssues
+      };
     }
 
     return results;
