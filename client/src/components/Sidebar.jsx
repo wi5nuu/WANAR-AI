@@ -39,7 +39,7 @@ export default function Sidebar({
           />
           <div className="sidebar-logo-text">
             <div className="sidebar-logo-title">Wanar AI</div>
-            <div className="sidebar-logo-subtitle">v1.0.1</div>
+            <div className="sidebar-logo-subtitle">v1.0.5</div>
           </div>
         </div>
         
@@ -196,7 +196,7 @@ export default function Sidebar({
           textAlign: 'right',
           fontWeight: 600
         }}>
-          v1.0.1
+          v1.0.5
         </div>
       </div>
     </aside>

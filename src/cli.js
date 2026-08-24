@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Wanar AI CLI v1.0.1
+ * Wanar AI CLI v1.0.5
  * by Wisnu Alfian Nur Ashar & Siti Nurfadhila Az Zahra Syam
  */
 import readline from 'readline';
@@ -291,7 +291,7 @@ const LOGO_LINES = [
   `  ${c256(39)} ╚══╝╚══╝ ╚═╝  ╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝╚═╝  ╚═╝    ╚═╝  ╚═╝╚═╝${rs}`,
   ``,
   `  ${dim}by Wisnu Alfian Nur Ashar & Siti Nurfadhila Az Zahra Syam${rs}`,
-  `  ${gy}Professional Multi-Provider AI Agent  ${c256(39)}v1.0.1${rs}`,
+  `  ${gy}Professional Multi-Provider AI Agent  ${c256(39)}v1.0.5${rs}`,
   ``,
 ];
 

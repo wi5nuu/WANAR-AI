@@ -42,7 +42,7 @@ export default function Header({
         
         <div className="header-title-group">
           <div className="header-title text-gradient">
-            Wanar AI v1.0.1
+            Wanar AI v1.0.5
           </div>
           <div className="header-subtitle">
             by Wisnu Alfian Nur Ashar & Siti Nurfadhila Az Zahra Syam

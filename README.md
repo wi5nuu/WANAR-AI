@@ -8,7 +8,7 @@
 
 <br/><br/>
 
-[![Typing SVG](https://readme-typing-svg.herokuapp.com?font=Fira+Code&size=22&pause=1000&color=00CCFF&center=true&vCenter=true&width=600&lines=Wanar+AI+v1.0.1;Professional+AI+Chat+Platform;Autonomous+Job+Application+Agent;Built+with+Love+by+Wisnu+%26+Zahra)](https://git.io/typing-svg)
+[![Typing SVG](https://readme-typing-svg.herokuapp.com?font=Fira+Code&size=22&pause=1000&color=00CCFF&center=true&vCenter=true&width=600&lines=Wanar+AI+v1.0.5;Professional+AI+Chat+Platform;Autonomous+Job+Application+Agent;Built+with+Love+by+Wisnu+%26+Zahra)](https://git.io/typing-svg)
 
 <br/>
 
@@ -135,7 +135,7 @@ All data stays local. No cloud sync. No third-party data collection.
 
 ## Changelog
 
-### v1.0.1 (current)
+### v1.0.5 (current)
 - Rewrite `fillGoogleForm` to use index-based DOM targeting instead of fragile label matching
 - Add mouse movement simulation before every field interaction and submit click
 - Rewrite `submitFormAndVerify` with scroll-to-bottom, hover, and 9-selector submit button detection
@@ -172,6 +172,6 @@ All data stays local. No cloud sync. No third-party data collection.
 
 <img src="https://capsule-render.vercel.app/api?type=waving&color=0:00ccff,100:0066ff&height=120&section=footer&text=Made%20with%20Love%20by%20Wisnu%20%26%20Zahra&fontSize=20&fontColor=ffffff&animation=fadeIn" width="100%"/>
 
-**Wanar AI v1.0.1 — Wisnu Alfian Nur Ashar & Siti Nurfadhila Az Zahra Syam — 2026**
+**Wanar AI v1.0.5 — Wisnu Alfian Nur Ashar & Siti Nurfadhila Az Zahra Syam — 2026**
 
 </div>

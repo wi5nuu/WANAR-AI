@@ -209,7 +209,7 @@ function WelcomeScreen({ onQuickAction }) {
         color: 'var(--text-secondary)',
         marginBottom: '36px',
       }}>
-        Wanar AI v1.0.1 — dibuat dengan cinta oleh Wisnu & Zahra
+        Wanar AI v1.0.5 — dibuat dengan cinta oleh Wisnu & Zahra
       </p>
 
       {/* Quick Action Grid */}
