@@ -17,6 +17,11 @@ if (!JWT_SECRET) {
 const JWT_SECRET_FINAL = JWT_SECRET || 'wanar-ai-jwt-secret-dev-only-insecure';
 const googleClient = GOOGLE_CLIENT_ID ? new OAuth2Client(GOOGLE_CLIENT_ID) : null;
 
+/**
+ * Authenticates a user with Google OAuth and returns a JWT token
+ * @param {string} idToken - Google ID token from client-side authentication
+ * @returns {Promise<{success: boolean, token?: string, user?: object, error?: string}>} Authentication result
+ */
 export async function loginWithGoogle(idToken) {
   if (!googleClient) {
     return { success: false, error: 'Google OAuth not configured (GOOGLE_CLIENT_ID missing)' };
@@ -49,6 +54,11 @@ export async function loginWithGoogle(idToken) {
   }
 }
 
+/**
+ * Verifies a JWT token and returns the decoded payload
+ * @param {string} token - JWT token to verify
+ * @returns {object|null} Decoded token payload or null if invalid
+ */
 export function verifyToken(token) {
   try {
     return jwt.verify(token, JWT_SECRET_FINAL);
@@ -57,6 +67,13 @@ export function verifyToken(token) {
   }
 }
 
+/**
+ * Express middleware to verify JWT token and attach user payload to request
+ * @param {object} req - Express request object
+ * @param {object} res - Express response object
+ * @param {Function} next - Express next middleware function
+ * @returns {void}
+ */
 export function authMiddleware(req, res, next) {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -70,6 +87,13 @@ export function authMiddleware(req, res, next) {
   next();
 }
 
+/**
+ * Express middleware to restrict access to admin users only
+ * @param {object} req - Express request object with user payload
+ * @param {object} res - Express response object
+ * @param {Function} next - Express next middleware function
+ * @returns {void}
+ */
 export function adminOnly(req, res, next) {
   if (req.user?.role !== 'admin') {
     return res.status(403).json({ error: 'Admin access required' });
@@ -77,11 +101,21 @@ export function adminOnly(req, res, next) {
   next();
 }
 
+/**
+ * Checks if a user has exceeded their daily token usage limit
+ * @param {number} userId - User ID to check
+ * @param {number} [tokensToUse=0] - Number of tokens about to be used
+ * @returns {Promise<boolean>} True if user is within limit, false if limit exceeded
+ */
 export async function checkUserTokenLimit(userId, tokensToUse = 0) {
   const used = await getUserTokensToday(userId);
   return (used + tokensToUse) <= TOKEN_DAILY_LIMIT;
 }
 
+/**
+ * Gets the configured daily token limit for users
+ * @returns {number} Daily token limit
+ */
 export function getUserDailyLimit() {
   return TOKEN_DAILY_LIMIT;
 }
