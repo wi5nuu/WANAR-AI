@@ -202,10 +202,15 @@ async function solveAudioCaptcha(page) {
     const audioBuffer = Buffer.from(await audioRes.arrayBuffer());
 
     // Transcribe pakai Google Speech-to-Text (free endpoint yang sama dengan Chrome Speech API)
-    // Endpoint ini tidak butuh API key untuk penggunaan ringan
+    // API key diambil dari environment variable untuk keamanan
     const base64Audio = audioBuffer.toString('base64');
+    const googleSpeechKey = process.env.GOOGLE_SPEECH_API_KEY;
+    if (!googleSpeechKey) {
+      console.warn('[CAPTCHA] GOOGLE_SPEECH_API_KEY tidak diatur - skip audio transcription');
+      return false;
+    }
     const speechRes = await fetch(
-      'https://www.google.com/speech-api/v2/recognize?output=json&lang=en-US&key=REDACTED_GOOGLE_API_KEY',
+      `https://www.google.com/speech-api/v2/recognize?output=json&lang=en-US&key=${googleSpeechKey}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'audio/x-flac; rate=16000' },
