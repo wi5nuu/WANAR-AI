@@ -214,9 +214,13 @@ async function browserOpen(args) {
     // Wait for selector or networkidle
     if (wait_for) {
       if (wait_for === 'networkidle') {
-        await page.waitForLoadState('networkidle', { timeout: timeout * 1000 }).catch(() => {});
+        await page.waitForLoadState('networkidle', { timeout: timeout * 1000 }).catch((err) => {
+          console.warn('[BROWSER] Network idle timeout:', err.message);
+        });
       } else {
-        await page.waitForSelector(wait_for, { timeout: 10000 }).catch(() => {});
+        await page.waitForSelector(wait_for, { timeout: 10000 }).catch((err) => {
+          console.warn(`[BROWSER] Selector "${wait_for}" not found:`, err.message);
+        });
       }
     } else {
       // Default: wait a bit for JS to render
@@ -239,11 +243,16 @@ async function browserOpen(args) {
           }, 100);
           setTimeout(() => { clearInterval(timer); resolve(); }, 5000);
         });
-      }).catch(() => {});
+      }).catch((err) => {
+        console.warn('[BROWSER] Auto-scroll failed:', err.message);
+      });
     }
 
     const finalUrl = page.url();
-    const title = await page.title().catch(() => '');
+    const title = await page.title().catch((err) => {
+      console.warn('[BROWSER] Failed to get page title:', err.message);
+      return '';
+    });
 
     let result;
 
@@ -302,7 +311,11 @@ async function browserOpen(args) {
     return result;
 
   } catch (err) {
-    if (browser) await browser.close().catch(() => {});
+    if (browser) {
+      await browser.close().catch((closeErr) => {
+        console.error('[BROWSER] Failed to close browser:', closeErr.message);
+      });
+    }
     if (err.message?.includes('net::ERR_')) {
       return { error: 'Could not connect to URL', details: err.message, url: norm.url };
     }
