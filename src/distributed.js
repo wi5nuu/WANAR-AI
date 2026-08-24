@@ -79,7 +79,9 @@ async function setupPubSub() {
         } else if (!data.target) {
           for (const handler of handlers) handler(data);
         }
-      } catch { }
+      } catch (error) {
+        console.error('[DISTRIBUTED] Error parsing pub/sub message:', error.message);
+      }
     });
 
     console.log('[DISTRIBUTED] Pub/sub channels subscribed');
@@ -120,7 +122,9 @@ async function startHeartbeat() {
         totalInstances: instanceCount,
         updatedAt: new Date().toISOString(),
       }));
-    } catch { }
+    } catch (error) {
+      console.error('[DISTRIBUTED] Heartbeat update failed:', error.message);
+    }
   };
 
   await updateHeartbeat();
@@ -131,7 +135,9 @@ async function publish(channel, data) {
   if (!redisAvailable || !pubClient) return;
   try {
     await pubClient.publish(channel, JSON.stringify({ ...data, source: INSTANCE_ID }));
-  } catch { }
+  } catch (error) {
+    console.error(`[DISTRIBUTED] Failed to publish to ${channel}:`, error.message);
+  }
 }
 
 function onMessage(channel, handler) {
@@ -264,7 +270,9 @@ export class DistributedCoordinator {
       try {
         const lockKey = `wanar:lock:${resource}`;
         await redis.del(lockKey);
-      } catch { }
+      } catch (error) {
+        console.error(`[DISTRIBUTED] Failed to release lock for ${resource}:`, error.message);
+      }
     }
   }
 
@@ -274,12 +282,18 @@ export class DistributedCoordinator {
     if (redis) {
       try {
         await redis.del(`wanar:instance:${INSTANCE_ID}`);
-      } catch { }
+      } catch (error) {
+        console.error('[DISTRIBUTED] Failed to remove instance from Redis:', error.message);
+      }
     }
 
     for (const client of [pubClient, subClient, redis]) {
       if (client) {
-        try { await client.quit(); } catch { }
+        try { 
+          await client.quit(); 
+        } catch (error) {
+          console.error('[DISTRIBUTED] Error closing Redis client:', error.message);
+        }
       }
     }
 
