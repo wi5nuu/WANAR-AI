@@ -2,10 +2,19 @@ import jwt from 'jsonwebtoken';
 import { OAuth2Client } from 'google-auth-library';
 import { findOrCreateUser, getUserById, getUserTokensToday, recordUserTokens } from './database.js';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'wanar-ai-jwt-secret-change-in-production';
+const JWT_SECRET = process.env.JWT_SECRET;
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 const TOKEN_DAILY_LIMIT = parseInt(process.env.USER_TOKEN_DAILY_LIMIT || '10000', 10);
 
+if (!JWT_SECRET) {
+  console.error('CRITICAL: JWT_SECRET is not set in environment variables');
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('JWT_SECRET must be set in production environment');
+  }
+  console.warn('Using default JWT_SECRET for development only');
+}
+
+const JWT_SECRET_FINAL = JWT_SECRET || 'wanar-ai-jwt-secret-dev-only-insecure';
 const googleClient = GOOGLE_CLIENT_ID ? new OAuth2Client(GOOGLE_CLIENT_ID) : null;
 
 export async function loginWithGoogle(idToken) {
@@ -27,7 +36,7 @@ export async function loginWithGoogle(idToken) {
     const user = findOrCreateUser(profile);
     const token = jwt.sign(
       { id: user.id, role: user.role, name: user.name, email: user.email },
-      JWT_SECRET,
+      JWT_SECRET_FINAL,
       { expiresIn: '7d' }
     );
     return {
@@ -42,7 +51,7 @@ export async function loginWithGoogle(idToken) {
 
 export function verifyToken(token) {
   try {
-    return jwt.verify(token, JWT_SECRET);
+    return jwt.verify(token, JWT_SECRET_FINAL);
   } catch {
     return null;
   }
