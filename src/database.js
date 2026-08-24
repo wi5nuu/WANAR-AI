@@ -17,8 +17,16 @@ db.pragma('synchronous = NORMAL');
 db.pragma('temp_store = MEMORY');
 db.pragma('mmap_size = 268435456');
 
-try { db.exec('ALTER TABLE token_usage ADD COLUMN user_id INTEGER REFERENCES users(id) ON DELETE SET NULL'); } catch {}
-try { db.exec('ALTER TABLE chat_sessions ADD COLUMN user_id INTEGER REFERENCES users(id) ON DELETE SET NULL'); } catch {}
+try { 
+  db.exec('ALTER TABLE token_usage ADD COLUMN user_id INTEGER REFERENCES users(id) ON DELETE SET NULL'); 
+} catch (e) {
+  console.warn('Column user_id already exists in token_usage or migration failed:', e.message);
+}
+try { 
+  db.exec('ALTER TABLE chat_sessions ADD COLUMN user_id INTEGER REFERENCES users(id) ON DELETE SET NULL'); 
+} catch (e) {
+  console.warn('Column user_id already exists in chat_sessions or migration failed:', e.message);
+}
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS chat_sessions (
@@ -265,12 +273,28 @@ db.exec(`
   END;
 `);
 
-try { db.exec('ALTER TABLE chat_sessions ADD COLUMN workspace_id INTEGER REFERENCES workspaces(id) ON DELETE SET NULL'); } catch {}
-try { db.exec('ALTER TABLE chat_sessions ADD COLUMN team_id INTEGER REFERENCES teams(id) ON DELETE SET NULL'); } catch {}
+try { 
+  db.exec('ALTER TABLE chat_sessions ADD COLUMN workspace_id INTEGER REFERENCES workspaces(id) ON DELETE SET NULL'); 
+} catch (e) {
+  console.warn('Column workspace_id already exists in chat_sessions or migration failed:', e.message);
+}
+try { 
+  db.exec('ALTER TABLE chat_sessions ADD COLUMN team_id INTEGER REFERENCES teams(id) ON DELETE SET NULL'); 
+} catch (e) {
+  console.warn('Column team_id already exists in chat_sessions or migration failed:', e.message);
+}
 
 
-try { db.exec('CREATE INDEX IF NOT EXISTS idx_chat_sessions_workspace ON chat_sessions(workspace_id)'); } catch {}
-try { db.exec('CREATE INDEX IF NOT EXISTS idx_chat_sessions_team ON chat_sessions(team_id)'); } catch {}
+try { 
+  db.exec('CREATE INDEX IF NOT EXISTS idx_chat_sessions_workspace ON chat_sessions(workspace_id)'); 
+} catch (e) {
+  console.warn('Index idx_chat_sessions_workspace creation failed:', e.message);
+}
+try { 
+  db.exec('CREATE INDEX IF NOT EXISTS idx_chat_sessions_team ON chat_sessions(team_id)'); 
+} catch (e) {
+  console.warn('Index idx_chat_sessions_team creation failed:', e.message);
+}
 
 const prepared = {
   getSessions: db.prepare('SELECT id, title, provider, model, created_at, updated_at FROM chat_sessions ORDER BY updated_at DESC LIMIT ?'),
