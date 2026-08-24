@@ -83,8 +83,6 @@ async function setupPubSub() {
         console.error('[DISTRIBUTED] Error parsing pub/sub message:', error.message);
       }
     });
-
-    console.log('[DISTRIBUTED] Pub/sub channels subscribed');
   } catch (error) {
     console.error(`[DISTRIBUTED] Pub/sub setup failed: ${error.message}`);
   }
@@ -171,9 +169,6 @@ export class DistributedCoordinator {
     if (connected) {
       await setupPubSub();
       await startHeartbeat();
-      console.log(`[DISTRIBUTED] Instance ${INSTANCE_ID} initialized with Redis`);
-    } else {
-      console.log(`[DISTRIBUTED] Instance ${INSTANCE_ID} in standalone mode`);
     }
 
     return { instanceId: INSTANCE_ID, redisAvailable: connected };
@@ -298,7 +293,6 @@ export class DistributedCoordinator {
     }
 
     redisAvailable = false;
-    console.log('[DISTRIBUTED] Shut down');
   }
 
   getStats() {
