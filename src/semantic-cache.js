@@ -16,6 +16,23 @@
 
 export default class SemanticCache {
   constructor(options = {}) {
+    // Validate options
+    if (options.exactCacheMaxSize !== undefined && (typeof options.exactCacheMaxSize !== 'number' || options.exactCacheMaxSize < 10)) {
+      throw new Error('exactCacheMaxSize must be a number >= 10');
+    }
+    if (options.semanticCacheMaxSize !== undefined && (typeof options.semanticCacheMaxSize !== 'number' || options.semanticCacheMaxSize < 10)) {
+      throw new Error('semanticCacheMaxSize must be a number >= 10');
+    }
+    if (options.semanticThreshold !== undefined && (typeof options.semanticThreshold !== 'number' || options.semanticThreshold < 0 || options.semanticThreshold > 1)) {
+      throw new Error('semanticThreshold must be a number between 0 and 1');
+    }
+    if (options.defaultTTL !== undefined && (typeof options.defaultTTL !== 'number' || options.defaultTTL < 1000)) {
+      throw new Error('defaultTTL must be a number >= 1000ms');
+    }
+    if (options.evictionStrategy !== undefined && !['lru', 'lfu', 'ttl'].includes(options.evictionStrategy)) {
+      throw new Error('evictionStrategy must be one of: lru, lfu, ttl');
+    }
+
     // Exact match cache (hash-based)
     this.exactCache = new Map();
     this.exactCacheMaxSize = options.exactCacheMaxSize || 1000;
@@ -49,18 +66,41 @@ export default class SemanticCache {
     this.commonQueries = [];
     
     // Background cleanup interval
-    this.cleanupInterval = setInterval(() => this.cleanup(), 60000); // Every minute
+    this.cleanupInterval = setInterval(() => {
+      try {
+        this.cleanup();
+      } catch (error) {
+        console.error('[Semantic Cache] Cleanup failed:', error.message);
+      }
+    }, 60000); // Every minute
+    
+    // Track if destroyed
+    this._destroyed = false;
   }
 
   /**
    * Get cached response (checks exact then semantic)
    */
   async get(query, options = {}) {
+    if (this._destroyed) {
+      throw new Error('Cache has been destroyed');
+    }
+    if (!query || typeof query !== 'string') {
+      throw new Error('Query must be a non-empty string');
+    }
+
     const startTime = Date.now();
     this.stats.totalRequests++;
 
     // 1. Try exact match first (fastest)
-    const exactResult = this.getExact(query);
+    let exactResult;
+    try {
+      exactResult = this.getExact(query);
+    } catch (error) {
+      console.error('[Semantic Cache] Exact match lookup failed:', error.message);
+      exactResult = null;
+    }
+    
     if (exactResult) {
       this.stats.exactHits++;
       this.updateHitRate();
@@ -76,7 +116,14 @@ export default class SemanticCache {
 
     // 2. Try semantic match (slower but more flexible)
     if (options.semanticSearch !== false) {
-      const semanticResult = await this.getSemantic(query);
+      let semanticResult;
+      try {
+        semanticResult = await this.getSemantic(query);
+      } catch (error) {
+        console.error('[Semantic Cache] Semantic match lookup failed:', error.message);
+        semanticResult = null;
+      }
+      
       if (semanticResult) {
         this.stats.semanticHits++;
         this.updateHitRate();
@@ -129,9 +176,22 @@ export default class SemanticCache {
    * Get semantic match from cache
    */
   async getSemantic(query) {
+    if (this._destroyed) {
+      throw new Error('Cache has been destroyed');
+    }
+    if (!query || typeof query !== 'string') {
+      throw new Error('Query must be a non-empty string');
+    }
     if (this.semanticCache.length === 0) return null;
     
-    const queryEmbedding = this.generateEmbedding(query);
+    let queryEmbedding;
+    try {
+      queryEmbedding = this.generateEmbedding(query);
+    } catch (error) {
+      console.error('[Semantic Cache] Failed to generate embedding:', error.message);
+      return null;
+    }
+    
     let bestMatch = null;
     let bestSimilarity = 0;
     
@@ -139,7 +199,13 @@ export default class SemanticCache {
       // Check TTL first
       if (Date.now() - entry.timestamp > entry.ttl) continue;
       
-      const similarity = this.cosineSimilarity(queryEmbedding, entry.embedding);
+      let similarity;
+      try {
+        similarity = this.cosineSimilarity(queryEmbedding, entry.embedding);
+      } catch (error) {
+        console.error('[Semantic Cache] Similarity calculation failed:', error.message);
+        continue;
+      }
       
       if (similarity > bestSimilarity && similarity >= this.semanticThreshold) {
         bestSimilarity = similarity;
@@ -165,52 +231,76 @@ export default class SemanticCache {
    * Set cache entry
    */
   async set(query, response, options = {}) {
-    const ttl = options.ttl || this.defaultTTL;
+    if (this._destroyed) {
+      throw new Error('Cache has been destroyed');
+    }
+    if (!query || typeof query !== 'string') {
+      throw new Error('Query must be a non-empty string');
+    }
+    if (response === undefined || response === null) {
+      throw new Error('Response cannot be null or undefined');
+    }
+    
+    const ttl = Math.min(options.ttl || this.defaultTTL, this.maxTTL);
     const metadata = options.metadata || {};
     const timestamp = Date.now();
     
-    // 1. Store in exact cache
-    const key = this.generateKey(query);
-    const exactEntry = {
-      query,
-      response,
-      metadata,
-      timestamp,
-      ttl,
-      lastAccessed: timestamp,
-      accessCount: 0
-    };
-    
-    this.exactCache.set(key, exactEntry);
-    
-    // Check exact cache size and evict if needed
-    if (this.exactCache.size > this.exactCacheMaxSize) {
-      this.evictExact();
-    }
-    
-    // 2. Store in semantic cache (if enabled)
-    if (options.semanticCache !== false) {
-      const embedding = this.generateEmbedding(query);
-      const semanticEntry = {
+    try {
+      // 1. Store in exact cache
+      const key = this.generateKey(query);
+      const exactEntry = {
         query,
         response,
         metadata,
         timestamp,
         ttl,
-        embedding,
         lastAccessed: timestamp,
         accessCount: 0
       };
       
-      this.semanticCache.push(semanticEntry);
+      this.exactCache.set(key, exactEntry);
       
-      // Check semantic cache size and evict if needed
-      if (this.semanticCache.length > this.semanticCacheMaxSize) {
-        this.evictSemantic();
+      // Check exact cache size and evict if needed
+      if (this.exactCache.size > this.exactCacheMaxSize) {
+        this.evictExact();
       }
+      
+      // 2. Store in semantic cache (if enabled)
+      if (options.semanticCache !== false) {
+        let embedding;
+        try {
+          embedding = this.generateEmbedding(query);
+        } catch (error) {
+          console.error('[Semantic Cache] Failed to generate embedding for cache entry:', error.message);
+          // Continue without semantic cache
+        }
+        
+        if (embedding) {
+          const semanticEntry = {
+            query,
+            response,
+            metadata,
+            timestamp,
+            ttl,
+            embedding,
+            lastAccessed: timestamp,
+            accessCount: 0
+          };
+          
+          this.semanticCache.push(semanticEntry);
+          
+          // Check semantic cache size and evict if needed
+          if (this.semanticCache.length > this.semanticCacheMaxSize) {
+            this.evictSemantic();
+          }
+        }
+      }
+      
+      this.stats.writes++;
+    } catch (error) {
+      console.error('[Semantic Cache] Failed to set cache entry:', error.message);
+      throw error;
     }
-    
-    this.stats.writes++;
   }
 
   /**
@@ -381,26 +471,32 @@ export default class SemanticCache {
    * Cleanup expired entries
    */
   cleanup() {
+    if (this._destroyed) return;
+    
     const now = Date.now();
     let cleaned = 0;
     
-    // Cleanup exact cache
-    for (const [key, entry] of this.exactCache.entries()) {
-      if (now - entry.timestamp > entry.ttl) {
-        this.exactCache.delete(key);
-        cleaned++;
+    try {
+      // Cleanup exact cache
+      for (const [key, entry] of this.exactCache.entries()) {
+        if (now - entry.timestamp > entry.ttl) {
+          this.exactCache.delete(key);
+          cleaned++;
+        }
       }
-    }
-    
-    // Cleanup semantic cache
-    this.semanticCache = this.semanticCache.filter(entry => {
-      const expired = now - entry.timestamp > entry.ttl;
-      if (expired) cleaned++;
-      return !expired;
-    });
-    
-    if (cleaned > 0) {
-      console.log(`[Semantic Cache] Cleaned up ${cleaned} expired entries`);
+      
+      // Cleanup semantic cache
+      this.semanticCache = this.semanticCache.filter(entry => {
+        const expired = now - entry.timestamp > entry.ttl;
+        if (expired) cleaned++;
+        return !expired;
+      });
+      
+      if (cleaned > 0) {
+        console.log(`[Semantic Cache] Cleaned up ${cleaned} expired entries`);
+      }
+    } catch (error) {
+      console.error('[Semantic Cache] Cleanup failed:', error.message);
     }
   }
 
@@ -541,7 +637,13 @@ export default class SemanticCache {
    * Cleanup on destroy
    */
   destroy() {
+    if (this._destroyed) {
+      console.warn('[Semantic Cache] Already destroyed');
+      return;
+    }
+    this._destroyed = true;
     clearInterval(this.cleanupInterval);
     this.clear();
+    console.log('[Semantic Cache] Destroyed and cleaned up');
   }
 }
