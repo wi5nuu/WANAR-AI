@@ -1013,14 +1013,14 @@ app.post('/api/cache/flush', (req, res) => {
   }
 });
 
-app.post('/api/auth/google', asyncHandler(async (req, res) => {
+app.post('/api/auth/google', rateLimiters.auth, asyncHandler(async (req, res) => {
   const { idToken } = req.body;
   if (!idToken) return res.status(400).json({ success: false, error: 'idToken required' });
   const result = await auth.loginWithGoogle(idToken);
   res.status(result.success ? 200 : 401).json(result);
 }));
 
-app.post('/api/auth/api-key', (req, res) => {
+app.post('/api/auth/api-key', rateLimiters.auth, (req, res) => {
   const { apiKey } = req.body;
   if (!apiKey) return res.status(400).json({ success: false, error: 'apiKey required' });
   const user = db.getUserByApiKey(apiKey);
@@ -1033,18 +1033,18 @@ app.post('/api/auth/api-key', (req, res) => {
   res.json({ success: true, token: jwtToken, user });
 });
 
-app.get('/api/auth/profile', auth.authMiddleware, (req, res) => {
+app.get('/api/auth/profile', rateLimiters.auth, auth.authMiddleware, (req, res) => {
   const user = db.getUserById(req.user.id);
   if (!user) return res.status(404).json({ error: 'User not found' });
   res.json({ success: true, user });
 });
 
-app.get('/api/auth/admin/users', auth.authMiddleware, auth.adminOnly, (req, res) => {
+app.get('/api/auth/admin/users', rateLimiters.auth, auth.authMiddleware, auth.adminOnly, (req, res) => {
   const users = db.getAllUsers();
   res.json({ success: true, users });
 });
 
-app.patch('/api/auth/admin/users/:id/role', auth.authMiddleware, auth.adminOnly, (req, res) => {
+app.patch('/api/auth/admin/users/:id/role', rateLimiters.auth, auth.authMiddleware, auth.adminOnly, (req, res) => {
   const { role } = req.body;
   if (!['user', 'admin', 'superadmin'].includes(role)) return res.status(400).json({ error: 'Invalid role' });
   db.updateUserRole(parseInt(req.params.id), role);
@@ -1135,7 +1135,7 @@ app.get('/api/analytics/export', (req, res) => {
   res.send(csv);
 });
 
-app.get('/api/auth/me', auth.authMiddleware, (req, res) => {
+app.get('/api/auth/me', rateLimiters.auth, auth.authMiddleware, (req, res) => {
   const user = db.getUserById(req.user.id);
   const todayUsage = db.getUserTokensToday(req.user.id);
   const teams = enterprise.getTeamsByUser(req.user.id);
