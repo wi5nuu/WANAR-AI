@@ -2,6 +2,12 @@ import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
 import db from './database.js';
 
+/**
+ * Enterprise Authentication Module
+ * Provides RBAC, team management, API keys, and JWT authentication
+ * @module enterprise-auth
+ */
+
 const JWT_SECRET = process.env.JWT_SECRET || 'wanar-ai-jwt-secret-change-in-production';
 
 const ROLES_HIERARCHY = {
@@ -22,12 +28,25 @@ const DEFAULT_PERMISSIONS = {
   billing: { read: false },
 };
 
+/**
+ * Checks if a user's role has permission to perform an action requiring a specific role
+ * @param {string} userRole - The user's current role
+ * @param {string} requiredRole - The minimum role required
+ * @returns {boolean} True if user role meets or exceeds required role
+ */
 export function roleHasPermission(userRole, requiredRole) {
   const userLevel = ROLES_HIERARCHY[userRole] || 0;
   const requiredLevel = ROLES_HIERARCHY[requiredRole] || 0;
   return userLevel >= requiredLevel;
 }
 
+/**
+ * Checks if a user has the required team permission
+ * @param {object} user - User object with id and role
+ * @param {number} teamId - Team ID to check membership
+ * @param {string} requiredRole - Required role within the team
+ * @returns {boolean} True if user has permission, false otherwise
+ */
 export function checkTeamPermission(user, teamId, requiredRole) {
   if (user.role === 'superadmin') return true;
   const membership = getTeamMember(teamId, user.id);
@@ -36,6 +55,11 @@ export function checkTeamPermission(user, teamId, requiredRole) {
   return roleHasPermission(membership.role, requiredRole);
 }
 
+/**
+ * Generates a new API key with secure random token
+ * @param {string} [name=''] - Optional name/description for the API key
+ * @returns {object} Object containing raw key, hash, prefix, and name
+ */
 export function generateApiKey(name = '') {
   const raw = `wanar_${crypto.randomBytes(24).toString('base64url')}`;
   const hash = crypto.createHash('sha256').update(raw).digest('hex');
@@ -43,10 +67,21 @@ export function generateApiKey(name = '') {
   return { raw, hash, prefix, name };
 }
 
+/**
+ * Hashes an API key using SHA-256
+ * @param {string} raw - Raw API key to hash
+ * @returns {string} SHA-256 hex digest
+ */
 export function hashApiKey(raw) {
   return crypto.createHash('sha256').update(raw).digest('hex');
 }
 
+/**
+ * Creates a JWT token for a user
+ * @param {object} user - User object with id, role, name, email
+ * @param {object} [extra={}] - Additional claims to include in token
+ * @returns {string} Signed JWT token
+ */
 export function createToken(user, extra = {}) {
   return jwt.sign(
     { id: user.id, role: user.role, name: user.name, email: user.email, ...extra },
@@ -55,6 +90,11 @@ export function createToken(user, extra = {}) {
   );
 }
 
+/**
+ * Verifies a JWT token and returns the decoded payload
+ * @param {string} token - JWT token to verify
+ * @returns {object|null} Decoded token payload or null if invalid
+ */
 export function verifyToken(token) {
   try {
     return jwt.verify(token, JWT_SECRET);
@@ -63,6 +103,11 @@ export function verifyToken(token) {
   }
 }
 
+/**
+ * Express middleware factory to require specific roles
+ * @param {...string} roles - Allowed roles (user must have one of these)
+ * @returns {Function} Express middleware
+ */
 export function requireRole(...roles) {
   return (req, res, next) => {
     if (!req.user) return res.status(401).json({ error: 'Unauthorized' });
@@ -72,6 +117,11 @@ export function requireRole(...roles) {
   };
 }
 
+/**
+ * Express middleware factory to require specific team role
+ * @param {string} requiredRole - Required role within the team
+ * @returns {Function} Express middleware
+ */
 export function requireTeamRole(requiredRole) {
   return (req, res, next) => {
     if (!req.user) return res.status(401).json({ error: 'Unauthorized' });
@@ -83,6 +133,11 @@ export function requireTeamRole(requiredRole) {
   };
 }
 
+/**
+ * Express middleware for tenant isolation - ensures users can only access their own team's resources
+ * @param {string} scope - Scope of isolation ('team' or 'user')
+ * @returns {Function} Express middleware
+ */
 export function tenantIsolation(scope) {
   return (req, res, next) => {
     if (req.user?.role === 'superadmin') return next();
@@ -97,6 +152,13 @@ export function tenantIsolation(scope) {
   };
 }
 
+/**
+ * Express middleware for authentication - validates JWT or API key
+ * @param {object} req - Express request object
+ * @param {object} res - Express response object
+ * @param {Function} next - Express next function
+ * @returns {void}
+ */
 export function authMiddleware(req, res, next) {
   const authHeader = req.headers.authorization;
   if (!authHeader) return res.status(401).json({ error: 'No authorization header' });
@@ -131,6 +193,13 @@ export function authMiddleware(req, res, next) {
   return res.status(401).json({ error: 'Invalid or expired token' });
 }
 
+/**
+ * Express middleware for optional authentication - attaches user if valid token provided
+ * @param {object} req - Express request object
+ * @param {object} res - Express response object
+ * @param {Function} next - Express next function
+ * @returns {void}
+ */
 export function optionalAuth(req, res, next) {
   const authHeader = req.headers.authorization;
   if (!authHeader) return next();
@@ -161,6 +230,12 @@ export function optionalAuth(req, res, next) {
   next();
 }
 
+/**
+ * Creates a new team with the user as owner
+ * @param {string} name - Team name
+ * @param {number} ownerId - User ID of the owner
+ * @returns {object} Created team object with id, name, slug, owner_id
+ */
 export function createTeam(name, ownerId) {
   const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') + '-' + crypto.randomBytes(2).toString('hex');
   const result = db.prepare('INSERT INTO teams (name, slug, owner_id) VALUES (?, ?, ?)').run(name, slug, ownerId);
@@ -169,6 +244,11 @@ export function createTeam(name, ownerId) {
   return { id: teamId, name, slug, owner_id: ownerId };
 }
 
+/**
+ * Gets team details by ID
+ * @param {number} teamId - Team ID
+ * @returns {object|null} Team object with owner info and member count
+ */
 export function getTeam(teamId) {
   return db.prepare(`
     SELECT t.*, u.name as owner_name, u.email as owner_email,
@@ -177,6 +257,11 @@ export function getTeam(teamId) {
   `).get(teamId);
 }
 
+/**
+ * Gets all teams a user is a member of
+ * @param {number} userId - User ID
+ * @returns {Array} Array of team objects with membership role
+ */
 export function getTeamsByUser(userId) {
   return db.prepare(`
     SELECT t.*, tm.role as membership_role,
@@ -186,6 +271,12 @@ export function getTeamsByUser(userId) {
   `).all(userId);
 }
 
+/**
+ * Updates team name or slug
+ * @param {number} teamId - Team ID
+ * @param {object} data - Update data (name, slug)
+ * @returns {boolean} True if updated, false if no changes
+ */
 export function updateTeam(teamId, data) {
   const fields = [];
   const values = [];
@@ -197,6 +288,11 @@ export function updateTeam(teamId, data) {
   return true;
 }
 
+/**
+ * Deletes a team and all associated data
+ * @param {number} teamId - Team ID to delete
+ * @returns {void}
+ */
 export function deleteTeam(teamId) {
   db.prepare('DELETE FROM team_members WHERE team_id = ?').run(teamId);
   db.prepare('DELETE FROM workspaces WHERE team_id = ?').run(teamId);
@@ -204,6 +300,13 @@ export function deleteTeam(teamId) {
   db.prepare('DELETE FROM teams WHERE id = ?').run(teamId);
 }
 
+/**
+ * Adds or updates a team member
+ * @param {number} teamId - Team ID
+ * @param {number} userId - User ID to add
+ * @param {string} [role='member'] - Role within team (owner, admin, editor, member, viewer)
+ * @returns {object} Result with updated flag and role
+ */
 export function addTeamMember(teamId, userId, role = 'member') {
   const existing = db.prepare('SELECT id FROM team_members WHERE team_id = ? AND user_id = ?').get(teamId, userId);
   if (existing) {
@@ -214,10 +317,21 @@ export function addTeamMember(teamId, userId, role = 'member') {
   return { updated: false, role };
 }
 
+/**
+ * Removes a team member (cannot remove owner)
+ * @param {number} teamId - Team ID
+ * @param {number} userId - User ID to remove
+ * @returns {void}
+ */
 export function removeTeamMember(teamId, userId) {
   db.prepare('DELETE FROM team_members WHERE team_id = ? AND user_id = ? AND role != ?').run(teamId, userId, 'owner');
 }
 
+/**
+ * Gets all members of a team with their roles
+ * @param {number} teamId - Team ID
+ * @returns {Array} Array of member objects with user info and team role
+ */
 export function getTeamMembers(teamId) {
   return db.prepare(`
     SELECT u.id, u.name, u.email, u.avatar, u.role as global_role, tm.role as team_role, tm.joined_at
@@ -228,15 +342,33 @@ export function getTeamMembers(teamId) {
   `).all(teamId);
 }
 
+/**
+ * Gets a specific team member
+ * @param {number} teamId - Team ID
+ * @param {number} userId - User ID
+ * @returns {object|null} Team member object or null if not found
+ */
 export function getTeamMember(teamId, userId) {
   return db.prepare('SELECT * FROM team_members WHERE team_id = ? AND user_id = ?').get(teamId, userId);
 }
 
+/**
+ * Creates a new workspace within a team
+ * @param {number} teamId - Team ID
+ * @param {string} name - Workspace name
+ * @param {number} createdBy - User ID of creator
+ * @returns {object} Created workspace object
+ */
 export function createWorkspace(teamId, name, createdBy) {
   const result = db.prepare('INSERT INTO workspaces (team_id, name, created_by) VALUES (?, ?, ?)').run(teamId, name, createdBy);
   return { id: result.lastInsertRowid, team_id: teamId, name };
 }
 
+/**
+ * Gets all workspaces for a team
+ * @param {number} teamId - Team ID
+ * @returns {Array} Array of workspace objects with session counts
+ */
 export function getWorkspaces(teamId) {
   return db.prepare(`
     SELECT w.*, u.name as created_by_name,
@@ -246,11 +378,24 @@ export function getWorkspaces(teamId) {
   `).all(teamId);
 }
 
+/**
+ * Deletes a workspace and reassigns its sessions
+ * @param {number} workspaceId - Workspace ID to delete
+ * @returns {void}
+ */
 export function deleteWorkspace(workspaceId) {
   db.prepare('UPDATE chat_sessions SET workspace_id = NULL WHERE workspace_id = ?').run(workspaceId);
   db.prepare('DELETE FROM workspaces WHERE id = ?').run(workspaceId);
 }
 
+/**
+ * Creates a new API key for a team
+ * @param {number} teamId - Team ID
+ * @param {number} userId - User ID creating the key
+ * @param {string} name - Key name/description
+ * @param {object} [permissions=null] - Custom permissions (uses defaults if null)
+ * @returns {object} Object with raw key, prefix, name, teamId
+ */
 export function createApiKey(teamId, userId, name, permissions = null) {
   const { raw, hash, prefix } = generateApiKey(name);
   const permsJson = permissions ? JSON.stringify(permissions) : JSON.stringify(DEFAULT_PERMISSIONS);
@@ -259,6 +404,11 @@ export function createApiKey(teamId, userId, name, permissions = null) {
   return { raw, prefix, name, teamId };
 }
 
+/**
+ * Gets all API keys for a team
+ * @param {number} teamId - Team ID
+ * @returns {Array} Array of API key objects with user info and metadata
+ */
 export function getApiKeys(teamId) {
   return db.prepare(`
     SELECT ak.id, ak.key_prefix, ak.name, ak.team_id, ak.user_id, u.name as user_name,
@@ -268,6 +418,11 @@ export function getApiKeys(teamId) {
   `).all(teamId);
 }
 
+/**
+ * Looks up an API key by raw key value
+ * @param {string} rawKey - Raw API key to look up
+ * @returns {object|null} API key object with user info and team IDs
+ */
 export function lookupApiKey(rawKey) {
   const hash = hashApiKey(rawKey);
   return db.prepare(`
@@ -278,14 +433,32 @@ export function lookupApiKey(rawKey) {
   `).get(hash);
 }
 
+/**
+ * Updates the last used timestamp for an API key
+ * @param {number} apiKeyId - API key ID
+ * @returns {void}
+ */
 export function updateApiKeyLastUsed(apiKeyId) {
   db.prepare("UPDATE api_keys SET last_used = datetime('now') WHERE id = ?").run(apiKeyId);
 }
 
+/**
+ * Revokes (deactivates) an API key
+ * @param {number} apiKeyId - API key ID
+ * @param {number} teamId - Team ID for authorization
+ * @returns {void}
+ */
 export function revokeApiKey(apiKeyId, teamId) {
   db.prepare('UPDATE api_keys SET is_active = 0 WHERE id = ? AND team_id = ?').run(apiKeyId, teamId);
 }
 
+/**
+ * Rotates an API key - generates new key while keeping metadata
+ * @param {number} apiKeyId - API key ID
+ * @param {number} teamId - Team ID for authorization
+ * @param {string} [name] - Optional new name
+ * @returns {object|null} New key object with raw key, or null if not found
+ */
 export function rotateApiKey(apiKeyId, teamId, name) {
   const oldKey = db.prepare('SELECT * FROM api_keys WHERE id = ? AND team_id = ?').get(apiKeyId, teamId);
   if (!oldKey) return null;
@@ -295,6 +468,12 @@ export function rotateApiKey(apiKeyId, teamId, name) {
   return { raw, prefix, name: name || oldKey.name };
 }
 
+/**
+ * Gets token usage statistics for a team
+ * @param {number} teamId - Team ID
+ * @param {number} [days=30] - Number of days to look back
+ * @returns {Array} Array of daily usage by provider and model
+ */
 export function getTeamUsage(teamId, days = 30) {
   const since = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
   return db.prepare(`
@@ -306,6 +485,11 @@ export function getTeamUsage(teamId, days = 30) {
   `).all(teamId, since);
 }
 
+/**
+ * Gets summary statistics for a team
+ * @param {number} teamId - Team ID
+ * @returns {object} Object with member count, workspaces, active keys, 30-day tokens and cost
+ */
 export function getTeamStats(teamId) {
   return db.prepare(`
     SELECT
