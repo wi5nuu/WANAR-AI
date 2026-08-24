@@ -70,3 +70,11 @@ wanar-profile/
 tmp/
 temp/
 
+# ── Backup & temporary files ─────────────────────────────────────
+*.bak
+*.backup
+*.old
+*.orig
+*.tmp
+*~
+
