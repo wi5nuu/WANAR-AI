@@ -158,8 +158,32 @@ async function extractFileContent(buffer, mimetype, originalname) {
 }
 
 app.use(helmet({
-  contentSecurityPolicy: false,
-  crossOriginEmbedderPolicy: false,
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'"], // Allow inline scripts for React
+      styleSrc: ["'self'", "'unsafe-inline'"], // Allow inline styles
+      imgSrc: ["'self'", "data:", "https:"], // Allow images from data URIs and HTTPS
+      connectSrc: ["'self'"], // Restrict API connections to same origin
+      fontSrc: ["'self'"],
+      objectSrc: ["'none'"],
+      mediaSrc: ["'self'"],
+      frameSrc: ["'none'"],
+    },
+  },
+  crossOriginEmbedderPolicy: false, // Keep disabled for compatibility
+  crossOriginResourcePolicy: { policy: "cross-origin" }, // Allow cross-origin resources
+  dnsPrefetchControl: { allow: false },
+  frameguard: { action: 'deny' }, // Prevent clickjacking
+  hsts: {
+    maxAge: 31536000, // 1 year
+    includeSubDomains: true,
+    preload: true
+  },
+  ieNoOpen: true,
+  noSniff: true, // Prevent MIME type sniffing
+  referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
+  xssFilter: true,
 }));
 
 app.use(cors({
