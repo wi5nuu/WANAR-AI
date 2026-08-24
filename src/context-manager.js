@@ -80,6 +80,12 @@ function truncateContent(content, maxTokens) {
 
 export class ContextManager {
   constructor(options = {}) {
+    if (options.maxTurns !== undefined && (typeof options.maxTurns !== 'number' || options.maxTurns < 2)) {
+      throw new Error('maxTurns must be a number >= 2');
+    }
+    if (options.maxContextTokens !== undefined && (typeof options.maxContextTokens !== 'number' || options.maxContextTokens < 1024)) {
+      throw new Error('maxContextTokens must be a number >= 1024');
+    }
     this.maxTurns = options.maxTurns || DEFAULT_MAX_TURNS;
     this.maxContextTokens = options.maxContextTokens || DEFAULT_CONTEXT_LIMIT;
     this.history = [];
@@ -109,13 +115,35 @@ export class ContextManager {
   }
 
   addTurn(role, content) {
+    if (!role || !['user', 'assistant', 'system'].includes(role)) {
+      throw new Error('role must be one of: user, assistant, system');
+    }
+    if (typeof content !== 'string') {
+      throw new Error('content must be a string');
+    }
     this.history.push({ role, content, timestamp: Date.now() });
     this._clearCache();
   }
 
   getContext(modelId = null, systemPrompt = null, userMessage = null) {
+    if (modelId !== null && typeof modelId !== 'string') {
+      throw new Error('modelId must be a string or null');
+    }
+    if (systemPrompt !== null && typeof systemPrompt !== 'string') {
+      throw new Error('systemPrompt must be a string or null');
+    }
+    if (userMessage !== null && typeof userMessage !== 'string') {
+      throw new Error('userMessage must be a string or null');
+    }
+
     const contextLimit = MODEL_CONTEXT_LIMITS[modelId] || this.maxContextTokens;
+    if (!contextLimit || contextLimit < 1024) {
+      throw new Error(`Invalid context limit for model: ${modelId || 'default'}`);
+    }
     const maxInputTokens = contextLimit - OUTPUT_RESERVE;
+    if (maxInputTokens <= 0) {
+      throw new Error(`Context limit too small for model: ${modelId || 'default'}`);
+    }
 
     let systemTokens = 0;
     if (systemPrompt) {
@@ -123,6 +151,9 @@ export class ContextManager {
     }
 
     const availableTokens = maxInputTokens - systemTokens - SYSTEM_RESERVE;
+    if (availableTokens <= 0) {
+      throw new Error('System prompt too long for available context window');
+    }
 
     let selected = [];
     let selectedTokens = 0;
@@ -136,9 +167,12 @@ export class ContextManager {
     for (let i = turns.length - 1; i >= 0; i--) {
       const turnTokens = this._getCachedTokens(turns[i].content);
       if (selectedTokens + turnTokens > availableTokens) {
-        const truncated = truncateContent(turns[i].content, availableTokens - selectedTokens);
-        if (estimateTokens(truncated) > 0) {
-          selected.unshift({ role: turns[i].role, content: truncated });
+        const remaining = availableTokens - selectedTokens;
+        if (remaining > 50) {
+          const truncated = truncateContent(turns[i].content, remaining);
+          if (estimateTokens(truncated) > 0) {
+            selected.unshift({ role: turns[i].role, content: truncated });
+          }
         }
         break;
       }
@@ -163,8 +197,24 @@ export class ContextManager {
   }
 
   getTruncatedMessages(messages, modelId = null, systemPrompt = null) {
+    if (!Array.isArray(messages)) {
+      throw new Error('messages must be an array');
+    }
+    if (modelId !== null && typeof modelId !== 'string') {
+      throw new Error('modelId must be a string or null');
+    }
+    if (systemPrompt !== null && typeof systemPrompt !== 'string') {
+      throw new Error('systemPrompt must be a string or null');
+    }
+
     const contextLimit = MODEL_CONTEXT_LIMITS[modelId] || this.maxContextTokens;
+    if (!contextLimit || contextLimit < 1024) {
+      throw new Error(`Invalid context limit for model: ${modelId || 'default'}`);
+    }
     const maxInputTokens = contextLimit - OUTPUT_RESERVE;
+    if (maxInputTokens <= 0) {
+      throw new Error(`Context limit too small for model: ${modelId || 'default'}`);
+    }
 
     let systemTokens = 0;
     if (systemPrompt) {
@@ -172,16 +222,25 @@ export class ContextManager {
     }
 
     const availableTokens = maxInputTokens - systemTokens - SYSTEM_RESERVE;
+    if (availableTokens <= 0) {
+      throw new Error('System prompt too long for available context window');
+    }
 
     let totalTokens = 0;
     let selected = [];
 
     for (let i = messages.length - 1; i >= 0; i--) {
+      if (!messages[i] || typeof messages[i].content !== 'string') {
+        continue; // Skip invalid messages
+      }
       const msgTokens = this._getCachedTokens(messages[i].content);
       if (totalTokens + msgTokens > availableTokens) {
-        const truncated = truncateContent(messages[i].content, availableTokens - totalTokens);
-        if (estimateTokens(truncated) > 0) {
-          selected.unshift({ role: messages[i].role, content: truncated });
+        const remaining = availableTokens - totalTokens;
+        if (remaining > 50) {
+          const truncated = truncateContent(messages[i].content, remaining);
+          if (estimateTokens(truncated) > 0) {
+            selected.unshift({ role: messages[i].role, content: truncated });
+          }
         }
         break;
       }
@@ -238,7 +297,10 @@ export class ContextManager {
   }
 
   setMaxTurns(turns) {
-    this.maxTurns = Math.max(2, Math.min(100, turns));
+    if (typeof turns !== 'number' || !Number.isInteger(turns) || turns < 2 || turns > 100) {
+      throw new Error('maxTurns must be an integer between 2 and 100');
+    }
+    this.maxTurns = turns;
   }
 }
 
