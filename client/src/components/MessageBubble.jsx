@@ -16,7 +16,9 @@ marked.setOptions({
       try { 
         return hljs.highlight(code, { language: lang }).value; 
       } catch (error) {
-        console.error('Highlight error:', error);
+        console.error(`[MessageBubble] Syntax highlighting failed for language "${lang}":`, error.message);
+        // Fallback to auto-detection
+        return hljs.highlightAuto(code).value;
       }
     }
     return hljs.highlightAuto(code).value;
@@ -48,7 +50,9 @@ export default function MessageBubble({ msg, index, onEdit, processing }) {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch (error) {
-      console.error('Failed to copy:', error);
+      console.error('[MessageBubble] Failed to copy message to clipboard:', error.message);
+      // Fallback: Show user-friendly error notification
+      alert('Failed to copy to clipboard. Please try again or copy manually.');
     }
   };
 
