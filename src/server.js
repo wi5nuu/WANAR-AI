@@ -38,9 +38,48 @@ const PORT = config.server.port;
 const aiManager = new AIManager();
 
 // ==================== MULTER FILE UPLOAD CONFIG ====================
+const ALLOWED_MIMETYPES = [
+  // Text files
+  'text/plain', 'text/csv', 'text/html', 'text/css', 'text/javascript',
+  'application/json', 'application/xml', 'text/xml',
+  // Code files
+  'application/x-javascript', 'application/x-python-code',
+  // Documents
+  'application/pdf',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  'application/msword', 'application/vnd.ms-excel', 'application/vnd.ms-powerpoint',
+  // Images
+  'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/svg+xml',
+  // Archives
+  'application/zip', 'application/x-tar', 'application/gzip', 'application/x-rar-compressed',
+];
+
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 20 * 1024 * 1024 }, // 20MB max
+  limits: { 
+    fileSize: 20 * 1024 * 1024, // 20MB max
+    files: 1 // Only allow single file upload
+  },
+  fileFilter: (req, file, cb) => {
+    // Validate mimetype
+    if (!ALLOWED_MIMETYPES.includes(file.mimetype)) {
+      return cb(new Error(`File type ${file.mimetype} is not allowed. Only documents, images, text, and code files are accepted.`));
+    }
+    
+    // Validate filename (prevent path traversal)
+    if (file.originalname.includes('..') || file.originalname.includes('/') || file.originalname.includes('\\')) {
+      return cb(new Error('Invalid filename: path traversal detected'));
+    }
+    
+    // Limit filename length
+    if (file.originalname.length > 255) {
+      return cb(new Error('Filename is too long (max 255 characters)'));
+    }
+    
+    cb(null, true);
+  }
 });
 
 /**
