@@ -94,6 +94,7 @@ export class CodeGraph {
     for (const pattern of patterns) {
       let match;
       while ((match = pattern.exec(content)) !== null) {
+        if (!match[1]) continue;
         const imp = match[1].trim();
         if (imp && !imp.startsWith('.') && !imp.includes(':')) {
           imports.add(imp);

@@ -65,6 +65,7 @@ function extractImports(content, lang, fp) {
   for (const pattern of patterns) {
     let m;
     while ((m = pattern.exec(content)) !== null) {
+      if (!m[1]) continue;
       const imp = m[1].trim();
       if (imp && !imp.startsWith('.') && !imp.includes(':')) imports.push(imp);
       else if (imp.startsWith('.')) {
