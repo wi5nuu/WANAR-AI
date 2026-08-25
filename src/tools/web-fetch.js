@@ -124,6 +124,12 @@ async function webFetch(args) {
     const contentType = response.headers['content-type'] || '';
     let content = response.data;
 
+    // Axios auto-parses JSON bodies into objects - coerce to string so the
+    // string handling below (replace/trim/length) never throws.
+    if (typeof content !== 'string') {
+      content = content == null ? '' : (typeof content === 'object' ? JSON.stringify(content, null, 2) : String(content));
+    }
+
     // Process based on format
     if (format === 'html') {
       return {
