@@ -213,7 +213,9 @@ export class RagStore {
         content: r.content,
         size: r.size,
         keywords: JSON.parse(r.keywords || '[]'),
-        score: Math.max(0, 100 + r.rank) / 100,
+        // FTS5 rank (bm25) is NEGATIVE and lower = better match, so map it
+        // monotonically onto (0, 1] where better matches score higher
+        score: 1 / (1 + Math.exp(r.rank)),
         method: 'fts',
       }));
     } catch {
