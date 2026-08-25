@@ -64,7 +64,9 @@ function extractFunctionName(line, language) {
   };
   const pattern = patterns[language] || patterns['javascript'];
   const match = line.match(pattern);
-  return match ? match.find(m => m !== undefined && m !== null) || null : null;
+  // match[0] is the full match (e.g. "function hello"); return the first
+  // captured group instead, otherwise chunks get names like "function hello"
+  return match ? match.slice(1).find(m => m !== undefined && m !== null) || null : null;
 }
 
 export function chunkFile(filePath, options = {}) {
