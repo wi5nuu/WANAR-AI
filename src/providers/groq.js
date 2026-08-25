@@ -248,17 +248,20 @@ export class GroqProvider extends BaseProvider {
    * Convert tools to OpenAI format (Groq compatible)
    */
   convertToolsFormat(tools) {
-    return tools.map(tool => ({
-      type: 'function',
-      function: {
-        name: tool.name,
-        description: tool.description,
-        parameters: tool.parameters || {
-          type: 'object',
-          properties: {},
+    return tools.map(tool => {
+      const fn = tool.function || tool;
+      return {
+        type: 'function',
+        function: {
+          name: fn.name,
+          description: fn.description,
+          parameters: fn.parameters || {
+            type: 'object',
+            properties: {},
+          },
         },
-      },
-    }));
+      };
+    });
   }
 
   /**

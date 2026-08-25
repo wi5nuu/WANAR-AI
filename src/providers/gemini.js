@@ -255,14 +255,17 @@ export class GeminiProvider extends BaseProvider {
    * Convert tools to Gemini format
    */
   convertToolsFormat(tools) {
-    return tools.map(tool => ({
-      name: tool.name,
-      description: tool.description,
-      parameters: tool.parameters || {
-        type: 'object',
-        properties: {},
-      },
-    }));
+    return tools.map(tool => {
+      const fn = tool.function || tool;
+      return {
+        name: fn.name,
+        description: fn.description,
+        parameters: fn.parameters || {
+          type: 'object',
+          properties: {},
+        },
+      };
+    });
   }
 
   /**
