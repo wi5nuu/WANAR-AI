@@ -1656,12 +1656,15 @@ app.get('/api/job-agent/sessions/:id/live', (req, res) => {
   });
 });
 
-app.get('*', (req, res) => {
-  if (req.path.startsWith('/api/') || req.path.startsWith('/assets/')) return;
+app.get('*', (req, res, next) => {
+  if (req.path.startsWith('/api/') || req.path.startsWith('/assets/')) {
+    return res.status(404).json({ error: 'Not found' });
+  }
   const indexPath = path.join(clientDist, 'index.html');
   if (fs.existsSync(indexPath)) {
-    res.sendFile(indexPath);
+    return res.sendFile(indexPath);
   }
+  return next();
 });
 
 // Deep Attack Stream - Professional Pentest
