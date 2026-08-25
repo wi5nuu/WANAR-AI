@@ -36,7 +36,7 @@ export class WorkerPool {
 
     worker.on('message', (msg) => {
       if (msg.type === 'ready') {
-        this.idle.push(worker);
+        this._releaseWorker(worker);
         this._processQueue();
       } else if (msg.type === 'result') {
         const pendingItem = this.pending.get(msg.id);
@@ -45,7 +45,7 @@ export class WorkerPool {
           pendingItem.resolve(msg.results);
           this.pending.delete(msg.id);
         }
-        this.idle.push(worker);
+        this._releaseWorker(worker);
         this._processQueue();
       } else if (msg.type === 'error') {
         const pendingItem = this.pending.get(msg.id);
@@ -54,15 +54,17 @@ export class WorkerPool {
           pendingItem.reject(new Error(msg.error));
           this.pending.delete(msg.id);
         }
-        this.idle.push(worker);
+        this._releaseWorker(worker);
         this._processQueue();
       }
     });
 
     worker.on('error', (err) => {
       console.error(`[WORKER ${index}] Error:`, err.message);
-      // Clean up any pending tasks for this worker
+      worker._dead = true;
+      // Clean up any pending tasks assigned to this worker
       this._cleanupWorkerTasks(worker);
+      this._removeFromIdle(worker);
       const idx = this.workers.indexOf(worker);
       if (idx >= 0) this.workers.splice(idx, 1);
       if (!this._destroyed) {
@@ -71,8 +73,10 @@ export class WorkerPool {
     });
 
     worker.on('exit', (code) => {
-      // Clean up any pending tasks for this worker
+      worker._dead = true;
+      // Clean up any pending tasks assigned to this worker
       this._cleanupWorkerTasks(worker);
+      this._removeFromIdle(worker);
       const idx = this.workers.indexOf(worker);
       if (idx >= 0) this.workers.splice(idx, 1);
       if (code !== 0 && !this._destroyed) {
@@ -84,11 +88,24 @@ export class WorkerPool {
     this.workers.push(worker);
   }
 
+  _releaseWorker(worker) {
+    // Never re-queue a dead/retired worker
+    if (worker._dead || !this.workers.includes(worker)) return;
+    if (!this.idle.includes(worker)) this.idle.push(worker);
+  }
+
+  _removeFromIdle(worker) {
+    const idx = this.idle.indexOf(worker);
+    if (idx >= 0) this.idle.splice(idx, 1);
+  }
+
   _cleanupWorkerTasks(worker) {
-    // Find and reject all pending tasks assigned to this worker
+    // Reject only the tasks actually assigned to this worker
     for (const [id, item] of this.pending.entries()) {
-      // We can't easily track which worker has which task, so we'll just clear all
-      // In a more sophisticated implementation, we'd track worker->task mapping
+      if (item.worker !== worker) continue;
+      clearTimeout(item.timeout);
+      item.reject(new Error('Worker terminated before finishing its task'));
+      this.pending.delete(id);
     }
   }
 
@@ -102,13 +119,16 @@ export class WorkerPool {
         if (this.pending.has(id)) {
           this.pending.delete(id);
           reject(new Error(`Worker task timeout after ${this.taskTimeout}ms`));
-          // Return worker to idle pool
-          this.idle.push(worker);
-          this._processQueue();
+          // The worker may still be running the batch - retire and terminate it
+          // so its (late) result is never handled twice, then let the exit
+          // handler respawn a replacement.
+          worker._dead = true;
+          this._removeFromIdle(worker);
+          worker.terminate();
         }
       }, this.taskTimeout);
 
-      this.pending.set(id, { resolve, reject, timeout });
+      this.pending.set(id, { resolve, reject, timeout, worker });
       worker.postMessage({ type: 'process', id, files, options });
     }
   }
