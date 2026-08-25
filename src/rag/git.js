@@ -120,8 +120,9 @@ export class GitAnalyzer {
       return match ? { file: match[1].trim(), changes: parseInt(match[2]) } : null;
     }).filter(Boolean);
 
-    const insertions = detail.success ? (detail.output.match(/^\+/gm) || []).length : 0;
-    const deletions = detail.success ? (detail.output.match(/^\-/gm) || []).length : 0;
+    // Exclude the '+++'/'---' file header lines that also start with +/-
+    const insertions = detail.success ? (detail.output.match(/^\+(?!\+\+)/gm) || []).length : 0;
+    const deletions = detail.success ? (detail.output.match(/^-(?!--)/gm) || []).length : 0;
 
     return {
       success: true,
