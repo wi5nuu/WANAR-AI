@@ -38,7 +38,8 @@ export async function testProviderConnection(baseUrl, apiKey, model, options = {
       response = await fetch(`${baseUrl.replace(/\/+$/, '')}/messages`, {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${apiKey}`,
+          // Anthropic API authenticates via x-api-key, not Authorization Bearer
+          'x-api-key': apiKey,
           'Content-Type': 'application/json',
           'anthropic-version': '2023-06-01',
         },
