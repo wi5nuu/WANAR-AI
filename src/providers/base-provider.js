@@ -60,7 +60,8 @@ export class BaseProvider {
     }
     
     for (const msg of messages) {
-      if (!msg.role || !msg.content) {
+      const hasContent = msg.content != null && msg.content !== '';
+      if (!msg.role || (!hasContent && !msg.tool_calls)) {
         throw new Error('Each message must have role and content');
       }
     }
@@ -161,7 +162,9 @@ export class BaseProvider {
    */
   estimateTokens(text) {
     // Rough estimate: 1 token ≈ 4 characters
-    return Math.ceil(text.length / 4);
+    if (text == null) return 0;
+    const str = typeof text === 'string' ? text : JSON.stringify(text);
+    return Math.ceil(str.length / 4);
   }
 
   /**
@@ -170,26 +173,30 @@ export class BaseProvider {
   truncateMessages(messages, maxTokens) {
     const truncated = [];
     let totalTokens = 0;
-    
+
     // Always keep system message
     const systemMsg = messages.find(m => m.role === 'system');
     if (systemMsg) {
-      truncated.push(systemMsg);
       totalTokens += this.estimateTokens(systemMsg.content);
     }
-    
+
     // Add messages from most recent to oldest
     const reversed = [...messages].reverse().filter(m => m.role !== 'system');
-    
+
     for (const msg of reversed) {
-      const tokens = this.estimateTokens(msg.content);
+      const tokens = this.estimateTokens(msg.content ?? msg.tool_calls);
       if (totalTokens + tokens > maxTokens) {
         break;
       }
       truncated.unshift(msg);
       totalTokens += tokens;
     }
-    
+
+    // Prepend the system message so it stays first in the payload
+    if (systemMsg) {
+      truncated.unshift(systemMsg);
+    }
+
     return { messages: truncated, totalTokens };
   }
 
