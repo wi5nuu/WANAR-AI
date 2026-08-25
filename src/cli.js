@@ -412,7 +412,11 @@ class WanarCLI {
     console.log();
 
     // Resume session dari argumen -s <id>
-    if (resumeSessionId) {
+    if (resumeSessionId === '__new__') {
+      // Sentinel dari --new: mulai sesi baru, jangan resume apa pun
+      console.log(`  ${gy}│${rs} ${gr}●${rs} ${bd}Sesi baru${rs}`);
+      console.log(`  ${gy}│${rs}`);
+    } else if (resumeSessionId) {
       const sessions = db.getSessions(50);
       const target = sessions.find(s => s.id === resumeSessionId);
       if (target) {
