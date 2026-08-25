@@ -424,12 +424,18 @@ export function getApiKeys(teamId) {
  */
 export function lookupApiKey(rawKey) {
   const hash = hashApiKey(rawKey);
-  return db.prepare(`
+  const row = db.prepare(`
     SELECT ak.*, u.name as user_name, u.role,
       (SELECT json_group_array(tm.team_id) FROM team_members tm WHERE tm.user_id = ak.user_id) as team_ids
     FROM api_keys ak JOIN users u ON ak.user_id = u.id
     WHERE ak.key_hash = ? AND ak.is_active = 1
   `).get(hash);
+  if (row) {
+    // json_group_array() returns TEXT; parse it so membership checks
+    // compare numbers instead of doing substring matches on a string.
+    try { row.team_ids = JSON.parse(row.team_ids || '[]'); } catch { row.team_ids = []; }
+  }
+  return row;
 }
 
 /**
