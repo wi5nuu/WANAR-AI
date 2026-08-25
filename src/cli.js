@@ -762,18 +762,9 @@ class WanarCLI {
             .replace(/[\u{2700}-\u{27BF}]/gu, '')
           );
         } else if (chunk.type === 'tool_start') {
-          // Flush content yang sudah terkumpul sebelum tool call
-          if (fullContent && !printedThought) {
-            printedThought = true;
-            console.log(`  ${yl}┌ Wanar AI${rs} ${dim}(${thoughtMs}ms)${rs}`);
-            process.stdout.write(stripMarkdown(fullContent));
-            process.stdout.write('\n');
-            fullContent = '';
-          } else if (fullContent && printedThought) {
-            process.stdout.write(stripMarkdown(fullContent));
-            process.stdout.write('\n');
-            fullContent = '';
-          }
+          // Content sudah di-stream live saat chunk 'content' diterima,
+          // jadi cukup reset buffer - jangan cetak ulang (duplikat).
+          fullContent = '';
           if (!printedThought) {
             printedThought = true;
             console.log(`  ${yl}┌ Wanar AI${rs} ${dim}(${thoughtMs}ms)${rs}`);
