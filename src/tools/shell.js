@@ -4,6 +4,7 @@ import path from 'path';
 const DEFAULT_WORKDIR = process.cwd();
 const ALLOWED_BASE = process.cwd(); // Only allow commands within project directory
 const MAX_OUTPUT = 100 * 1024;
+const EXEC_MAX_BUFFER = 8 * 1024 * 1024; // hard cap for execSync before truncation
 const TIMEOUT_MS = 30000;
 
 // Dangerous commands that should be blocked
@@ -145,7 +146,10 @@ export async function executeShellTool(name, args) {
         const output = execSync(command, {
           cwd: workdir,
           encoding: 'utf8',
-          maxBuffer: MAX_OUTPUT,
+          // Allow large outputs; we truncate to MAX_OUTPUT ourselves below.
+          // With maxBuffer == MAX_OUTPUT execSync KILLS the child when the
+          // output exceeds it, so successful commands were reported as failed.
+          maxBuffer: EXEC_MAX_BUFFER,
           timeout,
           windowsHide: true,
         });
@@ -157,6 +161,16 @@ export async function executeShellTool(name, args) {
           truncated,
         };
       } catch (err) {
+        // Command succeeded but produced more than EXEC_MAX_BUFFER
+        if (err.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') {
+          const stdout = (err.stdout?.toString() || '').slice(0, MAX_OUTPUT);
+          return {
+            exitCode: 0,
+            stdout: stdout + '\n\n... (truncated)',
+            stderr: '',
+            truncated: true,
+          };
+        }
         const stderr = err.stderr?.toString().slice(0, MAX_OUTPUT) || '';
         const stdout = err.stdout?.toString().slice(0, MAX_OUTPUT) || '';
         return {
