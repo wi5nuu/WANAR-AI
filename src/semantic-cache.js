@@ -40,7 +40,7 @@ export default class SemanticCache {
     // Semantic cache (embedding-based)
     this.semanticCache = [];
     this.semanticCacheMaxSize = options.semanticCacheMaxSize || 500;
-    this.semanticThreshold = options.semanticThreshold || 0.85; // 85% similarity
+    this.semanticThreshold = options.semanticThreshold ?? 0.85; // 85% similarity (?? keeps an explicit 0)
     
     // TTL settings (in milliseconds)
     this.defaultTTL = options.defaultTTL || 3600000; // 1 hour

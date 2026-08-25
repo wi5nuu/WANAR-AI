@@ -65,10 +65,11 @@ export default class EnterpriseAnalytics {
     this.alerts = {
       enabled: options.alertsEnabled !== false,
       thresholds: {
-        errorRate: options.errorRateThreshold || 0.1, // 10%
-        latency: options.latencyThreshold || 5000, // 5s
-        costPerHour: options.costPerHourThreshold || 10, // $10/hour
-        tokenUsagePerHour: options.tokenUsageThreshold || 1000000 // 1M tokens/hour
+        // ?? instead of || so explicit 0 thresholds are not overwritten by defaults
+        errorRate: options.errorRateThreshold ?? 0.1, // 10%
+        latency: options.latencyThreshold ?? 5000, // 5s
+        costPerHour: options.costPerHourThreshold ?? 10, // $10/hour
+        tokenUsagePerHour: options.tokenUsageThreshold ?? 1000000 // 1M tokens/hour
       },
       callbacks: []
     };
