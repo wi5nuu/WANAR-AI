@@ -784,7 +784,7 @@ class WanarCLI {
             chunk.name === 'write_file' || chunk.name === 'edit_file' ? `${mg}■${rs}` :
             chunk.name === 'bash' ? `${gy}$${rs}` : `${gy}•${rs}`;
           console.log(`  ${gy}│${rs} ${icon} ${gy}${chunk.name}${rs}${short}`);
-        } else if (chunk.type === 'tool_result') {
+        } else if (chunk.type === 'tool_end') {
           // Tampilkan ringkasan hasil tool ke user
           if (chunk.result) {
             const res = chunk.result;
