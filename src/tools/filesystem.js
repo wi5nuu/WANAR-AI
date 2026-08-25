@@ -96,7 +96,9 @@ export async function executeFileTool(name, args) {
       if (!current.includes(args.old_string)) {
         return { error: `old_string not found in file. Provide more surrounding context.` };
       }
-      const updated = current.replace(args.old_string, args.new_string);
+      // Use a replacer function so '$' sequences in new_string ($&, $1, $$, ...)
+      // are written literally instead of being interpreted as replacement patterns
+      const updated = current.replace(args.old_string, () => args.new_string);
       fs.writeFileSync(args.path, updated, 'utf8');
       return { success: true, path: path.resolve(args.path), replaced: 1 };
     }
