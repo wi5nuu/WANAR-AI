@@ -198,7 +198,7 @@ export class GraphStore {
   }
 
   searchSymbols(pattern, limit = 20) {
-    return this._prepared.searchSymbols.run(`%${pattern}%`, limit);
+    return this._prepared.searchSymbols.all(`%${pattern}%`, limit);
   }
 
   getNodeSymbols(filePath) {
