@@ -1027,7 +1027,7 @@ app.post('/api/auth/api-key', rateLimiters.auth, (req, res) => {
   if (!user) return res.status(401).json({ success: false, error: 'Invalid API key' });
   const jwtToken = jwt.sign(
     { id: user.id, role: user.role, name: user.name },
-    process.env.JWT_SECRET || 'wanar-ai-jwt-secret-change-in-production',
+    auth.JWT_SECRET_FINAL,
     { expiresIn: '7d' }
   );
   res.json({ success: true, token: jwtToken, user });

@@ -14,7 +14,7 @@ if (!JWT_SECRET) {
   console.warn('Using default JWT_SECRET for development only');
 }
 
-const JWT_SECRET_FINAL = JWT_SECRET || 'wanar-ai-jwt-secret-dev-only-insecure';
+export const JWT_SECRET_FINAL = JWT_SECRET || 'wanar-ai-jwt-secret-dev-only-insecure';
 const googleClient = GOOGLE_CLIENT_ID ? new OAuth2Client(GOOGLE_CLIENT_ID) : null;
 
 /**

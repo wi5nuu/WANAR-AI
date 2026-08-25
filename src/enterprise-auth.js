@@ -1,14 +1,13 @@
 import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
 import db from './database.js';
+import { JWT_SECRET_FINAL as JWT_SECRET } from './auth.js';
 
 /**
  * Enterprise Authentication Module
  * Provides RBAC, team management, API keys, and JWT authentication
  * @module enterprise-auth
  */
-
-const JWT_SECRET = process.env.JWT_SECRET || 'wanar-ai-jwt-secret-change-in-production';
 
 const ROLES_HIERARCHY = {
   superadmin: 100,
