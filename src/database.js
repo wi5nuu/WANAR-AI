@@ -412,7 +412,8 @@ export function findOrCreateUser(profile) {
     db.prepare("UPDATE users SET name = ?, avatar = ?, last_login = datetime('now') WHERE id = ?").run(
       profile.name || user.name, profile.avatar || user.avatar, user.id
     );
-    return user;
+    // Re-read so callers get the fresh name/avatar/last_login
+    return db.prepare('SELECT * FROM users WHERE id = ?').get(user.id);
   }
 
   const apiKey = 'wanar_' + crypto.randomBytes(16).toString('hex');
