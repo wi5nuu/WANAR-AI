@@ -317,7 +317,7 @@ const prepared = {
   getAnalyticsByModel: db.prepare('SELECT model, COUNT(*) as count, SUM(total_tokens) as tokens, AVG(tokens_per_second) as avg_speed FROM request_logs WHERE created_at >= ? GROUP BY model ORDER BY count DESC'),
   getAnalyticsUniqueIPs: db.prepare('SELECT COUNT(DISTINCT ip) as count FROM request_logs WHERE created_at >= ? AND ip IS NOT NULL'),
   getAnalyticsRecent: db.prepare('SELECT id, session_id, provider, model, ip, input_chars, output_chars, total_tokens, response_time_ms, tokens_per_second, status, created_at FROM request_logs WHERE created_at >= ? ORDER BY created_at DESC LIMIT 200'),
-  getAnalyticsHourly: db.prepare("SELECT substr(created_at,12,3) || 'h' as hour, COUNT(*) as count, SUM(total_tokens) as tokens FROM request_logs WHERE created_at >= ? GROUP BY substr(created_at,1,13) ORDER BY hour ASC"),
+  getAnalyticsHourly: db.prepare("SELECT substr(created_at,12,2) || 'h' as hour, COUNT(*) as count, SUM(total_tokens) as tokens FROM request_logs WHERE created_at >= ? GROUP BY substr(created_at,1,13) ORDER BY hour ASC"),
 };
 
 export function getSessions(limit = 50) {
