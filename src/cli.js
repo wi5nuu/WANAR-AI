@@ -397,8 +397,9 @@ class WanarCLI {
       this.aiManager.contextManager.addTurn(m.role, m.content);
     }
     this.sessionId = sessionId;
-    const sessions = db.getSessions(1);
-    const s = sessions.find(x => x.id === sessionId);
+    // Query langsung by id - getSessions(1) hanya mengembalikan sesi terbaru,
+    // jadi judul sesi lain selalu hilang.
+    const s = db.prepare('SELECT title FROM chat_sessions WHERE id = ?').get(sessionId);
     this.sessionName = s ? s.title : 'Loaded Chat';
   }
 
