@@ -85,7 +85,7 @@ export async function executeSearchTool(name, args) {
         }
       }
 
-      const regex = new RegExp(args.pattern, 'gi');
+      const regex = new RegExp(args.pattern, 'i');
       const matches = [];
       for (const file of files) {
         if (matches.length >= maxResults) break;
