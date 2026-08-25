@@ -290,11 +290,26 @@ try {
 } catch (e) {
   console.warn('Index idx_chat_sessions_workspace creation failed:', e.message);
 }
-try { 
-  db.exec('CREATE INDEX IF NOT EXISTS idx_chat_sessions_team ON chat_sessions(team_id)'); 
+try {
+  db.exec('CREATE INDEX IF NOT EXISTS idx_chat_sessions_team ON chat_sessions(team_id)');
 } catch (e) {
   console.warn('Index idx_chat_sessions_team creation failed:', e.message);
 }
+
+// Long-term (L3) context summaries for AdvancedContextManager
+db.exec(`
+  CREATE TABLE IF NOT EXISTS context_summaries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT,
+    summary TEXT NOT NULL,
+    message_count INTEGER,
+    tokens INTEGER,
+    original_tokens INTEGER,
+    compression_ratio REAL,
+    timestamp TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_context_summaries_session ON context_summaries(session_id);
+`);
 
 const prepared = {
   getSessions: db.prepare('SELECT id, title, provider, model, created_at, updated_at FROM chat_sessions ORDER BY updated_at DESC LIMIT ?'),
@@ -788,6 +803,43 @@ export function updateReviewItem(id, status, editedMapping = null) {
 export function clearJobQueue() {
   db.prepare('DELETE FROM job_review_queue').run();
   db.prepare('DELETE FROM job_queue').run();
+}
+
+// ==================== L3 CONTEXT SUMMARIES ====================
+
+export function archiveSummary(data) {
+  return db.prepare(`
+    INSERT INTO context_summaries (session_id, summary, message_count, tokens, original_tokens, compression_ratio, timestamp)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    data.sessionId ?? null,
+    data.summary,
+    data.messageCount ?? null,
+    data.tokens ?? null,
+    data.originalTokens ?? null,
+    data.compressionRatio ?? null,
+    data.timestamp ?? new Date().toISOString()
+  );
+}
+
+export function searchSessions(keywords = [], limit = 5) {
+  const words = (Array.isArray(keywords) ? keywords : [keywords])
+    .filter(Boolean)
+    .slice(0, 8);
+  if (words.length === 0) return [];
+
+  const rows = db.prepare('SELECT summary, timestamp, session_id FROM context_summaries ORDER BY id DESC LIMIT 500').all();
+  const scored = [];
+  for (const row of rows) {
+    const text = String(row.summary).toLowerCase();
+    let score = 0;
+    for (const w of words) {
+      if (text.includes(String(w).toLowerCase())) score++;
+    }
+    if (score > 0) scored.push({ summary: row.summary, timestamp: row.timestamp, session_id: row.session_id, score });
+  }
+  scored.sort((a, b) => b.score - a.score);
+  return scored.slice(0, limit);
 }
 
 export default db;
