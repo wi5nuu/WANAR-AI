@@ -63,6 +63,9 @@ class RAGEngine {
       try {
         for (const fp of changedFiles) {
           this.indexer.store.removeFile(fp);
+          // addFile() early-returns for known files, so the stale entry
+          // must be removed first or nodes/edges keep pre-edit imports.
+          codeGraph.removeFile(fp);
           codeGraph.addFile(fp);
         }
         const { chunkFile } = await import('./chunker.js');

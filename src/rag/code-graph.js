@@ -58,6 +58,14 @@ export class CodeGraph {
     this.classes = new Map();
   }
 
+  removeFile(filePath) {
+    this.nodes.delete(filePath);
+    this.edges.delete(filePath);
+    this.functions.delete(filePath);
+    this.classes.delete(filePath);
+    graphStore.removeNode(filePath);
+  }
+
   addFile(filePath) {
     if (this.nodes.has(filePath)) return;
     try {
