@@ -74,9 +74,8 @@ async function setupPubSub() {
         const data = JSON.parse(message);
         const handlers = messageHandlers.get(channel) || [];
 
-        if (data.target && data.target !== INSTANCE_ID) {
-          for (const handler of handlers) handler(data);
-        } else if (!data.target) {
+        // Handle broadcast messages and messages targeted at this instance
+        if (!data.target || data.target === INSTANCE_ID) {
           for (const handler of handlers) handler(data);
         }
       } catch (error) {
