@@ -235,9 +235,13 @@ export default class IntelligentModelRouter {
       scores[typeName] = score;
     });
 
-    // Find highest scoring task type
+    // Find highest scoring task type; fall back to 'general' when nothing
+    // matched - find() always returns a key here, so the previous
+    // `|| 'general'` was dead code and casual messages were routed as 'coding'.
     const maxScore = Math.max(...Object.values(scores));
-    const detectedType = Object.keys(scores).find(key => scores[key] === maxScore) || 'general';
+    const detectedType = maxScore > 0
+      ? Object.keys(scores).find(key => scores[key] === maxScore)
+      : 'general';
 
     return {
       name: detectedType,
