@@ -144,6 +144,14 @@ function onMessage(channel, handler) {
   if (!redisAvailable) {
     localPubSub.set(channel, handler);
   }
+
+  // Return an unsubscribe function so consumers (e.g. ContextCache.destroy)
+  // can release their subscription
+  return () => {
+    const handlers = messageHandlers.get(channel) || [];
+    const idx = handlers.indexOf(handler);
+    if (idx >= 0) handlers.splice(idx, 1);
+  };
 }
 
 function notifyLocal(channel, data) {
@@ -188,7 +196,7 @@ export class DistributedCoordinator {
   }
 
   onCacheInvalidate(handler) {
-    onMessage('wanar:cache:invalidate', handler);
+    return onMessage('wanar:cache:invalidate', handler);
   }
 
   onNotify(handler) {

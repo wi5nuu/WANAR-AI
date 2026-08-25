@@ -14,7 +14,7 @@ export class ContextCache {
 
     this._cleanupTimer = setInterval(() => this._evictExpired(), CLEANUP_INTERVAL);
 
-    coordinator.onCacheInvalidate((data) => {
+    this._unsubscribeInvalidate = coordinator.onCacheInvalidate((data) => {
       if (data.key === '*') {
         this.clear();
       } else if (data.key) {
@@ -166,6 +166,7 @@ export class ContextCache {
 
   destroy() {
     if (this._cleanupTimer) clearInterval(this._cleanupTimer);
+    if (this._unsubscribeInvalidate) this._unsubscribeInvalidate();
     this.clear();
   }
 }
