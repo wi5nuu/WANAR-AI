@@ -301,7 +301,7 @@ export class NVIDIAProvider {
               const parsed = JSON.parse(trimmed.slice(6));
               const content = parsed.choices?.[0]?.delta?.content || parsed.choices?.[0]?.text || '';
               if (content) yield { type: 'content', content };
-              if (parsed.choices?.[0]?.finish_reason === 'stop') yield { type: 'done' };
+              if (parsed.choices?.[0]?.finish_reason === 'stop') { yield { type: 'done' }; return; }
             } catch { }
           }
         }
