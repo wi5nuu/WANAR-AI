@@ -1930,7 +1930,8 @@ export async function startJobSession(sessionId, options = {}) {
     emit(sessionId, 'session:crawled', { count: jobs.length, jobs: jobs.slice(0, 10) });
 
     // Step 2: Process each job — setiap job dapat tab Chrome sendiri
-    const queue = db.getJobQueue('pending', 500);
+    // Scope ke source_url sesi ini, jangan ambil antrean global lintas sesi
+    const queue = db.getJobQueue('pending', 500, 0, session.source_url);
     let idx = 0;
     for (const job of queue) {
       if (abortController.aborted) {
@@ -1961,8 +1962,8 @@ export async function startJobSession(sessionId, options = {}) {
         await jobPage.close().catch(() => {});
       }
 
-      // Update session counters
-      const stats = db.getJobQueueStats();
+      // Update session counters (scoped ke source_url sesi ini)
+      const stats = db.getJobQueueStats(session.source_url);
       const submitted = stats.find(s => s.status === 'submitted')?.count || 0;
       const needs_review = stats.find(s => s.status === 'needs_review')?.count || 0;
       const skipped = stats.find(s => s.status === 'skipped')?.count || 0;
@@ -1973,7 +1974,7 @@ export async function startJobSession(sessionId, options = {}) {
     }
 
     db.updateJobSession(sessionId, { status: 'completed', finished_at: new Date().toISOString() });
-    const finalStats = db.getJobQueueStats();
+    const finalStats = db.getJobQueueStats(session.source_url);
     emit(sessionId, 'session:completed', {
       submitted: finalStats.find(s => s.status === 'submitted')?.count || 0,
       needs_review: finalStats.find(s => s.status === 'needs_review')?.count || 0,

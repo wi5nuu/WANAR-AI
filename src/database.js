@@ -701,14 +701,20 @@ export function addJobToQueue(sessionId, company, title, link, sourceUrl) {
   }
 }
 
-export function getJobQueue(status = null, limit = 100, offset = 0) {
+export function getJobQueue(status = null, limit = 100, offset = 0, sourceUrl = null) {
+  if (status && sourceUrl) {
+    return db.prepare('SELECT * FROM job_queue WHERE status = ? AND source_url = ? ORDER BY created_at DESC LIMIT ? OFFSET ?').all(status, sourceUrl, limit, offset);
+  }
   if (status) {
     return db.prepare('SELECT * FROM job_queue WHERE status = ? ORDER BY created_at DESC LIMIT ? OFFSET ?').all(status, limit, offset);
   }
   return db.prepare('SELECT * FROM job_queue ORDER BY created_at DESC LIMIT ? OFFSET ?').all(limit, offset);
 }
 
-export function getJobQueueStats() {
+export function getJobQueueStats(sourceUrl = null) {
+  if (sourceUrl) {
+    return db.prepare('SELECT status, COUNT(*) as count FROM job_queue WHERE source_url = ? GROUP BY status').all(sourceUrl);
+  }
   return db.prepare(`
     SELECT status, COUNT(*) as count FROM job_queue GROUP BY status
   `).all();
