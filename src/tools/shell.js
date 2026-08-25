@@ -71,12 +71,15 @@ function sanitizeCommand(command) {
 function validateWorkdir(workdir) {
   const resolved = path.resolve(workdir);
   const allowed = path.resolve(ALLOWED_BASE);
-  
-  // Ensure workdir is within allowed base
-  if (!resolved.startsWith(allowed)) {
+
+  // Segment-based check: a plain startsWith() would accept sibling
+  // directories like <base>-evil because their path merely begins
+  // with the base path as a substring.
+  const rel = path.relative(allowed, resolved);
+  if (rel.startsWith('..') || path.isAbsolute(rel)) {
     throw new Error(`Workdir must be within project directory: ${allowed}`);
   }
-  
+
   return resolved;
 }
 
