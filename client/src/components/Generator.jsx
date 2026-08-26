@@ -35,8 +35,36 @@ export default function Generator() {
   const [selectedFile, setSelectedFile] = useState(null);
   const [fileContent, setFileContent] = useState('');
   const [starting, setStarting] = useState(false);
+  const [cfgProviders, setCfgProviders] = useState([]);
+  const [cfg, setCfg] = useState(null);
+  const [provider, setProvider] = useState('');
+  const [model, setModel] = useState('');
   const esRef = useRef(null);
   const feedRef = useRef(null);
+
+  // Muat daftar provider + model dari config
+  useEffect(() => {
+    fetch('/api/config').then(r => r.json()).then(data => {
+      setCfg(data);
+      const provs = (data.providers || []).filter(p => {
+        if (p === 'puter') return data.puter?.enabled;
+        return true;
+      });
+      setCfgProviders(provs);
+      // Default: nvidia jika ada, selain itu default server
+      const preferred = provs.includes('nvidia') ? 'nvidia' : (data.defaultProvider || provs[0]);
+      setProvider(preferred);
+      const defModel = data[preferred]?.defaultModel || data[preferred]?.models?.[0]?.id || '';
+      setModel(defModel);
+    }).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    fetch('/api/config').then(r => r.json()).then(cfg => {
+      const m = cfg[provider];
+      if (m?.defaultModel) setModel(m.defaultModel);
+    }).catch(() => {});
+  }, [provider]);
 
   const loadProjects = useCallback(async () => {
     try {
@@ -116,7 +144,7 @@ export default function Generator() {
       const res = await fetch('/api/generator/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ description, framework, appType, projectName, extra, maxFiles }),
+        body: JSON.stringify({ description, framework, appType, projectName, extra, maxFiles, provider, model }),
       });
       const data = await res.json();
       if (data.id) {
@@ -134,7 +162,7 @@ export default function Generator() {
     } finally {
       setStarting(false);
     }
-  }, [description, framework, appType, projectName, extra, maxFiles, starting, connectSSE, loadProjects]);
+  }, [description, framework, appType, projectName, extra, maxFiles, provider, model, starting, connectSSE, loadProjects]);
 
   const viewFile = useCallback(async (path) => {
     setSelectedFile(path);
@@ -216,6 +244,22 @@ export default function Generator() {
 
             <label style={styles.label}>Fitur Tambahan (opsional)</label>
             <input style={styles.input} placeholder="auth JWT, chart, CRUD kategori..." value={extra} onChange={e => setExtra(e.target.value)} />
+
+            <label style={styles.label}>Provider AI *</label>
+            <select style={styles.select} value={provider} onChange={e => setProvider(e.target.value)}>
+              {cfgProviders.map(p => <option key={p} value={p}>{p}</option>)}
+            </select>
+            <div style={{ fontSize: 11.5, color: '#889', marginTop: 4 }}>
+              Gunakan provider gratis yang sehat (mis. nvidia) agar tidak boros saldo
+            </div>
+
+            <label style={styles.label}>Model AI</label>
+            <select style={styles.select} value={model} onChange={e => setModel(e.target.value)}>
+              <option value="">(default provider)</option>
+              {(cfg?.[provider]?.models || []).map(m => (
+                <option key={m.id} value={m.id}>{m.label || m.id}{m.rec ? ' ★' : ''}</option>
+              ))}
+            </select>
 
             <label style={styles.label}>Maks File: <b>{maxFiles}</b></label>
             <input type="range" min="10" max="80" step="5" value={maxFiles} onChange={e => setMaxFiles(+e.target.value)} style={{ width: '100%' }} />

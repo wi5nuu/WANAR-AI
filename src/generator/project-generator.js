@@ -227,6 +227,9 @@ class WanarGenerator {
     p.phase = 'generating';
     this._emit(p, { type: 'phase', phase: 'generating' });
 
+    let consecutiveFailures = 0;
+    const MAX_CONSECUTIVE_FAILURES = 3;
+
     for (let i = 0; i < p.plan.length; i++) {
       if (p.stopFlag) break;
       const filePath = p.plan[i];
@@ -259,16 +262,26 @@ class WanarGenerator {
           fs.mkdirSync(path.dirname(abs), { recursive: true });
           fs.writeFileSync(abs, String(data.content ?? ''), 'utf8');
           p.files.push({ path: finalPath.replace(/\\/g, '/'), size: Buffer.byteLength(String(data.content ?? '')), ok: true });
+          consecutiveFailures = 0;
           this._emit(p, { type: 'file_done', path: finalPath, index: i + 1, total: p.plan.length, size: p.files[p.files.length - 1].size });
           saved = true;
         } catch (e) {
-          this._emit(p, { type: 'info', message: `"${filePath}" attempt ${attempt}/3 failed: ${e.message}` });
+          // Deteksi error kuota/provider agar langsung abort (jangan buang kuota)
+          const msg = String(e.message || '');
+          if (/quota|401|402|403|429|payment|billing|suspended/i.test(msg)) {
+            throw new Error(`Provider "${p.provider}" bermasalah: ${msg} — Ganti provider/model di form lalu jalankan ulang.`);
+          }
+          this._emit(p, { type: 'info', message: `"${filePath}" attempt ${attempt}/3 failed: ${msg}` });
           if (attempt < 3) await new Promise(r => setTimeout(r, 1200 * attempt));
         }
       }
       if (!saved && !p.stopFlag) {
         p.failed.push(filePath);
+        consecutiveFailures++;
         this._emit(p, { type: 'file_failed', path: filePath });
+        if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+          throw new Error(`${consecutiveFailures} file berturut-turut gagal — generation dihentikan untuk menghemat kuota. Cek provider/model lalu jalankan ulang.`);
+        }
       }
     }
 
