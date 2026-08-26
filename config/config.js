@@ -203,6 +203,143 @@ const config = {
     maxContextTokens: parseInt(process.env.GROQ_MAX_CONTEXT_TOKENS || '128000', 10),
   },
 
+  // ===== FREE PROVIDERS =====
+  
+  // OpenCode Router - Access ALL FREE models via local OpenCode
+  opencode: {
+    apiKey: process.env.OPENCODE_API_KEY || 'sk-9router',
+    baseUrl: process.env.OPENCODE_BASE_URL || 'http://localhost:20128/v1',
+    defaultModel: process.env.OPENCODE_DEFAULT_MODEL || 'ox-alpha',
+    models: [
+      // Ox Alpha - OpenCode's primary model (FREE & UNLIMITED)
+      { id: 'ox-alpha', label: 'Ox Alpha Free (Unlimited)', family: 'OpenCode', rec: true, tags: ['FREE', 'Unlimited', 'OpenCode', 'Primary'] },
+      
+      // DeepSeek Models (FREE via OpenCode)
+      { id: 'kc/deepseek/deepseek-chat', label: 'DeepSeek Chat (OpenCode)', family: 'DeepSeek', rec: true, tags: ['FREE', 'Unlimited', 'Coding', 'OpenCode'] },
+      { id: 'kc/deepseek/deepseek-reasoner', label: 'DeepSeek Reasoner (OpenCode)', family: 'DeepSeek', rec: true, tags: ['FREE', 'Reasoning', 'OpenCode'] },
+      
+      // Llama Models (FREE via OpenCode)
+      { id: 'kc/meta-llama/llama-3.3-70b-instruct', label: 'Llama 3.3 70B (OpenCode)', family: 'Meta', rec: true, tags: ['FREE', 'Powerful', 'OpenCode'] },
+      { id: 'kc/meta-llama/llama-3.1-405b-instruct', label: 'Llama 3.1 405B (OpenCode)', family: 'Meta', rec: true, tags: ['FREE', 'Largest', 'OpenCode'] },
+      { id: 'kc/meta-llama/llama-3.1-70b-instruct', label: 'Llama 3.1 70B (OpenCode)', family: 'Meta', tags: ['FREE', 'OpenCode'] },
+      { id: 'kc/meta-llama/llama-3.1-8b-instruct', label: 'Llama 3.1 8B (OpenCode)', family: 'Meta', tags: ['FREE', 'Fast', 'OpenCode'] },
+      
+      // Qwen Models (FREE via OpenCode)
+      { id: 'kc/qwen/qwen2.5-72b-instruct', label: 'Qwen 2.5 72B (OpenCode)', family: 'Alibaba', rec: true, tags: ['FREE', 'Multilingual', 'OpenCode'] },
+      { id: 'kc/qwen/qwen2.5-coder-32b-instruct', label: 'Qwen 2.5 Coder 32B (OpenCode)', family: 'Alibaba', rec: true, tags: ['FREE', 'Coding', 'OpenCode'] },
+      
+      // Mistral Models (FREE via OpenCode)
+      { id: 'kc/mistralai/mixtral-8x7b-instruct', label: 'Mixtral 8x7B (OpenCode)', family: 'Mistral', tags: ['FREE', 'MoE', 'OpenCode'] },
+      { id: 'kc/mistralai/mistral-nemo-instruct', label: 'Mistral NeMo (OpenCode)', family: 'Mistral', tags: ['FREE', 'OpenCode'] },
+      
+      // Google Models (FREE via OpenCode)
+      { id: 'kc/google/gemma-2-27b-it', label: 'Gemma 2 27B (OpenCode)', family: 'Google', tags: ['FREE', 'OpenCode'] },
+      
+      // Microsoft Models (FREE via OpenCode)
+      { id: 'kc/microsoft/phi-3.5-mini-instruct', label: 'Phi-3.5 Mini (OpenCode)', family: 'Microsoft', tags: ['FREE', 'Fast', 'OpenCode'] },
+    ],
+    maxTokens: parseInt(process.env.OPENCODE_MAX_TOKENS || '8192', 10),
+    maxContextTokens: parseInt(process.env.OPENCODE_MAX_CONTEXT_TOKENS || '200000', 10),
+  },
+
+  // Cerebras - Ultra-Fast Inference (1800 tokens/sec) - FREE & UNLIMITED
+  cerebras: {
+    apiKey: process.env.CEREBRAS_API_KEY,
+    baseUrl: process.env.CEREBRAS_BASE_URL || 'https://api.cerebras.ai/v1',
+    defaultModel: process.env.CEREBRAS_DEFAULT_MODEL || 'llama-3.3-70b',
+    models: [
+      { id: 'llama-3.3-70b', label: 'Llama 3.3 70B (Cerebras)', family: 'Meta', rec: true, tags: ['FREE', 'Ultra Fast', '1800 tok/s', '128K Context'] },
+      { id: 'llama-3.1-70b', label: 'Llama 3.1 70B (Cerebras)', family: 'Meta', tags: ['FREE', 'Ultra Fast', '1800 tok/s'] },
+      { id: 'llama-3.1-8b', label: 'Llama 3.1 8B (Cerebras)', family: 'Meta', tags: ['FREE', 'Ultra Fast', '2100 tok/s'] },
+    ],
+    maxTokens: parseInt(process.env.CEREBRAS_MAX_TOKENS || '8192', 10),
+    maxContextTokens: parseInt(process.env.CEREBRAS_MAX_CONTEXT_TOKENS || '128000', 10),
+  },
+
+  // SambaNova - Llama 405B/70B/8B - FREE & UNLIMITED
+  sambanova: {
+    apiKey: process.env.SAMBANOVA_API_KEY,
+    baseUrl: process.env.SAMBANOVA_BASE_URL || 'https://api.sambanova.ai/v1',
+    defaultModel: process.env.SAMBANOVA_DEFAULT_MODEL || 'llama-3.1-405b',
+    models: [
+      { id: 'llama-3.1-405b', label: 'Llama 3.1 405B (SambaNova)', family: 'Meta', rec: true, tags: ['FREE', 'Largest', '405B Params', '128K Context'] },
+      { id: 'llama-3.1-70b', label: 'Llama 3.1 70B (SambaNova)', family: 'Meta', tags: ['FREE', 'Powerful', '128K Context'] },
+      { id: 'llama-3.1-8b', label: 'Llama 3.1 8B (SambaNova)', family: 'Meta', tags: ['FREE', 'Fast', '128K Context'] },
+      { id: 'llama-3.2-3b', label: 'Llama 3.2 3B (SambaNova)', family: 'Meta', tags: ['FREE', 'Lightweight'] },
+      { id: 'llama-3.2-1b', label: 'Llama 3.2 1B (SambaNova)', family: 'Meta', tags: ['FREE', 'Ultra Light'] },
+    ],
+    maxTokens: parseInt(process.env.SAMBANOVA_MAX_TOKENS || '8192', 10),
+    maxContextTokens: parseInt(process.env.SAMBANOVA_MAX_CONTEXT_TOKENS || '128000', 10),
+  },
+
+  // Hyperbolic - DeepSeek V3, Qwen 2.5 72B, Llama 405B - FREE
+  hyperbolic: {
+    apiKey: process.env.HYPERBOLIC_API_KEY,
+    baseUrl: process.env.HYPERBOLIC_BASE_URL || 'https://api.hyperbolic.xyz/v1',
+    defaultModel: process.env.HYPERBOLIC_DEFAULT_MODEL || 'deepseek-ai/DeepSeek-V3',
+    models: [
+      { id: 'deepseek-ai/DeepSeek-V3', label: 'DeepSeek V3 (Hyperbolic)', family: 'DeepSeek', rec: true, tags: ['FREE', 'Coding', 'Latest', '128K Context'] },
+      { id: 'Qwen/Qwen2.5-72B-Instruct', label: 'Qwen 2.5 72B (Hyperbolic)', family: 'Alibaba', rec: true, tags: ['FREE', 'Multilingual', '128K Context'] },
+      { id: 'meta-llama/Llama-3.1-405B-Instruct', label: 'Llama 3.1 405B (Hyperbolic)', family: 'Meta', tags: ['FREE', 'Largest', '128K Context'] },
+      { id: 'meta-llama/Llama-3.3-70B-Instruct', label: 'Llama 3.3 70B (Hyperbolic)', family: 'Meta', tags: ['FREE', 'Latest'] },
+      { id: 'meta-llama/Llama-3.1-70B-Instruct', label: 'Llama 3.1 70B (Hyperbolic)', family: 'Meta', tags: ['FREE', 'Stable'] },
+      { id: 'NousResearch/Hermes-3-Llama-3.1-70B', label: 'Hermes 3 70B (Hyperbolic)', family: 'NousResearch', tags: ['FREE', 'Instruct-Tuned'] },
+    ],
+    maxTokens: parseInt(process.env.HYPERBOLIC_MAX_TOKENS || '8192', 10),
+    maxContextTokens: parseInt(process.env.HYPERBOLIC_MAX_CONTEXT_TOKENS || '128000', 10),
+  },
+
+  // HuggingFace - Community Models - FREE (Rate Limited)
+  huggingface: {
+    apiKey: process.env.HUGGINGFACE_API_KEY,
+    baseUrl: process.env.HUGGINGFACE_BASE_URL || 'https://api-inference.huggingface.co/models',
+    defaultModel: process.env.HUGGINGFACE_DEFAULT_MODEL || 'meta-llama/Llama-3.3-70B-Instruct',
+    models: [
+      { id: 'meta-llama/Llama-3.3-70B-Instruct', label: 'Llama 3.3 70B (HF)', family: 'Meta', rec: true, tags: ['FREE', 'Open Source', '128K Context'] },
+      { id: 'Qwen/Qwen2.5-72B-Instruct', label: 'Qwen 2.5 72B (HF)', family: 'Alibaba', rec: true, tags: ['FREE', 'Multilingual'] },
+      { id: 'mistralai/Mistral-Nemo-Instruct-2407', label: 'Mistral NeMo 12B (HF)', family: 'Mistral', tags: ['FREE', 'Fast'] },
+      { id: 'microsoft/Phi-3.5-mini-instruct', label: 'Phi-3.5 Mini (HF)', family: 'Microsoft', tags: ['FREE', 'Lightweight'] },
+      { id: 'google/gemma-2-27b-it', label: 'Gemma 2 27B (HF)', family: 'Google', tags: ['FREE', 'Open'] },
+      { id: 'NousResearch/Hermes-3-Llama-3.1-8B', label: 'Hermes 3 8B (HF)', family: 'NousResearch', tags: ['FREE', 'Fast'] },
+    ],
+    maxTokens: parseInt(process.env.HUGGINGFACE_MAX_TOKENS || '8192', 10),
+    maxContextTokens: parseInt(process.env.HUGGINGFACE_MAX_CONTEXT_TOKENS || '128000', 10),
+  },
+
+  // Together AI - Free $25 Credit
+  together: {
+    apiKey: process.env.TOGETHER_API_KEY,
+    baseUrl: process.env.TOGETHER_BASE_URL || 'https://api.together.xyz/v1',
+    defaultModel: process.env.TOGETHER_DEFAULT_MODEL || 'meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo',
+    models: [
+      { id: 'meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo', label: 'Llama 3.1 405B Turbo (Together)', family: 'Meta', rec: true, tags: ['$25 Free', 'Largest', 'Turbo', '130K Context'] },
+      { id: 'meta-llama/Llama-3.3-70B-Instruct-Turbo', label: 'Llama 3.3 70B Turbo (Together)', family: 'Meta', rec: true, tags: ['$25 Free', 'Fast', '128K Context'] },
+      { id: 'Qwen/Qwen2.5-72B-Instruct-Turbo', label: 'Qwen 2.5 72B Turbo (Together)', family: 'Alibaba', tags: ['$25 Free', 'Multilingual'] },
+      { id: 'deepseek-ai/deepseek-llm-67b-chat', label: 'DeepSeek 67B (Together)', family: 'DeepSeek', tags: ['$25 Free', 'Coding'] },
+      { id: 'NousResearch/Nous-Hermes-2-Yi-34B', label: 'Hermes 2 Yi 34B (Together)', family: 'NousResearch', tags: ['$25 Free'] },
+      { id: 'mistralai/Mixtral-8x7B-Instruct-v0.1', label: 'Mixtral 8x7B (Together)', family: 'Mistral', tags: ['$25 Free', 'MoE'] },
+    ],
+    maxTokens: parseInt(process.env.TOGETHER_MAX_TOKENS || '8192', 10),
+    maxContextTokens: parseInt(process.env.TOGETHER_MAX_CONTEXT_TOKENS || '128000', 10),
+  },
+
+  // Fireworks AI - Free Tier with Coding Models
+  fireworks: {
+    apiKey: process.env.FIREWORKS_API_KEY,
+    baseUrl: process.env.FIREWORKS_BASE_URL || 'https://api.fireworks.ai/inference/v1',
+    defaultModel: process.env.FIREWORKS_DEFAULT_MODEL || 'accounts/fireworks/models/llama-v3p3-70b-instruct',
+    models: [
+      { id: 'accounts/fireworks/models/llama-v3p3-70b-instruct', label: 'Llama 3.3 70B (Fireworks)', family: 'Meta', rec: true, tags: ['Free Tier', 'Fast', '128K Context'] },
+      { id: 'accounts/fireworks/models/llama-v3p1-405b-instruct', label: 'Llama 3.1 405B (Fireworks)', family: 'Meta', rec: true, tags: ['Free Tier', 'Largest'] },
+      { id: 'accounts/fireworks/models/qwen2p5-coder-32b-instruct', label: 'Qwen 2.5 Coder 32B (Fireworks)', family: 'Alibaba', tags: ['Free Tier', 'Coding', 'Specialized'] },
+      { id: 'accounts/fireworks/models/deepseek-coder-v2-instruct', label: 'DeepSeek Coder V2 (Fireworks)', family: 'DeepSeek', tags: ['Free Tier', 'Coding'] },
+      { id: 'accounts/fireworks/models/mixtral-8x22b-instruct', label: 'Mixtral 8x22B (Fireworks)', family: 'Mistral', tags: ['Free Tier', 'MoE', '65K Context'] },
+      { id: 'accounts/fireworks/models/qwen2p5-72b-instruct', label: 'Qwen 2.5 72B (Fireworks)', family: 'Alibaba', tags: ['Free Tier', 'Multilingual'] },
+    ],
+    maxTokens: parseInt(process.env.FIREWORKS_MAX_TOKENS || '16384', 10),
+    maxContextTokens: parseInt(process.env.FIREWORKS_MAX_CONTEXT_TOKENS || '128000', 10),
+  },
+
   // Azure OpenAI - Enterprise GPT-4, GPT-4o with SLA
   azureOpenai: {
     apiKey: process.env.AZURE_OPENAI_API_KEY,
