@@ -27,6 +27,7 @@ import { DistributedCoordinator } from './distributed.js';
 import * as securityScanner from './security-scanner.js';
 import * as jobAgent from './tools/job-agent.js';
 import { agentEvents } from './tools/job-agent.js';
+import generator from './generator/project-generator.js';
 
 const coordinator = new DistributedCoordinator();
 
@@ -1654,6 +1655,102 @@ app.get('/api/job-agent/sessions/:id/live', (req, res) => {
     clearInterval(hb);
     agentEvents.off('event', handler);
   });
+});
+
+// ==================== AI FULL-STACK PROJECT GENERATOR ====================
+
+// POST /api/generator/start — mulai generate project full-stack
+app.post('/api/generator/start', rateLimiters.chat, asyncHandler(async (req, res) => {
+  const { description, framework, appType, projectName, extra, maxFiles, provider, model } = req.body || {};
+  if (!description || !String(description).trim()) {
+    return res.status(400).json({ error: 'description wajib diisi' });
+  }
+  if (!framework) {
+    return res.status(400).json({ error: 'framework wajib dipilih' });
+  }
+  const id = generator.start({
+    description: String(description).slice(0, 4000),
+    framework,
+    appType: appType || 'web-app',
+    projectName,
+    extra,
+    maxFiles,
+    provider,
+    model,
+  }, aiManager);
+  res.json({ success: true, id });
+}));
+
+// GET /api/generator/projects — daftar semua project
+app.get('/api/generator/projects', (req, res) => {
+  res.json({ projects: generator.list() });
+});
+
+// GET /api/generator/:id — status + file list
+app.get('/api/generator/:id', (req, res) => {
+  const p = generator.get(req.params.id);
+  if (!p) return res.status(404).json({ error: 'Project not found' });
+  const { emitter, stopFlag, ...rest } = p;
+  res.json(rest);
+});
+
+// GET /api/generator/:id/events — SSE live progress
+app.get('/api/generator/:id/events', (req, res) => {
+  const p = generator.get(req.params.id);
+  if (!p) return res.status(404).json({ error: 'Project not found' });
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders();
+
+  const send = (data) => res.write(`data: ${JSON.stringify(data)}\n\n`);
+  send({ type: 'connected', id: p.id, status: p.status });
+
+  // Replay kondisi terkini agar UI langsung sinkron
+  if (p.plan?.length) send({ type: 'plan', name: p.name, total: p.plan.length, files: p.plan });
+  for (const f of p.files) send({ type: 'file_done', path: f.path, size: f.size });
+
+  const handler = (event) => send(event);
+  p.emitter.on('event', handler);
+  const hb = setInterval(() => res.write(': heartbeat\n\n'), 15000);
+  req.on('close', () => { clearInterval(hb); p.emitter.off('event', handler); });
+});
+
+// GET /api/generator/:id/file?path=... — isi satu file
+app.get('/api/generator/:id/file', (req, res) => {
+  const p = generator.get(req.params.id);
+  if (!p) return res.status(404).json({ error: 'Project not found' });
+  try {
+    const content = generator.readFile(p, req.query.path);
+    if (content === null) return res.status(404).json({ error: 'File not found' });
+    res.json({ path: req.query.path, content });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// GET /api/generator/:id/download — download ZIP
+app.get('/api/generator/:id/download', asyncHandler(async (req, res) => {
+  const p = generator.get(req.params.id);
+  if (!p) return res.status(404).json({ error: 'Project not found' });
+  const zipBuffer = await generator.makeZip(p);
+  res.setHeader('Content-Type', 'application/zip');
+  res.setHeader('Content-Disposition', `attachment; filename="${p.name}.zip"`);
+  res.send(zipBuffer);
+}));
+
+// DELETE /api/generator/:id — hapus project
+app.delete('/api/generator/:id', (req, res) => {
+  const ok = generator.remove(req.params.id);
+  if (!ok) return res.status(404).json({ error: 'Project not found' });
+  res.json({ success: true });
+});
+
+// POST /api/generator/:id/stop — hentikan generation
+app.post('/api/generator/:id/stop', (req, res) => {
+  const ok = generator.stop(req.params.id);
+  if (!ok) return res.status(404).json({ error: 'Project not found' });
+  res.json({ success: true });
 });
 
 app.get('*', (req, res, next) => {
