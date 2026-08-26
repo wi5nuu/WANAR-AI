@@ -15,7 +15,7 @@ export default class CerebrasProvider extends BaseProvider {
       name: 'Cerebras',
       apiKey: process.env.CEREBRAS_API_KEY || '',
       baseUrl: process.env.CEREBRAS_BASE_URL || 'https://api.cerebras.ai/v1',
-      defaultModel: process.env.CEREBRAS_DEFAULT_MODEL || 'llama-3.3-70b',
+      defaultModel: process.env.CEREBRAS_DEFAULT_MODEL || 'gpt-oss-120b',
       maxTokens: parseInt(process.env.CEREBRAS_MAX_TOKENS || '8192', 10),
       maxContextTokens: parseInt(process.env.CEREBRAS_MAX_CONTEXT_TOKENS || '128000', 10),
       timeout: 300000,
@@ -41,30 +41,40 @@ export default class CerebrasProvider extends BaseProvider {
   }
 
   /**
-   * Get available models (static list)
+   * Get available models (fetched live from API, with static fallback)
    */
   async getAvailableModels() {
+    // Try live fetch first so model IDs are always current
+    try {
+      const response = await axios.get(`${this.baseUrl}/models`, {
+        headers: { 'Authorization': `Bearer ${this.apiKey}` },
+        timeout: 10000,
+      });
+      if (Array.isArray(response.data?.data) && response.data.data.length > 0) {
+        return response.data.data.map(m => ({
+          id: m.id,
+          name: m.id,
+          contextLimit: m.context_length || 128000,
+          owned_by: 'cerebras',
+          recommended: false,
+        }));
+      }
+    } catch { /* fall through to static list */ }
+
     return [
       {
-        id: 'llama-3.3-70b',
-        name: 'Llama 3.3 70B',
+        id: 'gpt-oss-120b',
+        name: 'GPT-OSS 120B',
         contextLimit: 128000,
-        speed: '1800 tokens/sec',
+        speed: 'ultra-fast',
         owned_by: 'cerebras',
         recommended: true,
       },
       {
-        id: 'llama-3.1-70b',
-        name: 'Llama 3.1 70B',
+        id: 'gemma-4-31b',
+        name: 'Gemma 4 31B',
         contextLimit: 128000,
-        speed: '1800 tokens/sec',
-        owned_by: 'cerebras',
-      },
-      {
-        id: 'llama-3.1-8b',
-        name: 'Llama 3.1 8B',
-        contextLimit: 128000,
-        speed: '2100 tokens/sec',
+        speed: 'ultra-fast',
         owned_by: 'cerebras',
       },
     ];

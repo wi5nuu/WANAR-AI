@@ -242,15 +242,14 @@ const config = {
     maxContextTokens: parseInt(process.env.OPENCODE_MAX_CONTEXT_TOKENS || '200000', 10),
   },
 
-  // Cerebras - Ultra-Fast Inference (1800 tokens/sec) - FREE & UNLIMITED
+  // Cerebras - Ultra-Fast Inference - FREE tier (quota-based)
   cerebras: {
     apiKey: process.env.CEREBRAS_API_KEY,
     baseUrl: process.env.CEREBRAS_BASE_URL || 'https://api.cerebras.ai/v1',
-    defaultModel: process.env.CEREBRAS_DEFAULT_MODEL || 'llama-3.3-70b',
+    defaultModel: process.env.CEREBRAS_DEFAULT_MODEL || 'gpt-oss-120b',
     models: [
-      { id: 'llama-3.3-70b', label: 'Llama 3.3 70B (Cerebras)', family: 'Meta', rec: true, tags: ['FREE', 'Ultra Fast', '1800 tok/s', '128K Context'] },
-      { id: 'llama-3.1-70b', label: 'Llama 3.1 70B (Cerebras)', family: 'Meta', tags: ['FREE', 'Ultra Fast', '1800 tok/s'] },
-      { id: 'llama-3.1-8b', label: 'Llama 3.1 8B (Cerebras)', family: 'Meta', tags: ['FREE', 'Ultra Fast', '2100 tok/s'] },
+      { id: 'gpt-oss-120b', label: 'GPT-OSS 120B (Cerebras)', family: 'OpenAI', rec: true, tags: ['FREE Tier', 'Ultra Fast', '128K Context'] },
+      { id: 'gemma-4-31b', label: 'Gemma 4 31B (Cerebras)', family: 'Google', tags: ['FREE Tier', 'Ultra Fast'] },
     ],
     maxTokens: parseInt(process.env.CEREBRAS_MAX_TOKENS || '8192', 10),
     maxContextTokens: parseInt(process.env.CEREBRAS_MAX_CONTEXT_TOKENS || '128000', 10),
