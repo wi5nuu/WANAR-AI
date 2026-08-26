@@ -7,6 +7,11 @@ import OpenAIProvider from './providers/openai.js';
 import GeminiProvider from './providers/gemini.js';
 import GroqProvider from './providers/groq.js';
 import AzureOpenAIProvider from './providers/azure-openai.js';
+// ===== FREE PROVIDERS (ONLY YOUR CONFIGURED ONES) =====
+import CerebrasProvider from './providers/cerebras.js';
+import TogetherProvider from './providers/together.js';
+import FireworksProvider from './providers/fireworks.js';
+import OpenCodeProvider from './providers/opencode.js';
 import ContextManager from './context-manager.js';
 import { executeTool, getToolDefinitions } from './tools/registry.js';
 import * as db from './database.js';
@@ -662,6 +667,12 @@ export class AIManager {
     this.groqProvider = new GroqProvider();
     this.azureOpenaiProvider = new AzureOpenAIProvider();
     
+    // ===== FREE PROVIDERS (ONLY CONFIGURED ONES) =====
+    this.cerebrasProvider = new CerebrasProvider();
+    this.togetherProvider = new TogetherProvider();
+    this.fireworksProvider = new FireworksProvider();
+    this.opencodeProvider = new OpenCodeProvider();
+    
     // Provider registry - easy access to all providers
     this.providers = {
       openagentic: this.openagenticProvider,
@@ -674,6 +685,11 @@ export class AIManager {
       groq: this.groqProvider,
       azure: this.azureOpenaiProvider,
       'azure-openai': this.azureOpenaiProvider,
+      // FREE PROVIDERS (ONLY YOUR CONFIGURED ONES)
+      cerebras: this.cerebrasProvider,
+      together: this.togetherProvider,
+      fireworks: this.fireworksProvider,
+      opencode: this.opencodeProvider,
     };
     
     // Set default provider
@@ -959,7 +975,15 @@ export class AIManager {
     const providerInstance = this.providers[target];
     if (!providerInstance) return [];
     if (typeof providerInstance.getAvailableModels === 'function') {
-      return providerInstance.getAvailableModels();
+      const result = providerInstance.getAvailableModels();
+      // Handle both sync and async results
+      if (result && typeof result.then === 'function') {
+        // It's a Promise, but we need sync result for CLI
+        // Return empty array and warn
+        console.warn(`${target} provider returns async models, using config fallback`);
+        return config[target]?.models || [];
+      }
+      return Array.isArray(result) ? result : [];
     }
     return [];
   }
