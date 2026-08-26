@@ -71,6 +71,7 @@
     "inquirer": "^9.2.12",
     "ioredis": "^5.11.1",
     "jsonwebtoken": "^9.0.3",
+    "jszip": "^3.10.1",
     "marked": "^18.0.6",
     "multer": "^2.2.0",
     "ora": "^7.0.1",
