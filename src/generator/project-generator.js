@@ -170,6 +170,7 @@ class WanarGenerator {
       model: p.model,
       temperature: 0.3,
       maxTokens: 16384,
+      timeout: 300000, // 5 menit per file — model reasoning besar butuh waktu
     });
     if (res && res.success === false) throw new Error(res.error || 'AI call failed');
     return typeof res === 'string' ? res : (res.content || '');

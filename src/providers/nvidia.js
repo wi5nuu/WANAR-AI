@@ -205,8 +205,9 @@ export class NVIDIAProvider {
     const model = options.model || config.nvidia.defaultModel;
     const maxTokens = options.maxTokens || config.nvidia.maxTokens;
     const tools = options.tools;
+    const timeoutMs = parseInt(options.timeout, 10) || 300000; // default 5 menit (model reasoning butuh waktu)
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 60000);
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
       const body = {
