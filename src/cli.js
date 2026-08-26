@@ -209,10 +209,20 @@ function interactiveMenu(rl, title, items, currentValue = null) {
     render._lines = 0;
 
     function cleanup(result) {
-      process.stdin.setRawMode(false);
+      // Anti double-invocation: Windows dapat mengirim \r dan \n sekaligus,
+      // atau keypress tersisa setelah resolve — jangan jalankan cleanup dua kali
+      if (cleanup._done) return;
+      cleanup._done = true;
+      try {
+        if (process.stdin.isTTY && process.stdin.isRaw) process.stdin.setRawMode(false);
+      } catch { /* stdin mungkin sudah tidak TTY */ }
       process.stdin.removeListener('data', onKey);
-      if (render._lines > 0) process.stdout.write(`\x1b[${render._lines}A\x1b[0J`);
-      rl.resume();
+      if (render._lines > 0) {
+        try { process.stdout.write(`\x1b[${render._lines}A\x1b[0J`); } catch { }
+        render._lines = 0;
+      }
+      // Guard: readline mungkin sudah closed (misal saat proses exit)
+      try { if (!rl.closed) rl.resume(); } catch { /* abaikan */ }
       resolve(result);
     }
 

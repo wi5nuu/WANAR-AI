@@ -978,9 +978,7 @@ export class AIManager {
       const result = providerInstance.getAvailableModels();
       // Handle both sync and async results
       if (result && typeof result.then === 'function') {
-        // It's a Promise, but we need sync result for CLI
-        // Return empty array and warn
-        console.warn(`${target} provider returns async models, using config fallback`);
+        // It's a Promise — use sync config fallback silently (no console noise in menus)
         return config[target]?.models || [];
       }
       return Array.isArray(result) ? result : [];
