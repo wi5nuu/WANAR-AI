@@ -17,15 +17,30 @@ db.pragma('synchronous = NORMAL');
 db.pragma('temp_store = MEMORY');
 db.pragma('mmap_size = 268435456');
 
-try { 
-  db.exec('ALTER TABLE token_usage ADD COLUMN user_id INTEGER REFERENCES users(id) ON DELETE SET NULL'); 
-} catch (e) {
-  console.warn('Column user_id already exists in token_usage or migration failed:', e.message);
+// Helper function to check if column exists
+function columnExists(tableName, columnName) {
+  try {
+    const columns = db.prepare(`PRAGMA table_info(${tableName})`).all();
+    return columns.some(col => col.name === columnName);
+  } catch (e) {
+    return false;
+  }
 }
-try { 
-  db.exec('ALTER TABLE chat_sessions ADD COLUMN user_id INTEGER REFERENCES users(id) ON DELETE SET NULL'); 
-} catch (e) {
-  console.warn('Column user_id already exists in chat_sessions or migration failed:', e.message);
+
+// Silent migrations - only add columns if they don't exist
+if (!columnExists('token_usage', 'user_id')) {
+  try { 
+    db.exec('ALTER TABLE token_usage ADD COLUMN user_id INTEGER REFERENCES users(id) ON DELETE SET NULL'); 
+  } catch (e) {
+    // Silent fail
+  }
+}
+if (!columnExists('chat_sessions', 'user_id')) {
+  try { 
+    db.exec('ALTER TABLE chat_sessions ADD COLUMN user_id INTEGER REFERENCES users(id) ON DELETE SET NULL'); 
+  } catch (e) {
+    // Silent fail
+  }
 }
 
 db.exec(`
@@ -273,27 +288,31 @@ db.exec(`
   END;
 `);
 
-try { 
-  db.exec('ALTER TABLE chat_sessions ADD COLUMN workspace_id INTEGER REFERENCES workspaces(id) ON DELETE SET NULL'); 
-} catch (e) {
-  console.warn('Column workspace_id already exists in chat_sessions or migration failed:', e.message);
+if (!columnExists('chat_sessions', 'workspace_id')) {
+  try { 
+    db.exec('ALTER TABLE chat_sessions ADD COLUMN workspace_id INTEGER REFERENCES workspaces(id) ON DELETE SET NULL'); 
+  } catch (e) {
+    // Silent fail
+  }
 }
-try { 
-  db.exec('ALTER TABLE chat_sessions ADD COLUMN team_id INTEGER REFERENCES teams(id) ON DELETE SET NULL'); 
-} catch (e) {
-  console.warn('Column team_id already exists in chat_sessions or migration failed:', e.message);
+if (!columnExists('chat_sessions', 'team_id')) {
+  try { 
+    db.exec('ALTER TABLE chat_sessions ADD COLUMN team_id INTEGER REFERENCES teams(id) ON DELETE SET NULL'); 
+  } catch (e) {
+    // Silent fail
+  }
 }
 
-
+// Create indexes silently
 try { 
   db.exec('CREATE INDEX IF NOT EXISTS idx_chat_sessions_workspace ON chat_sessions(workspace_id)'); 
 } catch (e) {
-  console.warn('Index idx_chat_sessions_workspace creation failed:', e.message);
+  // Silent fail
 }
 try {
   db.exec('CREATE INDEX IF NOT EXISTS idx_chat_sessions_team ON chat_sessions(team_id)');
 } catch (e) {
-  console.warn('Index idx_chat_sessions_team creation failed:', e.message);
+  // Silent fail
 }
 
 // Long-term (L3) context summaries for AdvancedContextManager
