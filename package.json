@@ -1,6 +1,6 @@
 {
   "name": "wanar-ai",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "description": "Wanar AI v1.0.5 - Professional AI Chat Platform + CLI Agent by Wisnu Alfian Nur Ashar & Siti Nurfadhila Az Zahra Syam",
   "main": "src/index.js",
   "type": "module",
@@ -12,6 +12,7 @@
     "src/",
     "bin/",
     "config/",
+    "scripts/",
     "client/dist/",
     ".env.example",
     "README.md"
@@ -22,7 +23,8 @@
     "web": "node src/server.js",
     "test": "node src/test.js",
     "dev": "node --watch src/server.js",
-    "analytics": "node src/tools/analytics-cli.js"
+    "analytics": "node src/tools/analytics-cli.js",
+    "postinstall": "node scripts/postinstall.js"
   },
   "keywords": [
     "ai",
@@ -42,6 +44,17 @@
   ],
   "author": "Wisnu Alfian Nur Ashar",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/wisnunugroho21/wanar-ai.git"
+  },
+  "bugs": {
+    "url": "https://github.com/wisnunugroho21/wanar-ai/issues"
+  },
+  "homepage": "https://github.com/wisnunugroho21/wanar-ai#readme",
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "dependencies": {
     "axios": "^1.6.0",
     "better-sqlite3": "^12.11.1",
