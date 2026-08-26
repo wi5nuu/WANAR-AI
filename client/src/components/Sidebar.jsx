@@ -188,6 +188,18 @@ export default function Sidebar({
             <line x1="10" y1="14" x2="14" y2="14"/>
           </svg>
         </button>
+
+        <button
+          className="sidebar-footer-btn"
+          onClick={() => navigate('/generator')}
+          title="AI Project Generator"
+          aria-label="Project Generator"
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="16 18 22 12 16 6"/>
+            <polyline points="8 6 2 12 8 18"/>
+          </svg>
+        </button>
         
         <div style={{
           flex: 1,

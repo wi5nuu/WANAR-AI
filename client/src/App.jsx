@@ -16,6 +16,7 @@ import JobAgent from './components/JobAgent';
 import Profile from './components/Profile';
 import SecurityTesting from './components/SecurityTesting';
 import ProfessionalAttack from './components/ProfessionalAttack';
+import Generator from './components/Generator';
 
 function ChatLayout() {
   const {
@@ -216,6 +217,7 @@ export default function App() {
       <Route path="/security" element={<SecurityTesting />} />
       <Route path="/security/professional" element={<ProfessionalAttack />} />
       <Route path="/job-agent" element={<JobAgent />} />
+      <Route path="/generator" element={<Generator />} />
     </Routes>
   );
 }
