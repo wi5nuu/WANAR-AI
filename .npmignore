@@ -1,0 +1,81 @@
+# ── Secrets & Environment ────────────────────────────────────────
+.env
+.env.*
+*.env
+!.env.example
+secrets/
+config/secrets*
+
+# ── Database & user data ──────────────────────────────────────────
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# ── Personal Documents ────────────────────────────────────────────
+*.pdf
+*.docx
+*.doc
+
+# ── Tesseract trained data ────────────────────────────────────────
+*.traineddata
+
+# ── Development files ─────────────────────────────────────────────
+.vscode/
+.idea/
+*.sublime-*
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Logs ──────────────────────────────────────────────────────────
+*.log
+logs/
+server.log
+server-err.log
+server-test.log
+
+# ── Playwright profiles ───────────────────────────────────────────
+playwright-profile/
+wanar-profile/
+
+# ── Build artifacts (jika ada source) ─────────────────────────────
+*.tgz
+.eslintcache
+.cache/
+tmp/
+temp/
+
+# ── Backup files ──────────────────────────────────────────────────
+*.bak
+*.backup
+*.old
+*.orig
+*.tmp
+*~
+
+# ── Test & development ────────────────────────────────────────────
+test/
+tests/
+__tests__/
+*.test.js
+*.spec.js
+
+# ── Git files ─────────────────────────────────────────────────────
+.git/
+.gitignore
+.gitattributes
+
+# ── CI/CD (jika tidak diperlukan user) ────────────────────────────
+.github/
+.gitlab-ci.yml
+.travis.yml
+
+# ── Client source (sudah ada dist/) ───────────────────────────────
+client/src/
+client/public/
+client/node_modules/
+client/package*.json
+client/.eslintrc*
+client/vite.config.*
+client/tsconfig.*
