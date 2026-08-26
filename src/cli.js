@@ -311,13 +311,217 @@ class WanarCLI {
     this.currentModel = this.aiManager.getDefaultModel();
     this.sessionId = `ses_${crypto.randomBytes(8).toString('hex')}`;
     this.sessionName = 'New Chat';
+    
+    // ── Input History for Arrow Up/Down Navigation ──
+    this.inputHistory = [];
+    this.historyIndex = -1;
+    this.currentInput = '';
+    
     // Gunakan bound completer agar punya akses ke model & provider list secara dinamis
     this.rl = readline.createInterface({
       input: process.stdin,
       output: process.stdout,
       prompt: '',
       completer: this._completer.bind(this),
+      history: [],  // Enable built-in history
+      historySize: 100,  // Keep last 100 entries
     });
+    
+    // Setup custom history navigation
+    this._setupHistoryNavigation();
+  }
+  
+  // ── Setup History Navigation (Arrow Up/Down) ──────────────────────
+  _setupHistoryNavigation() {
+    const originalWrite = this.rl._writeToOutput;
+    this.rl._writeToOutput = (stringToWrite) => {
+      originalWrite.call(this.rl, stringToWrite);
+    };
+    
+    // Hook into readline history
+    const originalOnLine = this.rl._onLine;
+    this.rl._onLine = (line) => {
+      // Save to our custom history before processing
+      if (line && line.trim()) {
+        this.inputHistory.push(line);
+        // Keep max 100 items
+        if (this.inputHistory.length > 100) {
+          this.inputHistory.shift();
+        }
+      }
+      this.historyIndex = this.inputHistory.length;
+      this.currentInput = '';
+      
+      originalOnLine.call(this.rl, line);
+    };
+    
+    // ── Quick Popup Menu for Commands ──
+    this._setupQuickPopup();
+  }
+  
+  // ── Quick Popup Menu (Auto-show when typing /) ────────────────────
+  _setupQuickPopup() {
+    let popupActive = false;
+    let popupItems = [];
+    let selectedIndex = 0;
+    let filterText = '';
+    
+    // Listen to keypress events
+    const originalTtyWrite = this.rl._ttyWrite;
+    this.rl._ttyWrite = (s, key) => {
+      const currentLine = this.rl.line || '';
+      
+      // Detect when user types '/' at the beginning
+      if (!popupActive && currentLine === '' && s === '/') {
+        // Show popup immediately
+        popupActive = true;
+        filterText = '/';
+        popupItems = this._getFilteredCommands('');
+        selectedIndex = 0;
+        
+        // Call original to add '/' to input
+        originalTtyWrite.call(this.rl, s, key);
+        
+        // Show popup
+        this._renderQuickPopup(popupItems, selectedIndex, filterText);
+        return;
+      }
+      
+      // Handle popup navigation when active
+      if (popupActive) {
+        // Arrow Up
+        if (key && key.name === 'up') {
+          selectedIndex = selectedIndex > 0 ? selectedIndex - 1 : popupItems.length - 1;
+          this._renderQuickPopup(popupItems, selectedIndex, filterText);
+          return;
+        }
+        
+        // Arrow Down
+        if (key && key.name === 'down') {
+          selectedIndex = selectedIndex < popupItems.length - 1 ? selectedIndex + 1 : 0;
+          this._renderQuickPopup(popupItems, selectedIndex, filterText);
+          return;
+        }
+        
+        // Tab or Enter - select item
+        if (key && (key.name === 'tab' || key.name === 'return')) {
+          if (popupItems.length > 0) {
+            const selected = popupItems[selectedIndex];
+            this._closeQuickPopup();
+            popupActive = false;
+            
+            // Clear current input and replace with selected command
+            this.rl.line = selected.cmd;
+            this.rl.cursor = selected.cmd.length;
+            this.rl._refreshLine();
+          }
+          return;
+        }
+        
+        // Escape - close popup
+        if (key && key.name === 'escape') {
+          this._closeQuickPopup();
+          popupActive = false;
+          return;
+        }
+        
+        // Backspace
+        if (key && key.name === 'backspace') {
+          originalTtyWrite.call(this.rl, s, key);
+          
+          const newLine = this.rl.line || '';
+          if (!newLine.startsWith('/')) {
+            // Close popup if '/' is deleted
+            this._closeQuickPopup();
+            popupActive = false;
+          } else {
+            // Update filter
+            filterText = newLine;
+            popupItems = this._getFilteredCommands(filterText.slice(1)); // Remove '/'
+            selectedIndex = 0;
+            this._renderQuickPopup(popupItems, selectedIndex, filterText);
+          }
+          return;
+        }
+        
+        // Regular character input
+        if (s && s.length === 1 && !key.ctrl && !key.meta) {
+          originalTtyWrite.call(this.rl, s, key);
+          
+          const newLine = this.rl.line || '';
+          if (newLine.startsWith('/')) {
+            filterText = newLine;
+            popupItems = this._getFilteredCommands(filterText.slice(1)); // Remove '/'
+            selectedIndex = 0;
+            this._renderQuickPopup(popupItems, selectedIndex, filterText);
+          } else {
+            this._closeQuickPopup();
+            popupActive = false;
+          }
+          return;
+        }
+      }
+      
+      // Call original for other keys
+      originalTtyWrite.call(this.rl, s, key);
+    };
+  }
+  
+  // Get filtered commands based on input
+  _getFilteredCommands(filter) {
+    const lowerFilter = filter.toLowerCase();
+    return COMMANDS.filter(cmd => 
+      cmd.cmd.toLowerCase().includes(lowerFilter) || 
+      cmd.desc.toLowerCase().includes(lowerFilter)
+    );
+  }
+  
+  // Render quick popup menu
+  _renderQuickPopup(items, selected, filterText) {
+    // Save cursor position
+    process.stdout.write('\x1b7'); // Save cursor
+    
+    // Move to next line and render popup
+    process.stdout.write('\n');
+    
+    const maxVisible = Math.min(6, items.length);
+    console.log(`  ${gy}┌─ Commands ${dim}(${items.length})${rs}`);
+    
+    for (let i = 0; i < maxVisible; i++) {
+      const item = items[i];
+      const isSelected = i === selected;
+      const marker = isSelected ? `${cy}▶${rs}` : ' ';
+      const cmdText = isSelected ? `${cy}${bd}${item.cmd}${rs}` : `${cy}${item.cmd}${rs}`;
+      const descText = isSelected ? `${dim}${item.desc}${rs}` : `${gy}${item.desc}${rs}`;
+      console.log(`  ${gy}│${rs} ${marker} ${cmdText} ${dim}·${rs} ${descText}`);
+    }
+    
+    if (items.length > maxVisible) {
+      console.log(`  ${gy}│${rs}   ${dim}...${items.length - maxVisible} more${rs}`);
+    }
+    
+    console.log(`  ${gy}└─ ${dim}↑↓ navigate · Tab/Enter select · Esc close${rs}`);
+    
+    // Restore cursor position
+    process.stdout.write('\x1b8'); // Restore cursor
+    
+    // Store lines count for cleanup
+    this._popupLines = maxVisible + 3 + (items.length > maxVisible ? 1 : 0);
+  }
+  
+  // Close quick popup menu
+  _closeQuickPopup() {
+    if (this._popupLines > 0) {
+      // Move cursor down, clear lines, move back
+      process.stdout.write('\n');
+      for (let i = 0; i < this._popupLines; i++) {
+        process.stdout.write('\x1b[2K'); // Clear line
+        if (i < this._popupLines - 1) process.stdout.write('\n');
+      }
+      // Move cursor back up
+      process.stdout.write(`\x1b[${this._popupLines}A`);
+      this._popupLines = 0;
+    }
   }
 
   // ── Smart Autocomplete ──────────────────────────────────────────
@@ -399,7 +603,7 @@ class WanarCLI {
     this.sessionId = sessionId;
     // Query langsung by id - getSessions(1) hanya mengembalikan sesi terbaru,
     // jadi judul sesi lain selalu hilang.
-    const s = db.prepare('SELECT title FROM chat_sessions WHERE id = ?').get(sessionId);
+    const s = db.default.prepare('SELECT title FROM chat_sessions WHERE id = ?').get(sessionId);
     this.sessionName = s ? s.title : 'Loaded Chat';
   }
 
@@ -526,7 +730,18 @@ class WanarCLI {
       }
 
       case '/model': {
-        const models = this.aiManager.getAvailableModels();
+        let models = this.aiManager.getAvailableModels();
+        
+        // Fix: Ensure models is always an array
+        if (!Array.isArray(models)) {
+          if (typeof models === 'object' && models !== null) {
+            // Convert object to array if needed
+            models = Object.values(models);
+          } else {
+            models = [];
+          }
+        }
+        
         if (models.length === 0) {
           console.log(`\n  ${gy}Tidak ada model tersedia untuk provider ini.${rs}`);
           break;
