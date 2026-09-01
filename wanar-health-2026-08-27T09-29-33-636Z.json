@@ -1,0 +1,17 @@
+{
+  "exportTime": "2026-08-27T09:29:33.636Z",
+  "summary": {
+    "timestamp": "2026-08-27T09:29:33.636Z",
+    "providers": [],
+    "overall": {
+      "total": 0,
+      "healthy": 0,
+      "degraded": 0,
+      "unhealthy": 0,
+      "unknown": 0
+    },
+    "recentAlerts": []
+  },
+  "detailedData": [],
+  "alerts": []
+}

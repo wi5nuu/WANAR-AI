@@ -23,7 +23,8 @@
     "web": "node src/server.js",
     "test": "node src/test.js",
     "dev": "node --watch src/server.js",
-    "analytics": "node src/tools/analytics-cli.js",
+    "analytics": "node src/tools/health-cli.js",
+    "analytics:legacy": "node src/tools/analytics-cli.js",
     "postinstall": "node scripts/postinstall.js"
   },
   "keywords": [
