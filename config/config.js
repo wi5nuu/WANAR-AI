@@ -14,18 +14,18 @@ const config = {
     baseUrl: process.env.OPENAGENTIC_BASE_URL || 'https://openagentic.id/api/v1',
     defaultModel: process.env.OPENAGENTIC_DEFAULT_MODEL || 'claude-sonnet-4-5',
     models: [
-      // ===== Anthropic Claude =====
-      { id: 'claude-sonnet-4-5',        label: 'Claude Sonnet 4.5',           family: 'Anthropic', rec: true, tags: ['Unlimited', 'Coding', 'Reasoning', '200K Context'] },
-      { id: 'claude-sonnet-4-5-20251101', label: 'Claude Sonnet 4.5 (Nov)',   family: 'Anthropic', tags: ['Latest', 'Coding'] },
-      { id: 'claude-sonnet-4-6',        label: 'Claude Sonnet 4.6',           family: 'Anthropic', tags: ['Latest', 'Coding', 'Reasoning'] },
-      { id: 'claude-sonnet-4-5-1m',     label: 'Claude Sonnet 4.5 (1M)',      family: 'Anthropic', tags: ['Long Context', '1M Tokens'] },
-      { id: 'claude-sonnet-4',          label: 'Claude Sonnet 4',             family: 'Anthropic', tags: ['Stable', 'Balanced'] },
-      { id: 'claude-opus-4-5',          label: 'Claude Opus 4.5',             family: 'Anthropic', rec: true, tags: ['Most Capable', 'Deep Analysis'] },
-      { id: 'claude-opus-4',            label: 'Claude Opus 4',               family: 'Anthropic', tags: ['Powerful', 'Complex Tasks'] },
-      { id: 'claude-haiku-4-5',         label: 'Claude Haiku 4.5',            family: 'Anthropic', tags: ['Fast', 'Lightweight', 'Budget'] },
-      { id: 'claude-3-5-sonnet-20241022', label: 'Claude 3.5 Sonnet',         family: 'Anthropic', rec: true, tags: ['Coding', 'Fast', 'Stable'] },
-      { id: 'claude-3-5-haiku-20241022',  label: 'Claude 3.5 Haiku',          family: 'Anthropic', tags: ['Fast', 'Budget', 'Lightweight'] },
-      { id: 'claude-3-opus-20240229',     label: 'Claude 3 Opus',             family: 'Anthropic', tags: ['Deep Analysis', 'Stable'] },
+      // ===== OpenAgentic Claude =====
+      { id: 'claude-sonnet-4-5',        label: 'Claude Sonnet 4.5',           family: 'OpenAgentic', rec: true, tags: ['Unlimited', 'Coding', 'Reasoning', '200K Context'] },
+      { id: 'claude-sonnet-4-5-20251101', label: 'Claude Sonnet 4.5 (Nov)',   family: 'OpenAgentic', tags: ['Latest', 'Coding'] },
+      { id: 'claude-sonnet-4-6',        label: 'Claude Sonnet 4.6',           family: 'OpenAgentic', rec: true, tags: ['Latest', 'Coding', 'Reasoning'] },
+      { id: 'claude-sonnet-4-5-1m',     label: 'Claude Sonnet 4.5 (1M)',      family: 'OpenAgentic', tags: ['Long Context', '1M Tokens'] },
+      { id: 'claude-sonnet-4',          label: 'Claude Sonnet 4',             family: 'OpenAgentic', tags: ['Stable', 'Balanced'] },
+      { id: 'claude-opus-4-5',          label: 'Claude Opus 4.5',             family: 'OpenAgentic', rec: true, tags: ['Most Capable', 'Deep Analysis'] },
+      { id: 'claude-opus-4',            label: 'Claude Opus 4',               family: 'OpenAgentic', tags: ['Powerful', 'Complex Tasks'] },
+      { id: 'claude-haiku-4-5',         label: 'Claude Haiku 4.5',            family: 'OpenAgentic', tags: ['Fast', 'Lightweight', 'Budget'] },
+      { id: 'claude-3-5-sonnet-20241022', label: 'Claude 3.5 Sonnet',         family: 'OpenAgentic', rec: true, tags: ['Coding', 'Fast', 'Stable'] },
+      { id: 'claude-3-5-haiku-20241022',  label: 'Claude 3.5 Haiku',          family: 'OpenAgentic', tags: ['Fast', 'Budget', 'Lightweight'] },
+      { id: 'claude-3-opus-20240229',     label: 'Claude 3 Opus',             family: 'OpenAgentic', tags: ['Deep Analysis', 'Stable'] },
 
       // ===== OpenAI GPT =====
       { id: 'gpt-4.5',                  label: 'GPT-4.5',                     family: 'OpenAI', rec: true, tags: ['Latest', 'Multimodal', 'Tool Calling'] },
