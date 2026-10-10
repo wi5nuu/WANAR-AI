@@ -2,11 +2,11 @@
  * Hyperbolic Provider - DeepSeek V3, Qwen 2.5 72B, Llama 405B FREE
  * High-performance inference with latest models
  * 
- * @author Wisnu Alfian Nur Ashar & Siti Nurfadhila Az Zahra Syam
+ * @author Wisnu Alfian Nur Ashar
  * @version 1.0.0
  */
 
-import axios from 'axios';
+import axios from './http-client.js';
 import { BaseProvider } from './base-provider.js';
 
 export default class HyperbolicProvider extends BaseProvider {

@@ -6,7 +6,7 @@
  * @version 3.0.0
  */
 
-import axios from 'axios';
+import axios from './http-client.js';
 import config from '../../config/config.js';
 
 export default class OpenAgenticProvider {
@@ -14,11 +14,14 @@ export default class OpenAgenticProvider {
     this.name = 'OpenAgentic';
     this.baseURL = process.env.OPENAGENTIC_BASE_URL || 'https://openagentic.id/api/v1';
     this.apiKey = process.env.OPENAGENTIC_API_KEY || '';
-    this.defaultModel = process.env.OPENAGENTIC_DEFAULT_MODEL || 'claude-sonnet-4-5';
-    this.maxTokens = parseInt(process.env.OPENAGENTIC_MAX_TOKENS || '200000', 10);
+    this.defaultModel = this.normalizeModel(process.env.OPENAGENTIC_DEFAULT_MODEL || 'deepseek-v4.1-flash-free');
+    this.maxTokens = parseInt(process.env.OPENAGENTIC_MAX_TOKENS || '16000', 10);
     this.timeout = 300000; // 5 minutes
     this.retryAttempts = 3;
     this.retryDelay = 1000;
+    // chatStream accumulates tool-call deltas into complete 'tool_calls' events,
+    // enabling real streaming in AIManager.chatWithTools
+    this.supportsStreamingToolCalls = true;
 
     this.stats = {
       totalRequests: 0,
@@ -42,15 +45,49 @@ export default class OpenAgenticProvider {
     return this.isConfigured();
   }
 
+  /**
+   * Paksa kebijakan blokir model: model yang ada di config.openagentic.blockedModels
+   * otomatis dipetakan ke varian "-free" bila tersedia (contoh: deepseek-v4.1-flash
+   * -> deepseek-v4.1-flash-free). Sistem tidak boleh menyentuh tier paid-nya.
+   */
+  normalizeModel(model) {
+    const blocked = config.openagentic?.blockedModels || [];
+    if (!model || !blocked.includes(model)) return model;
+    const freeVariant = `${model}-free`;
+    const exists = (config.openagentic?.models || []).some(m => m.id === freeVariant);
+    if (exists) {
+      if (!this._warnedBlocked) this._warnedBlocked = new Set();
+      if (!this._warnedBlocked.has(model)) {
+        this._warnedBlocked.add(model);
+        console.warn(`[OpenAgentic] Model "${model}" diblokir — otomatis dialihkan ke "${freeVariant}".`);
+      }
+      return freeVariant;
+    }
+    return model;
+  }
+
+  /** Saring daftar model dari daftar blokir */
+  filterBlocked(models) {
+    const blocked = config.openagentic?.blockedModels || [];
+    return models.filter(m => !blocked.includes(m.id));
+  }
+
+  /** max_tokens per model dari config.openagentic.maxTokensByModel; fallback ke global maxTokens */
+  resolveMaxTokens(model) {
+    const byModel = config.openagentic?.maxTokensByModel;
+    if (byModel && byModel[model] !== undefined) return byModel[model];
+    return this.maxTokens;
+  }
+
   /** Return static model list from config */
   getAvailableModels() {
-    return (config.openagentic?.models || []).map(m => ({
+    return this.filterBlocked((config.openagentic?.models || []).map(m => ({
       id: m.id,
       label: m.label || m.id,
       family: m.family || 'Unknown',
       rec: m.rec || false,
       tags: m.tags || [],
-    }));
+    })));
   }
 
   /** Fetch live model list from API (optional enrichment) */
@@ -62,12 +99,12 @@ export default class OpenAgenticProvider {
         timeout: 10000,
       });
       if (response.data?.data) {
-        return response.data.data.map(m => ({
+        return this.filterBlocked(response.data.data.map(m => ({
           id: m.id,
           name: m.name || m.id,
           contextLimit: m.context_limit || 200000,
           owned_by: m.owned_by || 'openagentic',
-        }));
+        })));
       }
       return [];
     } catch (error) {
@@ -77,28 +114,31 @@ export default class OpenAgenticProvider {
   }
 
   /**
-   * Format messages - handle system messages and tool results
+   * Format messages - handle system messages and tool results.
+   *
+   * System messages are PRESERVED in the array (standard [OI]-style format).
+   * Previously they were filtered out and only sent via the top-level `system`
+   * field, which some gateways ignore — causing the model to lose its identity
+   * instructions and answer as its upstream persona.
    */
   formatMessages(messages) {
-    return messages
-      .filter(m => m.role !== 'system') // system prompt is injected separately
-      .map(msg => {
-        if (msg.role === 'tool') {
-          return {
-            role: 'tool',
-            tool_call_id: msg.tool_call_id,
-            content: msg.content,
-          };
-        }
-        if (msg.tool_calls) {
-          return {
-            role: 'assistant',
-            content: msg.content || null,
-            tool_calls: msg.tool_calls,
-          };
-        }
-        return { role: msg.role, content: msg.content };
-      });
+    return messages.map(msg => {
+      if (msg.role === 'tool') {
+        return {
+          role: 'tool',
+          tool_call_id: msg.tool_call_id,
+          content: msg.content,
+        };
+      }
+      if (msg.tool_calls) {
+        return {
+          role: 'assistant',
+          content: msg.content || null,
+          tool_calls: msg.tool_calls,
+        };
+      }
+      return { role: msg.role, content: msg.content };
+    });
   }
 
   /**
@@ -121,8 +161,8 @@ export default class OpenAgenticProvider {
       };
     }
 
-    const model = options.model || this.defaultModel;
-    const maxTokens = options.maxTokens || this.maxTokens;
+    const model = this.normalizeModel(options.model || this.defaultModel);
+    const maxTokens = options.maxTokens || this.resolveMaxTokens(model);
     const temperature = options.temperature !== undefined ? options.temperature : 0.7;
     const startTime = Date.now();
 
@@ -140,7 +180,9 @@ export default class OpenAgenticProvider {
       stream: false,
     };
 
-    if (systemPrompt) payload.system = systemPrompt;
+    // Only use the top-level field if the array has no system message, to avoid
+    // sending the (large) system prompt twice.
+    if (systemPrompt && !formattedMessages.some(m => m.role === 'system')) payload.system = systemPrompt;
     if (options.top_p !== undefined) payload.top_p = options.top_p;
     if (options.stop) payload.stop = options.stop;
 
@@ -234,8 +276,8 @@ export default class OpenAgenticProvider {
       return;
     }
 
-    const model = options.model || this.defaultModel;
-    const maxTokens = options.maxTokens || this.maxTokens;
+     const model = this.normalizeModel(options.model || this.defaultModel);
+    const maxTokens = options.maxTokens || this.resolveMaxTokens(model);
     const temperature = options.temperature !== undefined ? options.temperature : 0.7;
     const systemPrompt = options.systemPrompt || this.extractSystem(messages);
     const formattedMessages = this.formatMessages(messages);
@@ -248,7 +290,9 @@ export default class OpenAgenticProvider {
       stream: true,
     };
 
-    if (systemPrompt) payload.system = systemPrompt;
+    // Only use the top-level field if the array has no system message, to avoid
+    // sending the (large) system prompt twice.
+    if (systemPrompt && !formattedMessages.some(m => m.role === 'system')) payload.system = systemPrompt;
     if (options.top_p !== undefined) payload.top_p = options.top_p;
     if (options.tools && options.tools.length > 0) {
       payload.tools = options.tools;
@@ -273,6 +317,16 @@ export default class OpenAgenticProvider {
       );
 
       let buffer = '';
+      // OpenAI-style tool-call deltas arrive as fragments across chunks,
+      // keyed by index — accumulate until the stream ends, then emit complete calls.
+      const pendingToolCalls = new Map();
+
+      const flushToolCalls = function* () {
+        if (pendingToolCalls.size > 0) {
+          yield { type: 'tool_calls', tool_calls: Array.from(pendingToolCalls.values()) };
+        }
+      };
+
       for await (const chunk of response.data) {
         buffer += chunk.toString();
         const lines = buffer.split('\n');
@@ -284,6 +338,7 @@ export default class OpenAgenticProvider {
           const data = trimmed.slice(6);
           if (data === '[DONE]') {
             this.stats.successfulRequests++;
+            yield* flushToolCalls();
             yield { type: 'done' };
             return;
           }
@@ -293,12 +348,20 @@ export default class OpenAgenticProvider {
             if (delta?.content) {
               yield { type: 'content', content: delta.content };
             }
-            // tool_calls delta (partial streaming tool calls)
             if (delta?.tool_calls) {
               for (const tc of delta.tool_calls) {
-                if (tc.function?.name) {
-                  yield { type: 'tool_start', name: tc.function.name, args: tc.function.arguments || '' };
+                const idx = tc.index ?? 0;
+                if (!pendingToolCalls.has(idx)) {
+                  pendingToolCalls.set(idx, {
+                    id: tc.id || `call_${idx}`,
+                    type: 'function',
+                    function: { name: '', arguments: '' },
+                  });
                 }
+                const acc = pendingToolCalls.get(idx);
+                if (tc.id) acc.id = tc.id;
+                if (tc.function?.name) acc.function.name += tc.function.name;
+                if (tc.function?.arguments) acc.function.arguments += tc.function.arguments;
               }
             }
             if (parsed.usage) {
@@ -309,6 +372,7 @@ export default class OpenAgenticProvider {
       }
 
       this.stats.successfulRequests++;
+      yield* flushToolCalls();
       yield { type: 'done' };
     } catch (error) {
       this.stats.failedRequests++;

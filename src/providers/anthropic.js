@@ -4,7 +4,7 @@
  * by Wisnu Alfian Nur Ashar
  */
 
-import axios from 'axios';
+import axios from './http-client.js';
 import config from '../../config/config.js';
 
 export class AnthropicProvider {

@@ -327,7 +327,7 @@ export class NVIDIAProvider {
   }
 
   isAvailable() {
-    return this.apiKey || (config.nvidia.apiKeys && config.nvidia.apiKeys.length > 0);
+    return Boolean(this.apiKey || (config.nvidia.apiKeys && config.nvidia.apiKeys.length > 0));
   }
 
   getKeyCount() {

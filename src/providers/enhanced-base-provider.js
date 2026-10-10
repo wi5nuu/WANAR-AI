@@ -2,7 +2,7 @@
  * Enhanced Base Provider with Advanced Error Handling & Resilience
  * Adds circuit breaker, intelligent retry, and health monitoring
  * 
- * @author Wisnu Alfian Nur Ashar & Siti Nurfadhila Az Zahra Syam
+ * @author Wisnu Alfian Nur Ashar
  * @version 3.0.0
  */
 
