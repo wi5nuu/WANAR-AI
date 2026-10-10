@@ -14,12 +14,12 @@ export default function ChatArea({ messages, processing, onEdit, onQuickAction }
   useEffect(() => {
     const el = chatRef.current;
     if (!el) return;
-    const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 100;
-    nearBottomRef.current = isNearBottom;
-    if (isNearBottom || processing) {
+    // Auto-scroll hanya jika user sudah di dekat bawah atau sedang streaming.
+    // Deps eksplisit agar tidak memaksa scroll saat user membaca riwayat.
+    if (nearBottomRef.current || processing) {
       el.scrollTop = el.scrollHeight;
     }
-  });
+  }, [messages, processing]);
 
   useEffect(() => {
     const el = chatRef.current;
@@ -104,13 +104,38 @@ function WelcomeScreen({ onQuickAction }) {
     {
       icon: (
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+          <path d="M9 12l2 2 4-4"/>
         </svg>
       ),
-      label: 'Scan Lowongan Kerja',
-      desc: 'Cari & scan job listing dari Jobstreet, LinkedIn, dll',
-      prompt: 'Tolong scan lowongan kerja Full-Stack Engineer di Jobstreet Indonesia untuk saya. Cari posisi yang cocok dengan profil saya.',
+      label: 'Rule Base Simulator',
+      desc: 'Uji & simulasi rule set / system prompt secara lokal',
+      action: () => navigate('/prompt-lab'),
       color: '#6366f1',
+    },
+    {
+      icon: (
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="2" y="7" width="20" height="14" rx="2"/>
+          <path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/>
+        </svg>
+      ),
+      label: 'Auto-Apply Magang',
+      desc: 'Cari & lamar posisi magang yang cocok otomatis',
+      prompt: 'Tolong carikan lowongan magang (internship) terbaru di Indonesia yang cocok dengan profil saya, lalu bantu saya apply otomatis. Mulai dari scan lowongan yang paling relevan.',
+      color: '#10b981',
+    },
+    {
+      icon: (
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <polygon points="23 7 16 12 23 17 23 7"/>
+          <rect x="1" y="5" width="15" height="14" rx="2"/>
+        </svg>
+      ),
+      label: 'Nonton YouTube',
+      desc: 'Rekomendasi & ringkasan video tech Favoritmu',
+      prompt: 'Rekomendasikan video YouTube terbaru dan paling bermanfaat tentang teknologi/AI/programming untuk saya tonton hari ini. Berikan judul, channel, dan kenapa video itu layak ditonton. Kalau saya kasih link video, buatkan ringkasannya.',
+      color: '#ef4444',
     },
     {
       icon: (
@@ -119,23 +144,21 @@ function WelcomeScreen({ onQuickAction }) {
           <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
         </svg>
       ),
-      label: 'Buka Browser Agent',
-      desc: 'Suruh AI browse & extract informasi dari website manapun',
-      prompt: 'Tolong buka https://www.jobstreet.co.id dan carikan lowongan Full-Stack Engineer terbaru yang cocok untuk saya.',
+      label: 'Browsing Web',
+      desc: 'Suruh AI browse & rangkum info dari web manapun',
+      prompt: 'Saya mau kamu browsing web untuk saya. Tanyakan URL atau topik apa yang ingin saya cari, lalu extract dan rangkum informasi pentingnya.',
       color: '#0ea5e9',
     },
     {
       icon: (
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-          <polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/>
-          <line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/>
+          <polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>
         </svg>
       ),
-      label: 'Auto-Apply Lamaran',
-      desc: 'Isi form lamaran otomatis menggunakan data profilmu',
-      prompt: 'Tolong bantu saya apply ke lowongan kerja. Berikan URL halaman lamaran yang ingin diisi, saya akan gunakan data profil saya untuk auto-fill form.',
-      color: '#10b981',
+      label: 'Bantu Ngoding',
+      desc: 'Review kode, debug, dan belajar tech baru',
+      prompt: 'Saya mau ngoding. Tanyakan apa yang ingin saya buat, perbaiki, atau pelajari — lalu bantu saya langkah demi langkah dengan contoh kode.',
+      color: '#8b5cf6',
     },
     {
       icon: (
@@ -148,28 +171,6 @@ function WelcomeScreen({ onQuickAction }) {
       desc: 'Kelola data diri & riwayat lamaran kerja',
       action: () => navigate('/profile'),
       color: '#f59e0b',
-    },
-    {
-      icon: (
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
-        </svg>
-      ),
-      label: 'Security Testing',
-      desc: 'Penetration testing & vulnerability assessment',
-      action: () => navigate('/security'),
-      color: '#ef4444',
-    },
-    {
-      icon: (
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>
-        </svg>
-      ),
-      label: 'Code Review',
-      desc: 'Review kode, debug, dan optimasi performa',
-      prompt: 'Tolong review kode saya dan berikan saran perbaikan. Paste kode yang ingin direview.',
-      color: '#8b5cf6',
     },
   ];
 
@@ -209,7 +210,7 @@ function WelcomeScreen({ onQuickAction }) {
         color: 'var(--text-secondary)',
         marginBottom: '36px',
       }}>
-        Wanar AI v1.0.5 — dibuat dengan cinta oleh Wisnu & Zahra
+        Wanar AI v1.0.5 — dibuat oleh Wisnu
       </p>
 
       {/* Quick Action Grid */}

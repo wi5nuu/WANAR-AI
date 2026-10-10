@@ -11,11 +11,12 @@ function fmt(n) {
   return String(Math.round(n));
 }
 
-export default function Toolbar({ onClear, connected, modelCount, usage, config }) {
+export default function Toolbar({ onClear, connected, modelCount, usage, config, onFlow, flowStage }) {
   const limit = config?.tokens?.dailyLimit || 300000000;
   const u = usage?.today || usage;
   const used = u?.total || 0;
   const pct = Math.min(100, Math.round((used / limit) * 100));
+  const running = flowStage && flowStage !== 'idle' && flowStage !== 'done' && flowStage !== 'error' && flowStage !== 'stopped';
 
   return (
     <div style={{
@@ -74,6 +75,17 @@ export default function Toolbar({ onClear, connected, modelCount, usage, config 
 
       {/* Spacer */}
       <div style={{ flex: 1 }} />
+
+      {/* Agent Flow Button */}
+      <button
+        className={`toolbar-flow-btn${running ? ' running' : ''}`}
+        onClick={onFlow}
+        title="Lihat alur kerja AI agent"
+        aria-label="Lihat alur kerja AI agent"
+      >
+        <span className="flow-btn-dot" />
+        Alur Agent
+      </button>
 
       {/* Clear Button */}
       <button

@@ -140,14 +140,25 @@ export default function Profile() {
 
   const handleCvUpload = async (file) => {
     if (!file) return;
+    if (file.size > 20 * 1024 * 1024) {
+      setMsg({ type: 'error', text: `File "${file.name}" terlalu besar. Maksimal 20MB.` });
+      return;
+    }
     setCvFile(file);
     setCvFilename(file.name);
     const formData = new FormData();
     formData.append('file', file);
     try {
       const r = await fetch('/api/upload', { method: 'POST', body: formData });
-      const d = await r.json();
+      let d = null;
+      try { d = await r.json(); } catch { d = null; }
+      if (!r.ok || !d || d.success === false) {
+        const msg = d?.error || `HTTP ${r.status}`;
+        setMsg({ type: 'error', text: `Gagal membaca CV "${file.name}": ${msg}` });
+        return;
+      }
       const extractedText = d.content || '';
+      const looksFailed = !extractedText || extractedText.trim().length < 20 || /Tidak ada teks yang bisa diekstrak|Could not extract|Binary format/i.test(extractedText.slice(0, 500));
       if (extractedText) setCvText(extractedText);
       // Langsung simpan CV ke database tanpa perlu klik "Simpan Profil"
       const payload = { ...form, cv_text: extractedText, cv_filename: file.name };
@@ -156,7 +167,12 @@ export default function Profile() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
-      setMsg({ type: 'success', text: `CV "${file.name}" berhasil dibaca dan disimpan` });
+      if (looksFailed) {
+        setMsg({ type: 'error', text: `CV "${file.name}" terupload tapi teksnya tidak terbaca. Coba versi teks/asli (bukan hasil scan) atau DOCX.` });
+      } else {
+        const info = d.pages ? ` (${d.pages} hlm, ${(d.charCount ?? extractedText.length).toLocaleString('id-ID')} karakter)` : ` (${extractedText.length.toLocaleString('id-ID')} karakter)`;
+        setMsg({ type: 'success', text: `CV "${file.name}" berhasil dibaca dan disimpan${info}` });
+      }
     } catch {
       setMsg({ type: 'error', text: 'Gagal membaca CV' });
     }

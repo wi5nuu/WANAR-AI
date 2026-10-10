@@ -37,7 +37,11 @@ export function useSessions() {
     const data = await r.json();
     setCurrentId(id);
     await load();
-    return data.messages || [];
+    const raw = data.messages || [];
+    return raw.map(m => ({
+      ...m,
+      timestamp: m.timestamp || (m.created_at ? new Date(String(m.created_at).replace(' ', 'T') + 'Z').getTime() : null),
+    }));
   }, [load]);
 
   return { sessions, currentId, setCurrentId, create, remove, switchTo, reload: load };
