@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Wanar AI CLI v1.0.8
- * by Wisnu Alfian Nur Ashar & Siti Nurfadhila Az Zahra Syam
+ * by Wisnu Alfian Nur Ashar
  */
 import readline from 'readline';
 import crypto from 'crypto';
@@ -23,15 +23,16 @@ const bgReset = '\x1b[49m';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const COMMANDS = [
-  { cmd: '/help',      desc: 'tampilkan semua perintah' },
-  { cmd: '/model',     desc: 'lihat & ganti model AI' },
-  { cmd: '/provider',  desc: 'lihat & ganti provider' },
-  { cmd: '/clear',     desc: 'hapus history percakapan' },
-  { cmd: '/info',      desc: 'info sistem & token usage' },
-  { cmd: '/context',   desc: 'atur max context turns' },
-  { cmd: '/sessions',  desc: 'lihat sesi tersimpan' },
-  { cmd: '/session',   desc: 'load sesi sebelumnya' },
-  { cmd: '/exit',      desc: 'keluar dari CLI' },
+  { cmd: '/help',        desc: 'tampilkan semua perintah' },
+  { cmd: '/model',       desc: 'lihat & ganti model AI' },
+  { cmd: '/provider',    desc: 'lihat & ganti provider' },
+  { cmd: '/clear',       desc: 'hapus history percakapan' },
+  { cmd: '/info',        desc: 'info sistem & token usage' },
+  { cmd: '/context',     desc: 'atur max context turns' },
+  { cmd: '/contextinfo', desc: 'detail context & cache stats' },
+  { cmd: '/sessions',    desc: 'lihat sesi tersimpan' },
+  { cmd: '/session',     desc: 'load sesi sebelumnya' },
+  { cmd: '/exit',        desc: 'keluar dari CLI' },
 ];
 
 function visLen(s) {
@@ -300,7 +301,7 @@ const LOGO_LINES = [
   `  ${c256(39)}╚███╔███╔╝██║  ██║██║ ╚████║██║  ██║██║  ██║    ██║  ██║██║${rs}`,
   `  ${c256(39)} ╚══╝╚══╝ ╚═╝  ╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝╚═╝  ╚═╝    ╚═╝  ╚═╝╚═╝${rs}`,
   ``,
-  `  ${dim}by Wisnu Alfian Nur Ashar & Siti Nurfadhila Az Zahra Syam${rs}`,
+  `  ${dim}by Wisnu Alfian Nur Ashar${rs}`,
   `  ${gy}Professional Multi-Provider AI Agent  ${c256(39)}v1.0.8${rs}`,
   ``,
 ];
@@ -317,7 +318,7 @@ function formatProviderStatus(aiManager) {
 class WanarCLI {
   constructor() {
     this.aiManager = new AIManager();
-    // Set default model dari provider aktif (OpenAgentic default: claude-sonnet-4-5)
+    // Set default model dari provider aktif (OpenAgentic default: claude-sonnet-4-6)
     this.currentModel = this.aiManager.getDefaultModel();
     this.sessionId = `ses_${crypto.randomBytes(8).toString('hex')}`;
     this.sessionName = 'New Chat';
@@ -380,6 +381,18 @@ class WanarCLI {
     const originalTtyWrite = this.rl._ttyWrite;
     this.rl._ttyWrite = (s, key) => {
       const currentLine = this.rl.line || '';
+      
+      // Handle paste operation globally (multi-character input or Ctrl+V)
+      // Paste biasanya datang sebagai string panjang tanpa key info atau dengan Ctrl+V
+      if (s && s.length > 1 && (!key || (!key.name && !key.ctrl))) {
+        // This is likely a paste operation (multiple characters at once)
+        if (popupActive) {
+          this._closeQuickPopup();
+          popupActive = false;
+        }
+        originalTtyWrite.call(this.rl, s, key);
+        return;
+      }
       
       // Detect when user types '/' at the beginning
       if (!popupActive && currentLine === '' && s === '/') {
@@ -454,8 +467,9 @@ class WanarCLI {
           return;
         }
         
-        // Regular character input
-        if (s && s.length === 1 && !key.ctrl && !key.meta) {
+        // Regular character input (including paste operation)
+        // Paste sends multi-character string, single key sends 1 char
+        if (s && !key.ctrl && !key.meta) {
           originalTtyWrite.call(this.rl, s, key);
           
           const newLine = this.rl.line || '';
@@ -470,9 +484,18 @@ class WanarCLI {
           }
           return;
         }
+        
+        // Allow paste even when popup is active - Ctrl+V, Ctrl+Shift+V, or Middle-click paste
+        if (key && ((key.name === 'v' && key.ctrl) || (key.shift && key.ctrl))) {
+          // Close popup and let paste through
+          this._closeQuickPopup();
+          popupActive = false;
+          originalTtyWrite.call(this.rl, s, key);
+          return;
+        }
       }
       
-      // Call original for other keys
+      // Call original for other keys (including paste when popup is not active)
       originalTtyWrite.call(this.rl, s, key);
     };
   }
@@ -878,6 +901,10 @@ class WanarCLI {
         }
         break;
 
+      case '/contextinfo':
+        this.showContextInfo();
+        break;
+
       case '/sessions': {
         const allSessions = db.getSessions(20);
         console.log(`\n  ${bd}Saved Sessions${rs} ${gy}(${allSessions.length})${rs}\n`);
@@ -980,17 +1007,28 @@ class WanarCLI {
             console.log(`  ${yl}┌ Wanar AI${rs} ${dim}(${thoughtMs}ms)${rs}`);
           }
           fullContent += chunk.content;
-          // Stream real-time — strip markdown inline per karakter yang aman
-          // (markdown yang span multi-chunk akan di-clean lagi saat final flush)
-          process.stdout.write(chunk.content
+          
+          // Stream real-time dengan prefix per baris untuk readability
+          const cleanChunk = chunk.content
             .replace(/\*\*\*(.+?)\*\*\*/g, '$1')
             .replace(/\*\*(.+?)\*\*/g, '$1')
             .replace(/\*([^ *][^*]*?[^ *])\*/g, '$1')
             .replace(/^#{1,6}\s+/gm, '')
             .replace(/[\u{1F300}-\u{1FFFF}]/gu, '')
             .replace(/[\u{2600}-\u{27BF}]/gu, '')
-            .replace(/[\u{2700}-\u{27BF}]/gu, '')
-          );
+            .replace(/[\u{2700}-\u{27BF}]/gu, '');
+          
+          // Split by newline dan tambahkan prefix per baris
+          const lines = cleanChunk.split('\n');
+          for (let i = 0; i < lines.length; i++) {
+            if (i > 0) {
+              // Baris baru: print prefix + konten
+              process.stdout.write(`\n  ${gy}│${rs} ${lines[i]}`);
+            } else {
+              // Baris pertama atau lanjutan: langsung print tanpa newline
+              process.stdout.write(lines[i]);
+            }
+          }
         } else if (chunk.type === 'tool_start') {
           // Content sudah di-stream live saat chunk 'content' diterima,
           // jadi cukup reset buffer - jangan cetak ulang (duplikat).
@@ -998,6 +1036,9 @@ class WanarCLI {
           if (!printedThought) {
             printedThought = true;
             console.log(`  ${yl}┌ Wanar AI${rs} ${dim}(${thoughtMs}ms)${rs}`);
+          } else {
+            // Jika sudah ada content sebelumnya, pastikan ada newline sebelum tool
+            process.stdout.write('\n');
           }
           const f = chunk.args?.path || chunk.args?.pattern || chunk.args?.command || '';
           const short = f ? ` ${dim}${f.slice(0, tw() - 20)}${rs}` : '';
@@ -1042,19 +1083,12 @@ class WanarCLI {
       process.stdout.write('\r\x1b[2K');
     }
 
-    // Flush sisa content yang belum dicetak — render sekaligus dengan stripMarkdown
-    const savedContent = fullContent; // simpan sebelum di-reset
-    if (fullContent && !hasError) {
-      if (!printedThought) {
-        console.log(`  ${yl}┌ Wanar AI${rs} ${dim}(${thoughtMs}ms)${rs}`);
-      }
-      // Render dengan indentasi per baris
-      const cleanText = stripMarkdown(fullContent);
-      for (const line of cleanText.split('\n')) {
-        console.log(`  ${gy}│${rs} ${line}`);
-      }
-      fullContent = '';
+    // Pastikan ada newline di akhir stream
+    if (started && printedThought && fullContent) {
+      process.stdout.write('\n');
     }
+    
+    const savedContent = fullContent;
 
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
     const model = this.currentModel || '-';
@@ -1090,6 +1124,66 @@ class WanarCLI {
     console.log(`  ${gy}tokens:${rs}  ${cy}${info.context.estimatedTokens}${rs}`);
     console.log(`  ${gy}turns:${rs}   ${cy}${info.context.maxTurns}${rs}`);
   }
+
+  // ── Context Info (Advanced) ────────────────────────────────────
+  showContextInfo() {
+    const ctx = this.aiManager.contextManager;
+    
+    // Check if advanced context manager is available
+    if (typeof ctx.getStats !== 'function') {
+      console.log(`\n  ${yl}⚠${rs} Advanced context info not available for this context manager`);
+      return;
+    }
+    
+    const stats = ctx.getStats();
+    const modelLimit = ctx.l1MaxTokens || 200000;
+    const usagePercent = ((stats.l1Tokens / modelLimit) * 100).toFixed(1);
+    
+    console.log(`\n  ${bd}━━━ Advanced Context Management ━━━${rs}\n`);
+    
+    // Model & Context Capacity
+    console.log(`  ${bd}Model & Capacity${rs}`);
+    console.log(`  ${gy}├─ Model:${rs}       ${cy}${ctx.modelId || this.currentModel}${rs}`);
+    console.log(`  ${gy}├─ L1 Limit:${rs}    ${cy}${(modelLimit / 1000).toFixed(0)}K tokens${rs}`);
+    console.log(`  ${gy}├─ L1 Usage:${rs}    ${cy}${stats.l1Tokens.toLocaleString()} tokens${rs} ${gy}(${usagePercent}%)${rs}`);
+    console.log(`  ${gy}└─ L2 Limit:${rs}    ${cy}${(ctx.l2MaxTokens / 1000000).toFixed(0)}M tokens${rs}\n`);
+    
+    // Layer Statistics
+    console.log(`  ${bd}Context Layers${rs}`);
+    console.log(`  ${gy}├─ L1 Active:${rs}   ${cy}${stats.l1Messages} messages${rs}`);
+    console.log(`  ${gy}├─ L2 Recent:${rs}   ${cy}${stats.l2Summaries} summaries${rs}`);
+    console.log(`  ${gy}└─ Total:${rs}       ${cy}${stats.totalMessages} messages${rs}\n`);
+    
+    // Compression & Optimization
+    console.log(`  ${bd}Optimization${rs}`);
+    console.log(`  ${gy}├─ Compressions:${rs} ${cy}${stats.compressions}${rs}`);
+    console.log(`  ${gy}├─ Efficiency:${rs}   ${cy}${stats.compressionEfficiency}${rs}`);
+    console.log(`  ${gy}└─ Retrievals:${rs}   ${cy}${stats.retrievals}${rs}\n`);
+    
+    // Semantic Cache Stats
+    if (stats.cache) {
+      const cache = stats.cache;
+      console.log(`  ${bd}Semantic Cache${rs} ${gr}(Token Saver)${rs}`);
+      console.log(`  ${gy}├─ Cache Size:${rs}   ${cy}${cache.cacheSize} entries${rs}`);
+      console.log(`  ${gy}├─ Hit Rate:${rs}     ${cy}${cache.hitRate}${rs}`);
+      console.log(`  ${gy}├─ Hits:${rs}         ${cy}${cache.cacheHits}${rs}`);
+      console.log(`  ${gy}├─ Misses:${rs}       ${cy}${cache.cacheMisses}${rs}`);
+      console.log(`  ${gy}├─ Tokens Saved:${rs} ${gr}${cache.tokensSaved.toLocaleString()}${rs}`);
+      console.log(`  ${gy}└─ Cost Saved:${rs}   ${gr}~$${cache.estimatedCostSaved}${rs}\n`);
+    }
+    
+    // Session Info
+    const duration = Math.floor(stats.sessionDuration / 1000 / 60);
+    console.log(`  ${bd}Session${rs}`);
+    console.log(`  ${gy}├─ Duration:${rs}     ${cy}${duration} minutes${rs}`);
+    console.log(`  ${gy}└─ Total Tokens:${rs} ${cy}${stats.totalTokens.toLocaleString()}${rs}\n`);
+    
+    // Tips
+    console.log(`  ${dim}💡 Tips:${rs}`);
+    console.log(`  ${dim}   • Use model with 1M context for full-stack projects${rs}`);
+    console.log(`  ${dim}   • Cache hit rate >80% = optimal performance${rs}`);
+    console.log(`  ${dim}   • Compression happens automatically at 80% L1 capacity${rs}\n`);
+  }
 }
 
 // ── Bootstrap ────────────────────────────────────────────────────
@@ -1105,7 +1199,7 @@ async function runSetupWizard() {
 
   console.log(`\n  ${barBlue}┌─────────────────────────────────────┐${rs}`);
   console.log(`  ${barBlue}│${rs}  ${bd}Wanar AI — First Time Setup${rs}         ${barBlue}│${rs}`);
-  console.log(`  ${barBlue}│${rs}  ${dim}by Wisnu & Zahra${rs}                     ${barBlue}│${rs}`);
+  console.log(`  ${barBlue}│${rs}  ${dim}by Wisnu${rs}                           ${barBlue}│${rs}`);
   console.log(`  ${barBlue}└─────────────────────────────────────┘${rs}\n`);
   console.log(`  ${gy}Config akan disimpan ke:${rs} ${cy}${envFile}${rs}\n`);
 
@@ -1130,7 +1224,7 @@ async function runSetupWizard() {
 # Generated by setup wizard
 OPENAGENTIC_API_KEY=${apiKey.trim()}
 OPENAGENTIC_BASE_URL=https://openagentic.id/api/v1
-OPENAGENTIC_DEFAULT_MODEL=claude-sonnet-4-5
+OPENAGENTIC_DEFAULT_MODEL=claude-sonnet-4-6
 DEFAULT_PROVIDER=openagentic
 PORT=3000
 `;

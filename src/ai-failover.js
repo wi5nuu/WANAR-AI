@@ -1,0 +1,231 @@
+/**
+ * src/ai-failover.js
+ *
+ * Smart auto-failover untuk Wanar AI.
+ *
+ * Ketika provider/model gagal — kehabisan token/quota, rate limit, API key
+ * invalid, server down, timeout — sistem otomatis pindah ke model lain di
+ * provider yang sama, lalu ke provider lain yang masih sehat, tanpa user
+ * perlu melakukan apa pun.
+ *
+ * Cerdas & ringan:
+ *   - Klasifikasi penyebab error (quota/rate/token/auth/server/network)
+ *   - Rantai fallback lintas-provider yang sadar biaya & kecepatan
+ *   - Circuit breaker: provider yang sering gagal "didiamkan" sementara
+ *   - Cooldown per provider+model agar tidak menghajar endpoint yang sama
+ *   - Riwayat percobaan untuk ditampilkan di UI (event provider_switch)
+ *
+ * @author Wisnu Alfian Nur Ashar
+ */
+
+export const FailReason = {
+  QUOTA: 'quota',       // kredit/quota habis — pindah model/provider
+  RATE: 'rate',         // rate limit / 429
+  TOKEN: 'token',       // context/token melebihi batas
+  AUTH: 'auth',         // API key invalid / 401 / 403
+  SERVER: 'server',     // 5xx / overloaded
+  NETWORK: 'network',   // timeout / koneksi
+  EMPTY: 'empty',       // model balas kosong
+  UNKNOWN: 'unknown',
+};
+
+const PATTERNS = [
+  [FailReason.QUOTA, /(quota|insufficient|credit|balance|billing|payment required|402|exceeded your current quota|out of credits|no credits)/i],
+  [FailReason.RATE, /(rate ?limit|too many requests|429|tokens per minute|\btpm\b|requests per minute|\brpm\b|overloaded)/i],
+  [FailReason.TOKEN, /(context length|maximum context|context window|max.?tokens|token limit|too long|reduce the length)/i],
+  [FailReason.AUTH, /(401|403|unauthorized|invalid api key|invalid_api_key|forbidden|authentication|api key not valid|permission)/i],
+  [FailReason.SERVER, /(5\d\d|internal server error|bad gateway|service unavailable|gateway timeout|server error)/i],
+  [FailReason.NETWORK, /(econnreset|etimedout|enotfound|econnrefused|socket hang up|network|fetch failed|timeout)/i],
+  [FailReason.EMPTY, /(empty response|empty response|returned an empty)/i],
+];
+
+export function classifyError(message) {
+  const msg = String(message || '');
+  for (const [reason, re] of PATTERNS) {
+    if (re.test(msg)) return reason;
+  }
+  return FailReason.UNKNOWN;
+}
+
+/** Apakah error ini layak memicu failover? */
+export function shouldFailover(message) {
+  const r = classifyError(message);
+  // Unknown tetap dicoba failover — lebih baik pindah daripada menyerah.
+  return r !== null;
+}
+
+/** Provider default tier ordering (semakin kecil, semakin diprioritaskan). */
+const PROVIDER_TIER = {
+  openagentic: 1,
+  anthropic: 1,
+  openai: 1,
+  gemini: 1,
+  nvidia: 2,
+  groq: 2,
+  vector: 3,
+  cerebras: 3,
+  together: 3,
+  fireworks: 3,
+  opencode: 3,
+  azure: 2,
+  'azure-openai': 2,
+  puter: 4,
+};
+
+const COOLDOWN_MS = {
+  [FailReason.QUOTA]: 10 * 60 * 1000,
+  [FailReason.AUTH]: 10 * 60 * 1000,
+  [FailReason.RATE]: 60 * 1000,
+  [FailReason.SERVER]: 45 * 1000,
+  [FailReason.NETWORK]: 20 * 1000,
+  [FailReason.TOKEN]: 5 * 60 * 1000,
+  [FailReason.EMPTY]: 30 * 1000,
+  [FailReason.UNKNOWN]: 30 * 1000,
+};
+
+export class SmartFailover {
+  /**
+   * @param {object} providers  map nama → instance provider (AIManager.providers)
+   * @param {object} config     config global (untuk daftar model per provider)
+   */
+  constructor(providers, config) {
+    this.providers = providers || {};
+    this.config = config || {};
+    /** @type {Map<string, number>} key `provider::model` → timestamp bebas */
+    this.cooldown = new Map();
+    /** @type {Map<string, {fails:number, openedAt:number}>} sirkuit per provider */
+    this.circuit = new Map();
+    this.history = [];
+    this.maxHistory = 200;
+    this.circuitThreshold = 4;      // gagal beruntun sebelum provider "dibuka"
+    this.circuitOpenMs = 60 * 1000; // lama provider didiamkan
+  }
+
+  _key(provider, model) { return `${provider}::${model || ''}`; }
+
+  isCoolingDown(provider, model) {
+    const until = this.cooldown.get(this._key(provider, model));
+    return Boolean(until && until > Date.now());
+  }
+
+  /** Provider sedang dikarantina (circuit open)? */
+  isCircuitOpen(provider) {
+    const c = this.circuit.get(provider);
+    if (!c || !c.openedAt) return false;
+    if (Date.now() - c.openedAt > this.circuitOpenMs) {
+      c.openedAt = 0; c.fails = 0; // setengah-terbuka: coba lagi
+      return false;
+    }
+    return true;
+  }
+
+  markFailure(provider, model, reason = FailReason.UNKNOWN) {
+    const cd = COOLDOWN_MS[reason] || COOLDOWN_MS[FailReason.UNKNOWN];
+    this.cooldown.set(this._key(provider, model), Date.now() + cd);
+
+    const c = this.circuit.get(provider) || { fails: 0, openedAt: 0 };
+    c.fails += 1;
+    if (c.fails >= this.circuitThreshold) c.openedAt = Date.now();
+    this.circuit.set(provider, c);
+  }
+
+  markSuccess(provider, model) {
+    this.cooldown.delete(this._key(provider, model));
+    const c = this.circuit.get(provider);
+    if (c) { c.fails = 0; c.openedAt = 0; }
+  }
+
+  _modelsFor(provider) {
+    const inst = this.providers[provider];
+    let models = [];
+    try {
+      const list = typeof inst?.getAvailableModels === 'function' ? inst.getAvailableModels() : null;
+      if (Array.isArray(list)) models = list.map(m => m.id || m);
+      else if (list && typeof list.then !== 'function' && Array.isArray(list.models)) models = list.models.map(m => m.id || m);
+    } catch { /* noop */ }
+    if (models.length === 0) {
+      const cfg = this.config[provider];
+      if (cfg?.models) models = cfg.models.map(m => m.id);
+      if (models.length === 0 && inst?.defaultModel) models = [inst.defaultModel];
+    }
+    return [...new Set(models.filter(Boolean))];
+  }
+
+  _isAvailable(provider) {
+    const inst = this.providers[provider];
+    if (!inst) return false;
+    try {
+      if (typeof inst.isAvailable === 'function') return inst.isAvailable();
+      if (typeof inst.isConfigured === 'function') return inst.isConfigured();
+    } catch { return false; }
+    return true;
+  }
+
+  /**
+   * Bangun rantai kandidat: model utama → model lain di provider sama →
+   * provider lain (terurut tier), masing-masing model default-nya.
+   * @returns {Array<{provider:string, model:string, reason?:string}>}
+   */
+  buildChain(primaryProvider, primaryModel) {
+    const chain = [];
+    const seen = new Set();
+    const push = (provider, model, reason) => {
+      const k = this._key(provider, model);
+      if (seen.has(k)) return;
+      seen.add(k);
+      chain.push({ provider, model, reason });
+    };
+
+    // 1) Kandidat awal
+    if (this._isAvailable(primaryProvider)) push(primaryProvider, primaryModel, 'primary');
+
+    // 2) Model lain di provider yang sama (skip yang cooldown)
+    for (const m of this._modelsFor(primaryProvider)) {
+      if (m === primaryModel) continue;
+      if (this.isCoolingDown(primaryProvider, m)) continue;
+      push(primaryProvider, m, 'same-provider');
+    }
+
+    // 3) Provider lain, diurutkan tier lalu kesehatan
+    const others = Object.keys(this.providers)
+      .filter(p => p !== primaryProvider && this._isAvailable(p) && !this.isCircuitOpen(p))
+      .sort((a, b) => {
+        const ta = PROVIDER_TIER[a] ?? 5;
+        const tb = PROVIDER_TIER[b] ?? 5;
+        if (ta !== tb) return ta - tb;
+        const fa = this.circuit.get(a)?.fails || 0;
+        const fb = this.circuit.get(b)?.fails || 0;
+        return fa - fb;
+      });
+
+    for (const p of others) {
+      const models = this._modelsFor(p);
+      const inst = this.providers[p];
+      const preferred = inst?.defaultModel || models[0];
+      if (preferred) push(p, preferred, 'cross-provider');
+      for (const m of models) {
+        if (this.isCoolingDown(p, m)) continue;
+        push(p, m, 'cross-provider');
+      }
+    }
+
+    return chain;
+  }
+
+  record(entry) {
+    this.history.push({ ...entry, at: Date.now() });
+    if (this.history.length > this.maxHistory) this.history.shift();
+  }
+
+  stats() {
+    return {
+      coolingDown: [...this.cooldown.entries()]
+        .filter(([, t]) => t > Date.now())
+        .map(([k, t]) => ({ key: k, secondsLeft: Math.round((t - Date.now()) / 1000) })),
+      circuit: [...this.circuit.entries()].map(([p, c]) => ({ provider: p, fails: c.fails, open: this.isCircuitOpen(p) })),
+      recent: this.history.slice(-10),
+    };
+  }
+}
+
+export default SmartFailover;

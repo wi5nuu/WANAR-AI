@@ -2,7 +2,7 @@
  * Provider Health Monitor - Real-time monitoring dan health check untuk semua providers
  * Memberikan visibility terhadap status, performance, dan reliability setiap provider
  * 
- * @author Wisnu Alfian Nur Ashar & Siti Nurfadhila Az Zahra Syam
+ * @author Wisnu Alfian Nur Ashar
  * @version 1.0.0
  */
 

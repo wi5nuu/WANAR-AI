@@ -2,7 +2,7 @@
  * Smart Failover System - Automatic provider switching dengan intelligent routing
  * Memilih provider alternatif terbaik saat primary provider gagal atau lambat
  * 
- * @author Wisnu Alfian Nur Ashar & Siti Nurfadhila Az Zahra Syam
+ * @author Wisnu Alfian Nur Ashar
  * @version 1.0.0
  */
 

@@ -2,7 +2,7 @@
  * Model Performance Analytics - Tracking dan analisis performa model secara real-time
  * Machine learning untuk optimize model selection berdasarkan historical performance
  * 
- * @author Wisnu Alfian Nur Ashar & Siti Nurfadhila Az Zahra Syam
+ * @author Wisnu Alfian Nur Ashar
  * @version 1.0.0
  */
 

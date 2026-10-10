@@ -9,6 +9,19 @@ import { agentDelegationTools, executeAgentDelegationTool } from './agent-delega
 import { codeIntelligenceTools, executeCodeIntelligenceTool } from './code-intelligence.js';
 import { browserTools, executeBrowserTool } from './browser.js';
 import { browserApplyTools, executeBrowserApplyTool } from './browser-apply.js';
+import { desktopTools, executeDesktopTool } from './desktop.js';
+import {
+  authorizeToolCall,
+  refusalResult,
+  GATED_TOOLS,
+  _setScanGuard,
+} from '../security/action-gate.js';
+import * as scanGuard from '../security/scan-guard.js';
+
+// Wire the allowlist checker into the gate. Done here (rather than as a static
+// import inside action-gate.js) to keep the dependency direction one-way and
+// avoid a circular import between registry and the security modules.
+_setScanGuard(scanGuard);
 
 export const allTools = [
   ...filesystemTools,
@@ -22,6 +35,7 @@ export const allTools = [
   ...codeIntelligenceTools,
   ...browserTools,
   ...browserApplyTools,
+  ...desktopTools,
 ];
 
 const toolExecutors = {
@@ -62,9 +76,13 @@ const toolExecutors = {
   browser_search_page: executeBrowserTool,
   browser_extract_links: executeBrowserTool,
   browser_crawl: executeBrowserTool,
+  browser_interact: executeBrowserTool,
   // Browser Apply Agent
   browser_apply: executeBrowserApplyTool,
   browser_job_scan: executeBrowserApplyTool,
+  // Desktop control (local machine, opt-in)
+  mouse_control: executeDesktopTool,
+  screen_capture: executeDesktopTool,
   // Agent Delegation
   agent_explore: executeAgentDelegationTool,
   agent_security: executeAgentDelegationTool,
@@ -78,13 +96,39 @@ const toolExecutors = {
   find_duplicates: executeCodeIntelligenceTool,
 };
 
-export async function executeTool(name, args) {
+/**
+ * Executes a tool by name.
+ *
+ * Every tool call in the application funnels through here, which makes this the
+ * single chokepoint for policy enforcement. Tools with real-world side effects
+ * (shell, filesystem writes, outbound scanning, browser/desktop control) are
+ * refused unless the call carries a valid, single-use, human-issued approval
+ * bound to that exact tool and target. See security/action-gate.js.
+ *
+ * @param {string} name
+ * @param {object} args
+ * @param {object} [ctx] - optional execution context, e.g. { actor: 'http'|'chat'|'cli' }
+ */
+export async function executeTool(name, args = {}, ctx = {}) {
   const executor = toolExecutors[name];
   if (!executor) {
     return { error: `Unknown tool: ${name}` };
   }
+
+  // Policy gate — runs before the executor for every call path.
+  const decision = authorizeToolCall(name, args);
+  if (!decision.allowed) {
+    console.warn(
+      `[ACTION-GATE] Blocked tool="${name}" code=${decision.code} actor=${ctx.actor || 'unknown'}`
+    );
+    return refusalResult(decision);
+  }
+
+  // Strip the approval token so it never reaches tool implementations or logs.
+  const { __approvalId, ...cleanArgs } = args;
+
   try {
-    return await executor(name, args);
+    return await executor(name, cleanArgs);
   } catch (err) {
     return { error: err.message };
   }

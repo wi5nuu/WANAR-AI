@@ -3,7 +3,7 @@
  * Health Monitor CLI - Interactive health monitoring untuk semua AI providers
  * Real-time dashboard, analytics, dan diagnostics
  * 
- * @author Wisnu Alfian Nur Ashar & Siti Nurfadhila Az Zahra Syam
+ * @author Wisnu Alfian Nur Ashar
  * @version 1.0.0
  */
 
@@ -550,7 +550,7 @@ ${colors.bright}Examples:${colors.reset}
   npm run analytics -- recommend coding
   npm run analytics -- monitor 30
 
-${colors.gray}Made with ❤️ by Wisnu & Zahra${colors.reset}
+${colors.gray}Made with ❤️ by Wisnu${colors.reset}
     `);
   }
 }

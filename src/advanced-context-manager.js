@@ -15,22 +15,31 @@ import * as db from './database.js';
 
 export default class AdvancedContextManager {
   constructor(options = {}) {
-    // L1: Active context window (immediate conversation)
-    this.l1MaxTokens = options.l1MaxTokens || 200000; // 200K for Claude Sonnet 4.5
+    // Dynamic context limits based on model capabilities
+    this.modelId = options.modelId || 'claude-sonnet-4-6';
+    
+    // L1: Active context window (immediate conversation) - AUTO-SCALE based on model
+    this.l1MaxTokens = this._getModelContextLimit(this.modelId, options.l1MaxTokens);
     this.l1Messages = [];
     
     // L2: Recent context (summarized recent sessions)
-    this.l2MaxTokens = options.l2MaxTokens || 2000000; // 2M tokens
+    this.l2MaxTokens = options.l2MaxTokens || 5000000; // 5M tokens (increased)
     this.l2Summaries = [];
-    this.l2MaxSummaries = options.l2MaxSummaries || 20;
+    this.l2MaxSummaries = options.l2MaxSummaries || 50; // More summaries
     
     // L3: Long-term memory (simulated via RAG + embeddings)
     this.l3Enabled = options.l3Enabled !== false;
     this.l3MaxTokensSimulated = options.l3MaxTokens || 100000000; // 100M simulation
     
-    // Context compression settings
-    this.compressionRatio = options.compressionRatio || 0.2; // 5:1 compression
-    this.summaryModel = options.summaryModel || 'claude-sonnet-4.5';
+    // Smart compression settings - adaptive
+    this.compressionRatio = options.compressionRatio || 0.15; // 6.67:1 compression (more aggressive)
+    this.summaryModel = options.summaryModel || 'claude-sonnet-4-6';
+    
+    // Semantic caching for token savings
+    this.semanticCache = new Map();
+    this.cacheHits = 0;
+    this.cacheMisses = 0;
+    this.tokensSaved = 0;
     
     // Priority scoring for context retention
     this.priorityWeights = {
@@ -54,6 +63,58 @@ export default class AdvancedContextManager {
     this.sessionId = this.generateSessionId();
     this.sessionStart = Date.now();
     this.lastActivity = Date.now();
+  }
+
+  /**
+   * Get model context limit dynamically based on model ID
+   */
+  _getModelContextLimit(modelId, override) {
+    if (override) return override;
+    
+    // Map of model ID to context window size (in tokens)
+    const modelLimits = {
+      // OpenAgentic Claude models with long context
+      'claude-sonnet-4-5-1m': 1000000,      // 1M context
+      'claude-sonnet-4-6': 200000,          // 200K
+      'claude-sonnet-4-5': 200000,          // 200K
+      'claude-opus-4-5': 200000,            // 200K
+      'claude-opus-4': 200000,              // 200K
+      'claude-3-5-sonnet-20241022': 200000, // 200K
+      
+      // GPT models
+      'gpt-4.5': 128000,                    // 128K
+      'gpt-4.1': 128000,                    // 128K
+      'gpt-4o': 128000,                     // 128K
+      'gpt-4-turbo': 128000,                // 128K
+      
+      // Gemini models
+      'gemini-2.0-flash-exp': 1000000,      // 1M
+      'gemini-1.5-pro': 2000000,            // 2M
+      'gemini-1.5-flash': 1000000,          // 1M
+      
+      // DeepSeek
+      'deepseek-chat': 64000,               // 64K
+      'deepseek-coder': 64000,              // 64K
+      
+      // Qwen
+      'qwen-plus': 32000,                   // 32K
+      'qwen-turbo': 8000,                   // 8K
+    };
+    
+    // Check for exact match
+    if (modelLimits[modelId]) {
+      return modelLimits[modelId];
+    }
+    
+    // Check for partial match (e.g., "claude-sonnet-4-5-20251101" matches "claude-sonnet-4-5")
+    for (const [key, limit] of Object.entries(modelLimits)) {
+      if (modelId.includes(key)) {
+        return limit;
+      }
+    }
+    
+    // Default: 200K for unknown models
+    return 200000;
   }
 
   /**
@@ -402,6 +463,199 @@ export default class AdvancedContextManager {
   }
 
   /**
+   * Semantic cache check - returns cached response if similar query exists
+   * This saves tokens by avoiding re-processing similar queries
+   */
+  checkSemanticCache(query, similarityThreshold = 0.85) {
+    const queryNormalized = this._normalizeQuery(query);
+    const queryTokens = this._tokenizeQuery(queryNormalized);
+    
+    for (const [cachedQuery, cachedData] of this.semanticCache.entries()) {
+      const cachedTokens = this._tokenizeQuery(cachedQuery);
+      const similarity = this._calculateSimilarity(queryTokens, cachedTokens);
+      
+      if (similarity >= similarityThreshold) {
+        // Check if cache is still fresh (within 1 hour)
+        if (Date.now() - cachedData.timestamp < 3600000) {
+          this.cacheHits++;
+          this.tokensSaved += cachedData.tokens;
+          return cachedData.response;
+        }
+      }
+    }
+    
+    this.cacheMisses++;
+    return null;
+  }
+
+  /**
+   * Store response in semantic cache
+   */
+  storeInSemanticCache(query, response, tokens) {
+    const queryNormalized = this._normalizeQuery(query);
+    
+    // Limit cache size to 100 entries
+    if (this.semanticCache.size >= 100) {
+      // Remove oldest entry
+      const firstKey = this.semanticCache.keys().next().value;
+      this.semanticCache.delete(firstKey);
+    }
+    
+    this.semanticCache.set(queryNormalized, {
+      response,
+      tokens,
+      timestamp: Date.now()
+    });
+  }
+
+  /**
+   * Normalize query for better cache matching
+   */
+  _normalizeQuery(query) {
+    return query.toLowerCase()
+      .replace(/[^\w\s]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  /**
+   * Tokenize query into words
+   */
+  _tokenizeQuery(query) {
+    return query.split(' ').filter(w => w.length > 2);
+  }
+
+  /**
+   * Calculate similarity between two token arrays (Jaccard similarity)
+   */
+  _calculateSimilarity(tokens1, tokens2) {
+    const set1 = new Set(tokens1);
+    const set2 = new Set(tokens2);
+    const intersection = new Set([...set1].filter(x => set2.has(x)));
+    const union = new Set([...set1, ...set2]);
+    
+    return intersection.size / union.size;
+  }
+
+  /**
+   * Smart code chunking for reading large full-stack codebases
+   * Chunks code intelligently by preserving function/class boundaries
+   */
+  chunkCodeForContext(code, maxChunkTokens = 4000) {
+    const chunks = [];
+    const lines = code.split('\n');
+    let currentChunk = [];
+    let currentTokens = 0;
+    let inFunction = false;
+    let braceCount = 0;
+    
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const lineTokens = this.estimateTokens(line);
+      
+      // Detect function/class boundaries
+      if (line.match(/^(function|class|const\s+\w+\s*=\s*(async\s+)?function|export\s+(async\s+)?function)/)) {
+        inFunction = true;
+      }
+      
+      // Track braces for function end detection
+      braceCount += (line.match(/{/g) || []).length;
+      braceCount -= (line.match(/}/g) || []).length;
+      
+      if (braceCount === 0 && inFunction) {
+        inFunction = false;
+      }
+      
+      // If adding this line would exceed limit and we're not in a function, start new chunk
+      if (currentTokens + lineTokens > maxChunkTokens && !inFunction && currentChunk.length > 0) {
+        chunks.push({
+          content: currentChunk.join('\n'),
+          tokens: currentTokens,
+          startLine: i - currentChunk.length + 1,
+          endLine: i
+        });
+        currentChunk = [];
+        currentTokens = 0;
+      }
+      
+      currentChunk.push(line);
+      currentTokens += lineTokens;
+    }
+    
+    // Add remaining chunk
+    if (currentChunk.length > 0) {
+      chunks.push({
+        content: currentChunk.join('\n'),
+        tokens: currentTokens,
+        startLine: lines.length - currentChunk.length + 1,
+        endLine: lines.length
+      });
+    }
+    
+    return chunks;
+  }
+
+  /**
+   * Intelligent prompt compression - removes redundancy while preserving meaning
+   */
+  compressPrompt(prompt, targetCompressionRatio = 0.7) {
+    // Step 1: Remove excessive whitespace
+    let compressed = prompt.replace(/\n{3,}/g, '\n\n').replace(/[ \t]+/g, ' ');
+    
+    // Step 2: Remove redundant phrases
+    const redundantPhrases = [
+      /please\s+/gi,
+      /kindly\s+/gi,
+      /I would like to\s+/gi,
+      /Could you\s+/gi,
+      /Can you\s+/gi,
+    ];
+    
+    redundantPhrases.forEach(pattern => {
+      compressed = compressed.replace(pattern, '');
+    });
+    
+    // Step 3: Compress code comments if present
+    compressed = compressed.replace(/\/\/[^\n]*/g, match => {
+      // Keep important comments (TODO, FIXME, NOTE)
+      if (match.match(/\b(TODO|FIXME|NOTE|IMPORTANT)\b/i)) {
+        return match;
+      }
+      return '';
+    });
+    
+    // Step 4: If still too long, apply more aggressive compression
+    const currentRatio = this.estimateTokens(compressed) / this.estimateTokens(prompt);
+    if (currentRatio > targetCompressionRatio) {
+      // Extract key sentences (first sentence of each paragraph)
+      const paragraphs = compressed.split('\n\n');
+      compressed = paragraphs.map(p => {
+        const sentences = p.split(/[.!?]+/);
+        return sentences[0] + (sentences.length > 1 ? '...' : '');
+      }).join('\n\n');
+    }
+    
+    return compressed.trim();
+  }
+
+  /**
+   * Get cache statistics
+   */
+  getCacheStats() {
+    const totalRequests = this.cacheHits + this.cacheMisses;
+    const hitRate = totalRequests > 0 ? (this.cacheHits / totalRequests * 100).toFixed(2) : '0.00';
+    
+    return {
+      cacheSize: this.semanticCache.size,
+      cacheHits: this.cacheHits,
+      cacheMisses: this.cacheMisses,
+      hitRate: `${hitRate}%`,
+      tokensSaved: this.tokensSaved,
+      estimatedCostSaved: (this.tokensSaved * 0.000003).toFixed(4) // Rough estimate: $3/1M tokens
+    };
+  }
+
+  /**
    * Generate unique session ID
    */
   generateSessionId() {
@@ -409,9 +663,10 @@ export default class AdvancedContextManager {
   }
 
   /**
-   * Get current statistics
+   * Get current statistics with cache info
    */
   getStats() {
+    const cacheStats = this.getCacheStats();
     return {
       ...this.stats,
       totalTokens: this.stats.l1Tokens + this.stats.l2Tokens + this.stats.l3Tokens,
@@ -420,16 +675,20 @@ export default class AdvancedContextManager {
       sessionDuration: Date.now() - this.sessionStart,
       compressionEfficiency: this.stats.compressions > 0 
         ? ((1 - this.compressionRatio) * 100).toFixed(2) + '%'
-        : 'N/A'
+        : 'N/A',
+      cache: cacheStats,
+      contextLimit: this.l1MaxTokens
     };
   }
 
   /**
-   * Get context info for debugging
+   * Get context info for debugging (enhanced with model and cache info)
    */
   getContextInfo() {
+    const cacheStats = this.getCacheStats();
     return {
       sessionId: this.sessionId,
+      modelId: this.modelId,
       layers: {
         l1: {
           name: 'Active Context',

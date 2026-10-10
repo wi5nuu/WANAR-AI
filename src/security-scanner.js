@@ -6,10 +6,65 @@
 import axios from 'axios';
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import { fileURLToPath } from 'url';
+import {
+  mapLimit,
+  withTimeout,
+  createDeadline,
+  authorizeTarget,
+  resolveTarget,
+  DEFAULT_CONCURRENCY,
+  DEFAULT_REQUEST_TIMEOUT_MS,
+} from './security/scan-guard.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+/**
+ * Returns true when `candidate` is `root` itself or lives beneath it.
+ *
+ * Uses a separator-aware comparison rather than a bare `startsWith`, so that a
+ * sibling directory such as `C:\app-evil` is not treated as being inside
+ * `C:\app`. Case-insensitive on Windows, where paths are case-insensitive.
+ */
+function isPathInside(root, candidate) {
+  const normalize = (p) => {
+    const resolved = path.resolve(p);
+    return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+  };
+  const rel = path.relative(normalize(root), normalize(candidate));
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
+/**
+ * Attaches verifiable evidence to a finding and marks its confidence.
+ * `confirmed` means the check observed the condition directly (e.g. a header
+ * was absent from the live response). `unconfirmed` means the check could not
+ * verify it and it must not be presented as fact.
+ */
+function stampEvidence(vuln, { confirmed, raw, request } = {}) {
+  const payload = raw === undefined ? '' : String(raw);
+  return {
+    confidence: confirmed ? 'confirmed' : 'unconfirmed',
+    rawEvidence: payload.slice(0, 4000),
+    evidenceSha256: crypto.createHash('sha256').update(payload).digest('hex'),
+    evidenceCapturedAt: new Date().toISOString(),
+    request: request || vuln.request || null,
+    ...vuln,
+  };
+}
+
+/**
+ * Wraps a single HTTP GET with the shared request timeout.
+ */
+function timedGet(url, options = {}) {
+  return withTimeout(
+    axios.get(url, { timeout: DEFAULT_REQUEST_TIMEOUT_MS, validateStatus: () => true, ...options }),
+    DEFAULT_REQUEST_TIMEOUT_MS + 1000,
+    `request timed out: ${url}`
+  );
+}
 
 /**
  * Security Vulnerability Scanner
@@ -31,56 +86,69 @@ export async function scanVulnerabilities(target, scanType = 'quick', modules = 
     }
   };
 
+  const auth = authorizeTarget(target);
+  if (!auth.allowed) {
+    results.status = 'rejected';
+    results.message = `Target is out of scope (${auth.reason}).`;
+    results.reason = auth.reason;
+    results.hint = auth.hint || 'Set SCAN_ALLOWED_TARGETS to the hosts you own.';
+    return results;
+  }
+
   try {
     // Test if target is reachable
-    const response = await axios.get(target, { 
-      timeout: 5000,
-      validateStatus: () => true // Accept any status code
-    });
+    const response = await withTimeout(
+      axios.get(target, { timeout: 5000, validateStatus: () => true }),
+      8000,
+      'connectivity check timed out'
+    );
 
     results.targetInfo = {
       status: response.status,
       server: response.headers['server'] || 'Unknown',
       xPoweredBy: response.headers['x-powered-by'] || 'Not disclosed',
-      contentType: response.headers['content-type'] || 'Unknown'
+      contentType: response.headers['content-type'] || 'Unknown',
+      resolvedAddresses: await resolveTarget(auth.host),
     };
 
-    // Run security checks based on scan type
-    const checks = [];
+    // Run security checks based on scan type (concurrency-limited)
+    const checkDefs = [];
 
     // Core vulnerability checks
     if (modules.includes('xss') || modules.length === 0) {
-      checks.push(checkXSS(target, scanType, response.data));
+      checkDefs.push(() => checkXSS(target, scanType, response.data));
     }
     if (modules.includes('sqli') || modules.length === 0) {
-      checks.push(checkSQLInjection(target, scanType));
+      checkDefs.push(() => checkSQLInjection(target, scanType));
     }
     if (modules.includes('csrf') || modules.length === 0) {
-      checks.push(checkCSRF(target, response.data));
+      checkDefs.push(() => checkCSRF(target, response.data));
     }
     if (modules.includes('security_headers') || modules.length === 0) {
-      checks.push(checkSecurityHeaders(response.headers));
+      checkDefs.push(() => checkSecurityHeaders(response.headers));
     }
     if (modules.includes('ssl') || modules.length === 0) {
-      checks.push(checkSSL(target));
+      checkDefs.push(() => checkSSL(target));
     }
 
     // Enterprise-grade advanced checks
-    checks.push(checkSensitiveDataExposure(target, response.data));
-    checks.push(checkPathTraversal(target, scanType));
-    checks.push(checkCommandInjection(target, scanType));
-    checks.push(checkXXE(target, scanType));
-    checks.push(checkSSRF(target, scanType));
-    checks.push(checkOpenRedirect(target, scanType));
-    checks.push(checkInsecureDeserialization(target, response.data));
-    checks.push(checkCORSMisconfiguration(response.headers, target));
-    checks.push(checkClickjacking(response.headers));
-    checks.push(checkInformationDisclosure(response.data, response.headers));
+    checkDefs.push(() => checkSensitiveDataExposure(target, response.data));
+    checkDefs.push(() => checkPathTraversal(target, scanType));
+    checkDefs.push(() => checkCommandInjection(target, scanType));
+    checkDefs.push(() => checkXXE(target, scanType));
+    checkDefs.push(() => checkSSRF(target, scanType));
+    checkDefs.push(() => checkOpenRedirect(target, scanType));
+    checkDefs.push(() => checkInsecureDeserialization(target, response.data));
+    checkDefs.push(() => checkCORSMisconfiguration(response.headers, target));
+    checkDefs.push(() => checkClickjacking(response.headers));
+    checkDefs.push(() => checkInformationDisclosure(response.data, response.headers));
 
-    const checkResults = await Promise.all(checks);
-    
-    checkResults.forEach(vulns => {
-      results.vulnerabilities.push(...vulns);
+    const checkResults = await mapLimit(checkDefs, DEFAULT_CONCURRENCY, (fn) => fn());
+
+    checkResults.forEach(r => {
+      if (r.status === 'fulfilled' && Array.isArray(r.value)) {
+        results.vulnerabilities.push(...r.value);
+      }
     });
 
     // Calculate summary
@@ -108,6 +176,7 @@ export async function scanVulnerabilities(target, scanType = 'quick', modules = 
 export async function* streamScanVulnerabilities(target, scanType = 'quick', modules = [], aiManager = null) {
   const scanId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
   const startTime = Date.now();
+  const deadline = createDeadline();
 
   const summary = { total: 0, critical: 0, high: 0, medium: 0, low: 0, info: 0 };
   const vulnerabilityResults = [];
@@ -119,20 +188,40 @@ export async function* streamScanVulnerabilities(target, scanType = 'quick', mod
     scanType,
     timestamp: new Date().toISOString(),
     checks: scanType === 'deep' ? 20 : 12,
+    deadlineMs: deadline.budgetMs,
   };
+
+  // Scope authorization: only hosts the operator has declared as owned may be
+  // scanned. This is enforced before any request is made.
+  const auth = authorizeTarget(target);
+  if (!auth.allowed) {
+    yield {
+      type: 'scan_error',
+      message: `Target ${auth.host || target} is out of scope (${auth.reason}).`,
+      reason: auth.reason,
+      hint: auth.hint || 'Set SCAN_ALLOWED_TARGETS to the hosts you own.',
+    };
+    return;
+  }
 
   try {
     yield { type: 'progress', message: 'Pinging target...', phase: 'connectivity' };
-    const response = await axios.get(target, {
-      timeout: 5000,
-      validateStatus: () => true,
-    });
+    const response = await withTimeout(
+      axios.get(target, { timeout: 5000, validateStatus: () => true }),
+      8000,
+      'connectivity check timed out'
+    );
 
+    const resolved = await resolveTarget(auth.host);
     const targetInfo = {
       status: response.status,
       server: response.headers['server'] || 'Unknown',
       xPoweredBy: response.headers['x-powered-by'] || 'Not disclosed',
       contentType: response.headers['content-type'] || 'Unknown',
+      resolvedAddresses: resolved,
+      serverHeaderSha256: crypto.createHash('sha256')
+        .update(String(response.headers['server'] || ''))
+        .digest('hex'),
     };
 
     yield { type: 'target_info', targetInfo };
@@ -140,7 +229,11 @@ export async function* streamScanVulnerabilities(target, scanType = 'quick', mod
     async function runCheck(name, checkFn, ...args) {
       const phase = name.toLowerCase().replace(/\s+/g, '_');
       try {
-        const vulns = await checkFn(...args);
+        const vulns = await withTimeout(
+          Promise.resolve(checkFn(...args)),
+          Math.max(5000, deadline.remaining()),
+          `check "${name}" exceeded its time budget`
+        );
         return { name, vulns, phase, error: null };
       } catch (err) {
         return { name, vulns: null, phase, error: err.message };
@@ -172,16 +265,33 @@ export async function* streamScanVulnerabilities(target, scanType = 'quick', mod
     }
 
     for (const [name, checkFn, ...args] of checkDefs) {
+      if (deadline.expired()) {
+        yield { type: 'progress', message: `Deadline reached — skipping remaining checks`, phase: 'deadline' };
+        break;
+      }
       yield { type: 'progress', message: `Checking ${name}...`, phase: name.toLowerCase().replace(/\s+/g, '_') };
       const result = await runCheck(name, checkFn, ...args);
       if (result.error) {
         yield { type: 'check_error', check: name, error: result.error };
       } else if (result.vulns && result.vulns.length > 0) {
         for (const v of result.vulns) {
-          vulnerabilityResults.push(v);
+          // Every finding carries a verifiable evidence hash and a confidence
+          // level; anything not directly observed is explicitly "unconfirmed".
+          const enriched = stampEvidence(v, {
+            confirmed: v.confidence ? v.confidence === 'confirmed' : true,
+            raw: JSON.stringify({
+              check: name,
+              type: v.type,
+              location: v.location,
+              evidence: v.evidence || null,
+              target,
+            }),
+            request: { method: 'GET', url: v.location || target, target, check: name },
+          });
+          vulnerabilityResults.push(enriched);
           summary.total++;
-          summary[v.severity.toLowerCase()]++;
-          yield { type: 'vulnerability', vulnerability: v, summary: { ...summary } };
+          summary[enriched.severity.toLowerCase()]++;
+          yield { type: 'vulnerability', vulnerability: enriched, summary: { ...summary } };
         }
       } else {
         yield { type: 'check_pass', check: name, summary: { ...summary } };
@@ -565,12 +675,14 @@ export async function discoverSubdomains(target, scanType) {
     // crt.sh failed, fall back to wordlist
   }
 
-  // Wordlist-based discovery
+  // Wordlist-based discovery — concurrency-limited so the event loop and the
+  // libuv DNS threadpool are never starved (unbounded fan-out previously froze
+  // the server).
   if (scanType === 'deep' || foundSubdomains.length === 0) {
-    const promises = COMMON_SUBDOMAINS.map(async sub => {
+    const results = await mapLimit(COMMON_SUBDOMAINS, DEFAULT_CONCURRENCY, async (sub) => {
+      const testUrl = `https://${sub}.${hostname}`;
       try {
-        const testUrl = `https://${sub}.${hostname}`;
-        const resp = await axios.get(testUrl, { timeout: 3000, validateStatus: () => true });
+        const resp = await timedGet(testUrl, { maxRedirects: 2 });
         if (resp.status < 500) {
           return { subdomain: `${sub}.${hostname}`, status: resp.status };
         }
@@ -580,7 +692,6 @@ export async function discoverSubdomains(target, scanType) {
       return null;
     });
 
-    const results = await Promise.allSettled(promises);
     results.forEach(r => {
       if (r.status === 'fulfilled' && r.value) {
         foundSubdomains.push(r.value.subdomain);
@@ -642,12 +753,13 @@ export async function findAdminPages(target, scanType) {
 
   const pathsToCheck = scanType === 'deep' ? ADMIN_PATHS : ADMIN_PATHS.slice(0, 20);
 
-  const promises = pathsToCheck.map(async page => {
+  const results = await mapLimit(pathsToCheck, DEFAULT_CONCURRENCY, async (page) => {
     try {
       const url = `${baseUrl}${page}`;
-      const resp = await axios.get(url, { timeout: 3000, validateStatus: () => true, maxRedirects: 3 });
+      const resp = await timedGet(url, { maxRedirects: 3 });
       if (resp.status === 200 || resp.status === 401 || resp.status === 403) {
-        const title = (resp.data.match(/<title>([^<]*)<\/title>/i) || [])[1] || '';
+        const body = typeof resp.data === 'string' ? resp.data : '';
+        const title = (body.match(/<title>([^<]*)<\/title>/i) || [])[1] || '';
         return { url, status: resp.status, title: title.slice(0, 100) };
       }
     } catch (error) {
@@ -656,7 +768,6 @@ export async function findAdminPages(target, scanType) {
     return null;
   });
 
-  const results = await Promise.allSettled(promises);
   results.forEach(r => {
     if (r.status === 'fulfilled' && r.value) {
       foundPages.push(r.value);
@@ -1259,6 +1370,33 @@ export async function auditCode(codePath) {
   try {
     const projectRoot = path.join(__dirname, '..');
     const targetPath = path.resolve(projectRoot, codePath);
+
+    // Confine the audit to the project directory. Without this, `codePath` is a
+    // traversal primitive: "../../etc" or an absolute path would let the caller
+    // read and return arbitrary files on the host as "audit output".
+    if (!isPathInside(projectRoot, targetPath)) {
+      return {
+        ...results,
+        error: 'Path traversal rejected: the audit path must stay inside the project directory.',
+        code: 'PATH_OUTSIDE_ROOT',
+      };
+    }
+
+    // Symlinks can point outside the root even when the literal path does not,
+    // so resolve the real path before trusting the containment check.
+    try {
+      const realRoot = fs.realpathSync(projectRoot);
+      const realTarget = fs.realpathSync(targetPath);
+      if (!isPathInside(realRoot, realTarget)) {
+        return {
+          ...results,
+          error: 'Path traversal rejected: symlink resolves outside the project directory.',
+          code: 'SYMLINK_ESCAPE',
+        };
+      }
+    } catch {
+      return { ...results, error: 'Path not found or not accessible.', code: 'NOT_FOUND' };
+    }
 
     // Security check patterns
     const patterns = [
@@ -2493,18 +2631,17 @@ async function performDNSEnumeration(hostname) {
     console.debug(`[Security Scanner] Subdomain enumeration failed: ${error.message}`);
   }
 
-  // Verify subdomains
+  // Verify subdomains (concurrency-limited)
   const verifiedSubs = [];
-  const checkPromises = subdomains.slice(0, 30).map(async sub => {
+  const results = await mapLimit(subdomains.slice(0, 30), DEFAULT_CONCURRENCY, async (sub) => {
     try {
-      const resp = await axios.get(`https://${sub}`, { timeout: 3000, validateStatus: () => true });
+      const resp = await timedGet(`https://${sub}`, { maxRedirects: 2 });
       return { subdomain: sub, status: resp.status, server: resp.headers['server'] || 'Unknown' };
     } catch (error) {
       console.debug(`[Security Scanner] Subdomain verification failed for ${sub}: ${error.message}`);
     }
     return null;
   });
-  const results = await Promise.allSettled(checkPromises);
   results.forEach(r => {
     if (r.status === 'fulfilled' && r.value) verifiedSubs.push(r.value);
   });
@@ -2729,18 +2866,18 @@ async function performDirectoryBruteforce(target, scanType) {
   let baseUrl;
   try { baseUrl = new URL(target).origin; } catch { return { confirmed: [] }; }
 
-  const checkPromises = pathsToCheck.map(async (path) => {
+  const results = await mapLimit(pathsToCheck, DEFAULT_CONCURRENCY, async (path) => {
     try {
       const url = `${baseUrl}${path}`;
-      const resp = await axios.get(url, { timeout: 3000, validateStatus: () => true, maxRedirects: 3 });
-      const size = resp.headers['content-length'] || resp.data.length;
-      const title = (resp.data.match(/<title>([^<]*)<\/title>/i) || [])[1] || '';
+      const resp = await timedGet(url, { maxRedirects: 3 });
+      const body = typeof resp.data === 'string' ? resp.data : '';
+      const size = resp.headers['content-length'] || body.length;
+      const title = (body.match(/<title>([^<]*)<\/title>/i) || [])[1] || '';
       return { url, status: resp.status, size, title: title.slice(0, 100), contentType: resp.headers['content-type'] || '' };
     } catch {}
     return null;
   });
 
-  const results = await Promise.allSettled(checkPromises);
   const accessible = [];
   results.forEach(r => {
     if (r.status === 'fulfilled' && r.value) accessible.push(r.value);
@@ -4905,16 +5042,15 @@ async function performEnhancedReconnaissance(target, scanType) {
     const commonPorts = [21, 22, 23, 25, 53, 80, 110, 111, 135, 139, 143, 443, 445, 993, 995, 1433, 1521, 2049, 3306, 3389, 5432, 5900, 5985, 5986, 6379, 8080, 8443, 9000, 9200, 27017];
     const openPorts = [];
 
-    const portPromises = commonPorts.map(async port => {
+    await mapLimit(commonPorts, DEFAULT_CONCURRENCY, async (port) => {
       try {
         const url = `${protocol}//${hostname}:${port}`;
-        const resp = await axios.get(url, { timeout: 2000, validateStatus: () => true });
+        const resp = await timedGet(url);
         const server = resp.headers['server'] || '';
         openPorts.push({ port, service: getServiceName(port), status: resp.status, server });
       } catch {}
+      return null;
     });
-
-    await Promise.allSettled(portPromises);
     recon.portScan = openPorts;
 
     // WAF Detection
