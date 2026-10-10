@@ -1,7 +1,7 @@
 {
   "name": "wanar-ai",
   "version": "1.0.9",
-  "description": "Wanar AI v1.0.5 - Professional AI Chat Platform + CLI Agent by Wisnu Alfian Nur Ashar & Siti Nurfadhila Az Zahra Syam",
+  "description": "Wanar AI v1.0.5 - Professional AI Chat Platform + CLI Agent by Wisnu Alfian Nur Ashar",
   "main": "src/index.js",
   "type": "module",
   "bin": {
@@ -21,10 +21,21 @@
     "start": "node src/index.js",
     "cli": "node src/cli.js",
     "web": "node src/server.js",
-    "test": "node src/test.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "test:ui": "vitest --ui",
     "dev": "node --watch src/server.js",
     "analytics": "node src/tools/health-cli.js",
     "analytics:legacy": "node src/tools/analytics-cli.js",
+    "audit:secrets": "node scripts/secrets-audit.mjs",
+    "audit:secrets:staged": "node scripts/secrets-audit.mjs --staged",
+    "audit:auth": "node scripts/auth-report.mjs",
+    "report:enterprise": "node scripts/enterprise-report.mjs",
+    "authorize": "node scripts/authorize.mjs",
+    "scope": "node scripts/authorize.mjs list",
+    "loadtest": "node scripts/load-test.mjs",
+    "inventory": "node scripts/inventory.mjs",
     "postinstall": "node scripts/postinstall.js"
   },
   "keywords": [
@@ -83,5 +94,13 @@
   },
   "allowScripts": {
     "better-sqlite3@12.11.1": true
+  },
+  "overrides": {
+    "qs": "6.16.0"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "^5.0.0",
+    "supertest": "^7.2.2",
+    "vitest": "^5.0.0"
   }
 }

@@ -1,0 +1,60 @@
+# Wanar AI — gitleaks configuration
+#
+# Run:  gitleaks detect --config .gitleaks.toml --redact
+# CI:   gitleaks detect --config .gitleaks.toml --redact --exit-code 1
+#
+# Extends the built-in rule set and adds project-specific allowlists so that
+# placeholder values in .env.example never produce false positives.
+
+title = "Wanar AI secrets policy"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Safe placeholders, docs, and generated artifacts"
+paths = [
+  '''node_modules/''',
+  '''client/dist/''',
+  '''data/''',
+  '''logs/''',
+  '''\.env\.example$''',
+  '''\.gitleaks\.toml$''',
+  '''scripts/secrets-audit\.mjs$''',
+  '''package-lock\.json$''',
+  '''\.md$''',
+]
+regexes = [
+  '''your[-_]?api[-_]?key''',
+  '''api[-_]?key[-_]?here''',
+  '''sk-your-''',
+  '''nvapi-your-''',
+  '''gsk_your-''',
+  '''your-.*-api-key-here''',
+  '''placeholder''',
+  '''example\.com''',
+  '''changeme''',
+  '''replace[-_]?me''',
+  '''xxx+''',
+]
+
+[[rules]]
+id = "wanar-openagentic-key"
+description = "OpenAgentic gateway API key"
+regex = '''(?i)openagentic_api_key\s*[:=]\s*['"]?(sk-[A-Za-z0-9]{20,})'''
+secretGroup = 1
+keywords = ["openagentic"]
+
+[[rules]]
+id = "wanar-jwt-secret"
+description = "Hardcoded JWT signing secret"
+regex = '''(?i)jwt_secret\s*[:=]\s*['"]([^'"]{16,})['"]'''
+secretGroup = 1
+keywords = ["jwt_secret", "jwt-secret"]
+
+[[rules]]
+id = "wanar-azure-openai-key"
+description = "Azure [OI] API key"
+regex = '''(?i)azure_openai_api_key\s*[:=]\s*['"]?([A-Za-z0-9]{32,})'''
+secretGroup = 1
+keywords = ["azure_openai"]

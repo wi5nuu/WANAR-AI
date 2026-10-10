@@ -37,6 +37,9 @@ server.log
 server-err.log
 server-test.log
 
+# ── Generated reports (berisi bukti/inventaris, jangan di-commit) ─
+reports/
+
 # ── OS Files ─────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db

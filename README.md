@@ -1,4 +1,4 @@
-﻿<div align="center">
+<div align="center">
 
 <img src="https://capsule-render.vercel.app/api?type=waving&color=0:0066ff,100:00ccff&height=200&section=header&text=WANAR%20AI&fontSize=80&fontColor=ffffff&animation=fadeIn&fontAlignY=38&desc=Professional%20Multi-Provider%20AI%20Agent&descAlignY=60&descSize=18" width="100%"/>
 
@@ -8,11 +8,11 @@
 
 <br/><br/>
 
-[![Typing SVG](https://readme-typing-svg.herokuapp.com?font=Fira+Code&size=22&pause=1000&color=00CCFF&center=true&vCenter=true&width=600&lines=Wanar+AI+v1.0.5;Professional+AI+Chat+Platform;Autonomous+Job+Application+Agent;Built+with+Love+by+Wisnu+%26+Zahra)](https://git.io/typing-svg)
+[![Typing SVG](https://readme-typing-svg.herokuapp.com?font=Fira+Code&size=22&pause=1000&color=00CCFF&center=true&vCenter=true&width=600&lines=Wanar+AI+v1.0.5;Professional+AI+Chat+Platform;Autonomous+Job+Application+Agent;Built+with+Love+by+Wisnu)](https://git.io/typing-svg)
 
 <br/>
 
-> **Made with love by Wisnu Alfian Nur Ashar & Siti Nurfadhila Az Zahra Syam**
+> **Made with love by Wisnu Alfian Nur Ashar**
 > 
 > *"Dibangun dengan cinta, untuk masa depan yang lebih cerdas"*
 
@@ -154,7 +154,7 @@ All data stays local. No cloud sync. No third-party data collection.
 - Tool call output displayed inline (bash, read_file, etc.)
 - Separate system prompts for CLI (plain text) and Web (markdown)
 - Remove filesystem and shell path restrictions — agent can access any folder
-- Add co-creator: Siti Nurfadhila Az Zahra Syam
+- Add co-creator
 - Redesign CLI with large ASCII art WANAR AI banner
 
 ### v1.0.0
@@ -170,8 +170,8 @@ All data stays local. No cloud sync. No third-party data collection.
 
 <div align="center">
 
-<img src="https://capsule-render.vercel.app/api?type=waving&color=0:00ccff,100:0066ff&height=120&section=footer&text=Made%20with%20Love%20by%20Wisnu%20%26%20Zahra&fontSize=20&fontColor=ffffff&animation=fadeIn" width="100%"/>
+<img src="https://capsule-render.vercel.app/api?type=waving&color=0:00ccff,100:0066ff&height=120&section=footer&text=Made%20with%20Love%20by%20Wisnu&fontSize=20&fontColor=ffffff&animation=fadeIn" width="100%"/>
 
-**Wanar AI v1.0.5 — Wisnu Alfian Nur Ashar & Siti Nurfadhila Az Zahra Syam — 2026**
+**Wanar AI v1.0.5 — Wisnu Alfian Nur Ashar — 2026**
 
 </div>
