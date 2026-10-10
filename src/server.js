@@ -11,11 +11,24 @@ import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
 import { fileURLToPath } from 'url';
 import { createRequire } from 'module';
+import JSZip from 'jszip';
 const _require = createRequire(import.meta.url);
-const pdfParse = _require('pdf-parse');
+// pdf-parse v2 (2.4.x) exports class PDFParse, bukan function seperti v1.
+// Load defensif agar tetap jalan walau struktur export berubah.
+let PDFParseClass = null;
+try {
+  const _pdfMod = _require('pdf-parse');
+  PDFParseClass = _pdfMod?.PDFParse || _pdfMod?.default?.PDFParse || _pdfMod?.default || null;
+  if (typeof PDFParseClass !== 'function' || !PDFParseClass.prototype?.getText) {
+    // Bukan class v2 yang valid — anggap tidak tersedia, fallback ke ekstraksi mentah.
+    if (typeof PDFParseClass !== 'function') PDFParseClass = null;
+  }
+} catch {
+  PDFParseClass = null;
+}
 
 import config from '../config/config.js';
-import AIManager, { WANAR_SYSTEM_PROMPT, WANAR_SYSTEM_PROMPT_WEB } from './ai-manager.js';
+import AIManager, { WANAR_SYSTEM_PROMPT, WANAR_SYSTEM_PROMPT_WEB, WANAR_VOICE_PROMPT } from './ai-manager.js';
 import * as db from './database.js';
 import { getToolDefinitions, executeTool } from './tools/registry.js';
 import * as providerRegistry from './providers/registry.js';
@@ -28,6 +41,13 @@ import * as securityScanner from './security-scanner.js';
 import * as jobAgent from './tools/job-agent.js';
 import { agentEvents } from './tools/job-agent.js';
 import generator from './generator/project-generator.js';
+import * as authMonitor from './security/auth-monitor.js';
+import * as actionGate from './security/action-gate.js';
+import { authorizeTarget, getScope } from './security/scan-guard.js';
+import { runLoadTest, validateRateLimit, LIMITS as LOAD_LIMITS } from './security/load-test.js';
+import { closeVisibleBrowser, getLiveBrowserState } from './tools/browser.js';
+import { lintRuleSet, reviewRuleSetWithAI, MAX_RULE_SET_CHARS } from './prompt-lab.js';
+import { getPoolStats } from './providers/http-client.js';
 
 const coordinator = new DistributedCoordinator();
 
@@ -39,123 +59,500 @@ const PORT = config.server.port;
 const aiManager = new AIManager();
 
 // ==================== MULTER FILE UPLOAD CONFIG ====================
-const ALLOWED_MIMETYPES = [
+const ALLOWED_MIMETYPES = new Set([
   // Text files
   'text/plain', 'text/csv', 'text/html', 'text/css', 'text/javascript',
+  'text/markdown', 'text/x-python', 'text/x-java',
   'application/json', 'application/xml', 'text/xml',
   // Code files
-  'application/x-javascript', 'application/x-python-code',
+  'application/javascript', 'application/x-javascript', 'application/typescript',
+  'application/x-python-code', 'application/x-yaml', 'application/x-sh',
+  'application/x-httpd-php',
   // Documents
   'application/pdf',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   'application/vnd.openxmlformats-officedocument.presentationml.presentation',
   'application/msword', 'application/vnd.ms-excel', 'application/vnd.ms-powerpoint',
+  'application/vnd.oasis.opendocument.text',
+  'application/vnd.oasis.opendocument.spreadsheet',
+  'application/vnd.oasis.opendocument.presentation',
   // Images
-  'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/svg+xml',
+  'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/svg+xml', 'image/bmp', 'image/tiff',
   // Archives
   'application/zip', 'application/x-tar', 'application/gzip', 'application/x-rar-compressed',
-];
+  'application/x-7z-compressed',
+  // Browser fallback saat drag-drop / OS tidak mengenal tipe file
+  'application/octet-stream',
+]);
+
+// Ekstensi yang diizinkan — dipakai sebagai fallback bila browser mengirim
+// mimetype generik (mis. application/octet-stream atau string kosong).
+const ALLOWED_EXTENSIONS = new Set([
+  'txt','md','markdown','csv','json','xml','yaml','yml','js','jsx','ts','tsx',
+  'py','java','cpp','c','cc','cxx','cs','html','htm','css','scss','less','sql',
+  'sh','bash','bat','cmd','ps1','env','gitignore','toml','ini','cfg','conf',
+  'log','rs','go','rb','php','swift','kt','kts','r','m','h','hpp','vue','svelte',
+  'pdf','doc','docx','odt','rtf','ppt','pptx','odp','xls','xlsx','ods',
+  'png','jpg','jpeg','gif','webp','svg','bmp','tiff','tif',
+  'zip','tar','gz','tgz','rar','7z',
+]);
+
+const TEXT_EXTS = new Set([
+  'txt','md','markdown','csv','json','xml','yaml','yml','js','jsx','ts','tsx',
+  'py','java','cpp','c','cc','cxx','cs','html','htm','css','scss','less','sql',
+  'sh','bash','bat','cmd','ps1','env','gitignore','toml','ini','cfg','conf',
+  'log','rs','go','rb','php','swift','kt','kts','r','m','h','hpp','vue','svelte',
+]);
+
+const MAX_FILE_CHARS = 80000;
+
+function getFileExt(originalname) {
+  const base = String(originalname || '').split(/[\\/]/).pop() || '';
+  const parts = base.split('.');
+  return parts.length > 1 ? parts.pop().toLowerCase() : '';
+}
+
+function isAllowedFile(mimetype, originalname) {
+  const ext = getFileExt(originalname);
+  if (ext && ALLOWED_EXTENSIONS.has(ext)) return true;
+  if (mimetype && ALLOWED_MIMETYPES.has(mimetype)) return true;
+  if (mimetype && (mimetype.startsWith('text/') || mimetype.startsWith('image/'))) return true;
+  return false;
+}
 
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { 
+  limits: {
     fileSize: 20 * 1024 * 1024, // 20MB max
     files: 1 // Only allow single file upload
   },
   fileFilter: (req, file, cb) => {
-    // Validate mimetype
-    if (!ALLOWED_MIMETYPES.includes(file.mimetype)) {
-      return cb(new Error(`File type ${file.mimetype} is not allowed. Only documents, images, text, and code files are accepted.`));
-    }
-    
-    // Validate filename (prevent path traversal)
-    if (file.originalname.includes('..') || file.originalname.includes('/') || file.originalname.includes('\\')) {
+    // Validate filename (prevent path traversal + null bytes)
+    const name = file.originalname || '';
+    if (name.includes('..') || name.includes('/') || name.includes('\\') || name.includes('\0')) {
       return cb(new Error('Invalid filename: path traversal detected'));
     }
-    
+
     // Limit filename length
-    if (file.originalname.length > 255) {
-      return cb(new Error('Filename is too long (max 255 characters)'));
+    if (name.length > 255 || name.length === 0) {
+      return cb(new Error('Filename tidak valid (maks 255 karakter)'));
     }
-    
+
+    // Validate mimetype + extension (extension wins — banyak browser kirim octet-stream)
+    if (!isAllowedFile(file.mimetype, name)) {
+      const ext = getFileExt(name);
+      return cb(new Error(
+        `Tipe file "${file.mimetype || 'unknown'}${ext ? ' (.' + ext + ')' : ''}" tidak didukung. ` +
+        'Didukung: PDF, Word/Excel/PowerPoint, gambar (JPG/PNG/WebP), teks & kode, ZIP.'
+      ));
+    }
+
     cb(null, true);
   }
 });
 
 /**
- * Extract text content from uploaded file buffer
+ * Normalisasi teks hasil ekstraksi agar akurat & enak dibaca LLM:
+ * - satukan line ending, perbaiki ligatur PDF (ﬁ→fi), hapus zero-width/BOM
+ * - sambung kata terpotong tanda hubung di akhir baris ("meningkat-\nkan" → "meningkatkan")
+ * - rapikan spasi berlebih tanpa menghilangkan struktur paragraf/tabel
+ */
+function normalizeExtractedText(raw) {
+  if (!raw) return '';
+  let t = String(raw).replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  // Ligatur umum dari PDF
+  t = t
+    .replace(/ﬁ/g, 'fi').replace(/ﬂ/g, 'fl').replace(/ﬀ/g, 'ff')
+    .replace(/ﬃ/g, 'ffi').replace(/ﬄ/g, 'ffl').replace(/ﬅ/g, 'ft')
+    .replace(/ﬆ/g, 'st').replace(/œ/g, 'oe').replace(/Œ/g, 'OE')
+    .replace(/æ/g, 'ae').replace(/Æ/g, 'AE');
+  // Karakter tak terlihat
+  t = t.replace(/\uFEFF/g, '').replace(/[\u200B\u200C\u200D\u2060]/g, '').replace(/\u00A0/g, ' ');
+  t = t.replace(/[\u2028\u2029]/g, '\n');
+  // Sambung kata terpotong: "transfor-\nmasi" → "transformasi"
+  t = t.replace(/(\p{L})-\n(\p{L})/gu, '$1$2');
+  // Baris PDF sering dipecah per kata — satukan baris pendek yang jelas satu paragraf?
+  // (Konservatif: hanya rapikan spasi, JANGAN gabung baris agar tabel/list tidak rusak.)
+  t = t.split('\n').map((line) => line.replace(/[ \t]+/g, ' ').replace(/\s+$/g, '')).join('\n');
+  t = t.replace(/\n{3,}/g, '\n\n').trim();
+  return t;
+}
+
+function truncateSmart(text, max = MAX_FILE_CHARS) {
+  if (text.length <= max) return { text, truncated: false };
+  // Potong di batas paragraf/baris agar tidak memenggal kalimat.
+  let cut = text.lastIndexOf('\n\n', max);
+  if (cut < max * 0.5) cut = text.lastIndexOf('\n', max);
+  if (cut < max * 0.5) cut = text.lastIndexOf(' ', max);
+  if (cut < max * 0.5) cut = max;
+  return {
+    text: text.slice(0, cut).trimEnd() + `\n\n...[dipotong: ${text.length.toLocaleString('id-ID')} karakter total, menampilkan ${cut.toLocaleString('id-ID')} pertama]`,
+    truncated: true,
+  };
+}
+
+function decodeXmlEntities(s) {
+  return String(s || '')
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&apos;/g, "'")
+    .replace(/&#(\d+);/g, (_, n) => { try { return String.fromCodePoint(parseInt(n, 10)); } catch { return ''; } })
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, h) => { try { return String.fromCodePoint(parseInt(h, 16)); } catch { return ''; } });
+}
+
+// ---------- Office Open XML via JSZip (akurat, UTF-8 benar) ----------
+
+async function extractDocx(buffer) {
+  const zip = await JSZip.loadAsync(buffer);
+  // document.xml + header/footer/footnote/endnote/comment agar teks lengkap
+  const targets = ['word/document.xml'];
+  for (const p of Object.keys(zip.files)) {
+    if (/^word\/(header\d*|footer\d*|footnotes|endnotes|comments)\.xml$/.test(p)) targets.push(p);
+  }
+  const paras = [];
+  for (const name of targets) {
+    const f = zip.file(name);
+    if (!f) continue;
+    const xml = await f.async('string');
+    // Tiap <w:p> = 1 paragraf; di dalamnya gabung <w:t> + tab/line-break.
+    const pRegex = /<w:p[\s>][\s\S]*?<\/w:p>/g;
+    let pm;
+    let foundPara = false;
+    while ((pm = pRegex.exec(xml)) !== null) {
+      foundPara = true;
+      const pXml = pm[0];
+      const parts = [];
+      const tRegex = /<(w:t|w:tab|w:br|w:noBreakHyphen)[^>]*\/?(?:>(.*?)<\/(w:t))?>/g;
+      let tm;
+      while ((tm = tRegex.exec(pXml)) !== null) {
+        const tag = tm[1];
+        if (tag === 'w:t') parts.push(decodeXmlEntities(tm[2] || ''));
+        else if (tag === 'w:tab') parts.push('\t');
+        else if (tag === 'w:br') parts.push('\n');
+        else if (tag === 'w:noBreakHyphen') parts.push('-');
+      }
+      const line = parts.join('').replace(/[ \t]+/g, ' ').trim();
+      if (line) paras.push(line);
+    }
+    // Fallback: dokumen tanpa <w:p> (sangat jarang) → ambil semua <w:t>
+    if (!foundPara) {
+      const all = [];
+      const tAll = /<w:t[^>]*>(.*?)<\/w:t>/g;
+      let ta;
+      while ((ta = tAll.exec(xml)) !== null) {
+        const s = decodeXmlEntities(ta[1]).trim();
+        if (s) all.push(s);
+      }
+      if (all.length) paras.push(all.join(' '));
+    }
+  }
+  return paras.join('\n\n');
+}
+
+async function extractPptx(buffer) {
+  const zip = await JSZip.loadAsync(buffer);
+  const slides = Object.keys(zip.files)
+    .filter((p) => /^ppt\/slides\/slide\d+\.xml$/.test(p))
+    .sort((a, b) => parseInt(a.match(/slide(\d+)/)[1], 10) - parseInt(b.match(/slide(\d+)/)[1], 10));
+  const out = [];
+  let n = 0;
+  for (const name of slides) {
+    n += 1;
+    const xml = await zip.file(name).async('string');
+    const texts = [];
+    const tRegex = /<a:t[^>]*>(.*?)<\/a:t>/g;
+    let m;
+    while ((m = tRegex.exec(xml)) !== null) {
+      const s = decodeXmlEntities(m[1]).trim();
+      if (s) texts.push(s);
+    }
+    if (texts.length) out.push(`--- Slide ${n} ---\n${texts.join('\n')}`);
+  }
+  return out.join('\n\n');
+}
+
+async function extractXlsx(buffer) {
+  const zip = await JSZip.loadAsync(buffer);
+  // 1) Shared strings
+  let shared = [];
+  const ssFile = zip.file('xl/sharedStrings.xml');
+  if (ssFile) {
+    const xml = await ssFile.async('string');
+    const siRegex = /<si>([\s\S]*?)<\/si>/g;
+    let m;
+    while ((m = siRegex.exec(xml)) !== null) {
+      const inner = m[1];
+      const tParts = [];
+      const tRegex = /<t[^>]*>(.*?)<\/t>/g;
+      let tm;
+      while ((tm = tRegex.exec(inner)) !== null) tParts.push(decodeXmlEntities(tm[1]));
+      shared.push(tParts.join(''));
+    }
+  }
+  // 2) Sheet names
+  const sheetNames = {};
+  const wbFile = zip.file('xl/workbook.xml');
+  if (wbFile) {
+    const xml = await wbFile.async('string');
+    const shRegex = /<sheet[^>]*name="([^"]+)"[^>]*sheetId="(\d+)"[^>]*\/>|<sheet[^>]*sheetId="(\d+)"[^>]*name="([^"]+)"[^>]*\/>|<sheet[^>]*>/g;
+    // Parse sederhana: ambil name + r:id berurutan
+    const names = [...xml.matchAll(/name="([^"]+)"/g)].map((x) => decodeXmlEntities(x[1]));
+    const sheetFiles = Object.keys(zip.files).filter((p) => /^xl\/worksheets\/sheet\d+\.xml$/.test(p))
+      .sort((a, b) => parseInt(a.match(/sheet(\d+)/)[1], 10) - parseInt(b.match(/sheet(\d+)/)[1], 10));
+    sheetFiles.forEach((sf, i) => { sheetNames[sf] = names[i] || `Sheet${i + 1}`; });
+  }
+  // 3) Cell values per sheet
+  const sheetFiles = Object.keys(zip.files).filter((p) => /^xl\/worksheets\/sheet\d+\.xml$/.test(p))
+    .sort((a, b) => parseInt(a.match(/sheet(\d+)/)[1], 10) - parseInt(b.match(/sheet(\d+)/)[1], 10));
+  const out = [];
+  for (const sf of sheetFiles) {
+    const xml = await zip.file(sf).async('string');
+    const rows = [];
+    const rowRegex = /<row[^>]*>([\s\S]*?)<\/row>/g;
+    let rm;
+    while ((rm = rowRegex.exec(xml)) !== null) {
+      const rowXml = rm[1];
+      const cells = [];
+      // Catatan: JANGAN pakai pola lazy + grup opsional untuk atribut t
+      // (mis. /<c[^>]*?(?:t="...")?/) — regex seperti itu selalu match kosong
+      // dan membuat sel shared-string terbaca sebagai indeks mentah ("0","1").
+      // Parse atribut dulu, baru isi sel.
+      const cRegex = /<c\b([^>]*)>([\s\S]*?)<\/c>/g;
+      let cm;
+      while ((cm = cRegex.exec(rowXml)) !== null) {
+        const attrs = cm[1] || '';
+        const inner = cm[2] || '';
+        const tMatch = attrs.match(/\bt="([^"]*)"/);
+        const t = tMatch ? tMatch[1] : '';
+        let val = '';
+        if (t === 's') {
+          const idx = parseInt((inner.match(/<v>(.*?)<\/v>/) || [])[1] || '-1', 10);
+          val = shared[idx] ?? '';
+        } else if (t === 'inlineStr') {
+          const tm = inner.match(/<t[^>]*>(.*?)<\/t>/);
+          val = decodeXmlEntities(tm ? tm[1] : '');
+        } else if (t === 'b') {
+          val = (inner.match(/<v>(.*?)<\/v>/) || [])[1] === '1' ? 'TRUE' : 'FALSE';
+        } else if (t === 'e' || t === 'str' || t === 'n' || t === '') {
+          const vm = inner.match(/<v>(.*?)<\/v>/);
+          val = vm ? decodeXmlEntities(vm[1]) : '';
+        }
+        cells.push(val);
+      }
+      // Buang baris kosong
+      if (cells.some((c) => String(c).trim() !== '')) rows.push(cells.join('\t'));
+      if (rows.length > 2000) break; // batas aman per sheet
+    }
+    if (rows.length) out.push(`--- ${sheetNames[sf] || sf} ---\n${rows.join('\n')}`);
+  }
+  return out.join('\n\n');
+}
+
+// ---------- PDF via pdf-parse v2 (API class, bukan function) ----------
+
+async function extractPdf(buffer, originalname) {
+  if (!PDFParseClass) {
+    // Fallback mentah: ambil string printable dari stream PDF
+    return { text: '', pages: null, engine: 'none', note: 'PDF engine tidak tersedia' };
+  }
+  let parser = null;
+  try {
+    const data = Buffer.isBuffer(buffer) ? new Uint8Array(buffer) : buffer;
+    parser = new PDFParseClass({ data, verbosity: 0 });
+    const result = await parser.getText();
+    let text = normalizeExtractedText(result?.text || '');
+    const pages = result?.total || result?.pages?.length || null;
+    // pdf-parse v2 menambah penanda "-- N of M --" di tiap halaman.
+    // Untuk PDF 1 halaman penanda itu hanya noise — buang agar akurat & bersih.
+    if (pages === 1) {
+      text = text.replace(/^\s*--\s*1\s+of\s+1\s*--\s*$/gm, '').replace(/\n{3,}/g, '\n\n').trim();
+    }
+    return { text, pages, engine: 'pdfjs', note: '' };
+  } catch (e) {
+    const msg = String(e?.message || e);
+    if (/password|encrypted|decrypt/i.test(msg)) {
+      const err = new Error(`PDF "${originalname}" terproteksi password — buka kunci dulu lalu upload ulang.`);
+      err.code = 'PDF_LOCKED';
+      throw err;
+    }
+    throw new Error(`Gagal membaca PDF: ${msg.slice(0, 200)}`);
+  } finally {
+    try { await parser?.destroy(); } catch { /* abaikan */ }
+  }
+}
+
+// ---------- OCR gambar via tesseract.js (lazy, dengan timeout) ----------
+
+async function ocrImage(buffer, timeoutMs = 25000) {
+  const { default: Tesseract } = await import('tesseract.js');
+  const job = Tesseract.recognize(buffer, 'ind+eng');
+  const timeout = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error('OCR timeout')), timeoutMs)
+  );
+  const result = await Promise.race([job, timeout]);
+  const text = normalizeExtractedText(result?.data?.text || '');
+  return text;
+}
+
+// ---------- Arsip ZIP (daftar + ekstrak file teks di dalamnya) ----------
+
+async function extractZip(buffer, originalname) {
+  const zip = await JSZip.loadAsync(buffer);
+  const names = Object.keys(zip.files).filter((n) => !zip.files[n].dir);
+  if (names.length === 0) return `[Arsip ${originalname}: kosong]`;
+  const textable = names.filter((n) => {
+    const ext = n.split('.').pop().toLowerCase();
+    return TEXT_EXTS.has(ext) || ext === 'txt' || ext === 'md' || ext === 'csv' || ext === 'json';
+  }).slice(0, 20);
+  const parts = [`[Arsip ${originalname}: ${names.length} file]`, ...names.slice(0, 100).map((n) => `- ${n}`)];
+  if (names.length > 100) parts.push(`... dan ${names.length - 100} file lainnya`);
+  const extracted = [];
+  for (const n of textable) {
+    try {
+      const f = zip.file(n);
+      if (!f) continue;
+      const buf = await f.async('nodebuffer');
+      if (buf.length > 500 * 1024) { extracted.push(`\n\n--- ${n} (dilewati: >500KB) ---`); continue; }
+      if (buf.includes(0)) continue; // biner
+      let t = normalizeExtractedText(buf.toString('utf8'));
+      if (t.trim().length < 1) continue;
+      if (t.length > 10000) t = t.slice(0, 10000) + '\n...[dipotong per file]';
+      extracted.push(`\n\n--- ${n} ---\n${t}`);
+    } catch { /* lewati file rusak */ }
+  }
+  return parts.join('\n') + extracted.join('');
+}
+
+/**
+ * Extract text content from uploaded file buffer.
+ * Mengembalikan STRING (kompatibel dengan kode lama).
  */
 async function extractFileContent(buffer, mimetype, originalname) {
-  const ext = originalname.split('.').pop().toLowerCase();
+  const result = await extractFileContentDetailed(buffer, mimetype, originalname);
+  return result.content;
+}
 
-  // Plain text / code files
-  const textTypes = [
-    'text/', 'application/json', 'application/xml',
-    'application/javascript', 'application/typescript',
-    'application/x-yaml', 'application/x-sh',
-  ];
-  const textExts = [
-    'txt','md','csv','json','xml','yaml','yml','js','jsx','ts','tsx',
-    'py','java','cpp','c','cs','html','css','scss','sql','sh','bat',
-    'env','gitignore','toml','ini','cfg','conf','log','rs','go','rb',
-    'php','swift','kt','r','m','h','hpp','vue','svelte',
-  ];
+/**
+ * Versi detail: { content, pages, truncated, charCount, engine }
+ * Dipakai endpoint /api/upload agar frontend dapat metadata akurat.
+ */
+async function extractFileContentDetailed(buffer, mimetype, originalname) {
+  const ext = getFileExt(originalname);
+  const mime = mimetype || '';
+  const kb = (buffer.length / 1024).toFixed(1);
 
-  if (textTypes.some(t => mimetype.startsWith(t)) || textExts.includes(ext)) {
-    const text = buffer.toString('utf8');
-    // Limit to 100K chars to avoid token overflow
-    return text.length > 100000 ? text.slice(0, 100000) + '\n...[truncated]' : text;
+  // Plain text / code — deteksi biner (byte NUL) agar tidak ngaco
+  if (TEXT_EXTS.has(ext) || mime.startsWith('text/') || ['application/json','application/xml','application/javascript','application/typescript','application/x-yaml','application/x-sh'].some((t) => mime.startsWith(t))) {
+    if (buffer.includes(0)) {
+      return { content: `[File: ${originalname}, ${kb}KB. File biner — tidak bisa dibaca sebagai teks.]`, pages: null, truncated: false, charCount: 0, engine: 'none' };
+    }
+    let text = buffer.toString('utf8').replace(/^\uFEFF/, '').replace(/\r\n/g, '\n');
+    text = normalizeExtractedText(text);
+    const { text: out, truncated } = truncateSmart(text);
+    return { content: out, pages: null, truncated, charCount: text.length, engine: 'utf8' };
   }
 
-  // Images - return base64 data URL for vision models
-  if (mimetype.startsWith('image/')) {
-    const b64 = buffer.toString('base64');
-    // Limit image size hint
-    return `[Image file: ${originalname}, size: ${(buffer.length / 1024).toFixed(1)}KB, type: ${mimetype}]\nBase64 data available for vision models.`;
+  // SVG adalah XML teks
+  if (ext === 'svg' || mime === 'image/svg+xml') {
+    const text = normalizeExtractedText(buffer.toString('utf8'));
+    const { text: out, truncated } = truncateSmart(text);
+    return { content: out, pages: null, truncated, charCount: text.length, engine: 'svg' };
   }
 
-  // PDF - extract text using pdf-parse
-  if (mimetype === 'application/pdf' || ext === 'pdf') {
+  // Images — OCR agar teks di dalam gambar tetap terbaca akurat
+  if (mime.startsWith('image/') || ['png','jpg','jpeg','gif','webp','bmp','tiff','tif'].includes(ext)) {
+    if (buffer.length > 8 * 1024 * 1024) {
+      return { content: `[Gambar ${originalname}, ${kb}KB. Terlalu besar untuk OCR (maks 8MB).]`, pages: null, truncated: false, charCount: 0, engine: 'none' };
+    }
     try {
-      const data = await pdfParse(buffer);
-      const text = data.text || '';
-      if (text.trim().length > 50) {
-        return text.length > 80000 ? text.slice(0, 80000) + '\n...[truncated]' : text;
+      const ocr = await ocrImage(buffer);
+      if (ocr.trim().length >= 10) {
+        const { text: out, truncated } = truncateSmart(ocr);
+        return { content: `--- OCR ${originalname} ---\n${out}`, pages: null, truncated, charCount: ocr.length, engine: 'tesseract' };
+      }
+      return { content: `[Gambar ${originalname}, ${kb}KB. Tidak ada teks terdeteksi (OCR kosong).]`, pages: null, truncated: false, charCount: 0, engine: 'tesseract-empty' };
+    } catch {
+      return { content: `[Gambar ${originalname}, ${kb}KB, tipe: ${mime || ext}. OCR gagal — gambar diteruskan sebagai visual saja.]`, pages: null, truncated: false, charCount: 0, engine: 'none' };
+    }
+  }
+
+  // PDF — ekstraksi teks akurat via pdf-parse v2
+  if (mime === 'application/pdf' || ext === 'pdf') {
+    const { text, pages } = await extractPdf(buffer, originalname);
+    if (text.trim().length > 50) {
+      const { text: out, truncated } = truncateSmart(text);
+      const head = pages ? `[PDF ${originalname}: ${pages} halaman, ${text.length.toLocaleString('id-ID')} karakter]\n\n` : '';
+      return { content: head + out, pages, truncated, charCount: text.length, engine: 'pdf-parse-v2' };
+    }
+    if (text.trim().length > 0) {
+      // Sedikit teks (<50 char) — kemungkinan PDF pindaian
+      const head = pages ? `[PDF ${originalname}: ${pages} halaman — tampaknya hasil pindaian (scan), teks minim]\n\n` : '';
+      return { content: head + text + `\n\n[Catatan: PDF ini kemungkinan hasil scan. Untuk hasil akurat, upload versi teks atau jalankan OCR terlebih dulu.]`, pages, truncated: false, charCount: text.length, engine: 'pdf-parse-v2-scan' };
+    }
+    const pageInfo = pages ? ` (${pages} halaman)` : '';
+    return { content: `[PDF ${originalname}${pageInfo}, ${kb}KB. Tidak ada teks yang bisa diekstrak — kemungkinan hasil pindaian (scan) atau terproteksi. Coba: (1) upload versi teks/asli, (2) jalankan OCR, atau (3) pastikan tidak terproteksi password.]`, pages, truncated: false, charCount: 0, engine: 'pdf-empty' };
+  }
+
+  // Office Open XML — DOCX/PPTX/XLSX akurat via JSZip
+  if (['docx','pptx','xlsx'].includes(ext) ||
+      mime.includes('wordprocessingml') ||
+      mime.includes('presentationml') ||
+      mime.includes('spreadsheetml')) {
+    try {
+      let text = '';
+      let engine = '';
+      if (ext === 'docx' || mime.includes('wordprocessingml')) { text = await extractDocx(buffer); engine = 'jszip-docx'; }
+      else if (ext === 'pptx' || mime.includes('presentationml')) { text = await extractPptx(buffer); engine = 'jszip-pptx'; }
+      else { text = await extractXlsx(buffer); engine = 'jszip-xlsx'; }
+      text = normalizeExtractedText(text);
+      if (text.trim().length > 20) {
+        const { text: out, truncated } = truncateSmart(text);
+        return { content: out, pages: null, truncated, charCount: text.length, engine };
       }
     } catch (e) {
-      // fall through to fallback
+      // jatuh ke fallback di bawah
     }
-    return `[PDF file: ${originalname}, ${(buffer.length / 1024).toFixed(1)}KB. Could not extract text automatically.]`;
+    return { content: `[File Office ${originalname}, ${kb}KB. Tidak bisa mengekstrak teks — file mungkin rusak atau kosong.]`, pages: null, truncated: false, charCount: 0, engine: 'office-empty' };
   }
 
-  // Office formats - DOCX/PPTX/XLSX are ZIP-based XML
-  if (['docx','pptx','xlsx'].includes(ext) ||
-      mimetype.includes('wordprocessingml') ||
-      mimetype.includes('presentationml') ||
-      mimetype.includes('spreadsheetml')) {
-    // Try to extract XML text content from Office Open XML
-    const raw = buffer.toString('latin1');
-    const xmlTexts = [];
-    const wTRegex = /<w:t[^>]*>(.*?)<\/w:t>/g;
-    const aTRegex = /<a:t[^>]*>(.*?)<\/a:t>/g;
-    let m;
-    while ((m = wTRegex.exec(raw)) !== null) if (m[1].trim()) xmlTexts.push(m[1]);
-    while ((m = aTRegex.exec(raw)) !== null) if (m[1].trim()) xmlTexts.push(m[1]);
-    if (xmlTexts.length > 0) {
-      const text = xmlTexts.join(' ');
-      return text.length > 80000 ? text.slice(0, 80000) + '\n...[truncated]' : text;
-    }
-    return `[Office file: ${originalname}, ${(buffer.length / 1024).toFixed(1)}KB. Binary format — please convert to text/PDF for full analysis.]`;
+  // Legacy MS Office (OLE: .doc/.xls/.ppt) + ODT/RTF — best effort strings
+  if (['doc','xls','ppt','odt','rtf'].includes(ext) || ['application/msword','application/vnd.ms-excel','application/vnd.ms-powerpoint'].includes(mime)) {
+    try {
+      // .doc legacy menyimpan teks UTF-16LE; coba decode lalu ambil runtunan terbaca
+      const u16 = buffer.toString('utf16le');
+      const latin = buffer.toString('latin1');
+      const collect = (s) => (s.match(/[\p{L}\p{N}\p{P}][\p{L}\p{N}\p{P} ]{3,}/gu) || []).map((x) => x.trim()).filter((x) => x.length >= 4);
+      const cands = [...collect(u16), ...collect(latin)];
+      // Buang sampah biner: hanya simpan yang mayoritas huruf/angka
+      const clean = [...new Set(cands)].filter((s) => {
+        const letters = (s.match(/[\p{L}\p{N}]/gu) || []).length;
+        return letters / Math.max(1, s.length) > 0.5 && s.length < 500;
+      }).slice(0, 2000);
+      const text = normalizeExtractedText(clean.join('\n'));
+      if (text.trim().length > 50) {
+        const { text: out, truncated } = truncateSmart(text);
+        return { content: `[Dokumen lama ${originalname} — ekstraksi best-effort, akurasi tidak 100%]\n\n${out}`, pages: null, truncated, charCount: text.length, engine: 'legacy-strings' };
+      }
+    } catch { /* abaikan */ }
+    return { content: `[Dokumen ${originalname}, ${kb}KB. Format lama (.${ext}) — konversi ke DOCX/PDF agar terbaca 100% akurat.]`, pages: null, truncated: false, charCount: 0, engine: 'legacy-empty' };
   }
 
-  // ZIP / archives
-  if (['zip','tar','gz','rar','7z'].includes(ext)) {
-    return `[Archive file: ${originalname}, ${(buffer.length / 1024).toFixed(1)}KB. Cannot extract archive contents directly.]`;
+  // ZIP / archives — daftar isi + ekstrak file teks di dalamnya
+  if (['zip'].includes(ext) || mime === 'application/zip') {
+    try {
+      const content = await extractZip(buffer, originalname);
+      const { text: out, truncated } = truncateSmart(normalizeExtractedText(content));
+      return { content: out, pages: null, truncated, charCount: content.length, engine: 'jszip' };
+    } catch {
+      return { content: `[Arsip ${originalname}, ${kb}KB. Tidak bisa membaca isi arsip — file mungkin rusak.]`, pages: null, truncated: false, charCount: 0, engine: 'zip-error' };
+    }
+  }
+  if (['tar','gz','tgz','rar','7z'].includes(ext)) {
+    return { content: `[Arsip ${originalname}, ${kb}KB. Format .${ext} belum didukung ekstraksi — kompres sebagai .zip agar bisa dibaca.]`, pages: null, truncated: false, charCount: 0, engine: 'none' };
   }
 
   // Fallback
-  return `[File: ${originalname}, type: ${mimetype}, size: ${(buffer.length / 1024).toFixed(1)}KB. Binary format — content not extractable as text.]`;
+  return { content: `[File: ${originalname}, tipe: ${mime || ext || 'unknown'}, ukuran: ${kb}KB. Format biner — konten tidak bisa diekstrak sebagai teks.]`, pages: null, truncated: false, charCount: 0, engine: 'none' };
 }
 
 app.use(helmet({
@@ -195,11 +592,11 @@ app.use(cors({
   maxAge: 86400,
 }));
 
-app.use(express.json({ limit: '2mb' }));
+app.use(express.json({ limit: '15mb' }));
 
 app.use((err, req, res, next) => {
   if (err.type === 'entity.too.large') {
-    return res.status(413).json({ success: false, error: 'Request body too large. Max 2MB.' });
+    return res.status(413).json({ success: false, error: 'Request body terlalu besar. Maks 15MB. Kurangi ukuran file/lampiran.' });
   }
   if (err.type === 'entity.parse.failed') {
     return res.status(400).json({ success: false, error: 'Invalid JSON in request body.' });
@@ -208,19 +605,45 @@ app.use((err, req, res, next) => {
 });
 
 const rateLimiters = createRateLimiters();
+
+// Trust exactly one hop of proxy when deployed behind IIS/ARR (see web.config),
+// so req.ip reflects the real client rather than the proxy. Set TRUST_PROXY=0
+// when the Node process is exposed directly, otherwise a client could spoof its
+// own address via X-Forwarded-For and evade rate limiting.
+app.set('trust proxy', parseInt(process.env.TRUST_PROXY || '1', 10));
+
 app.use(rateLimiters.global);
+app.use(authMonitor.requestAudit);
 
 const clientDist = path.join(__dirname, '../client/dist');
-app.use(express.static(clientDist, { maxAge: '1h', etag: true }));
+// Hashed assets can be cached hard, but index.html must never be cached —
+// otherwise browsers keep serving an old build after a deploy.
+app.use(express.static(clientDist, {
+  etag: true,
+  setHeaders: (res, filePath) => {
+    if (filePath.endsWith('index.html')) {
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    } else if (/[-.][0-9a-zA-Z_]{8,}\.(js|css)$/.test(path.basename(filePath))) {
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    } else {
+      res.setHeader('Cache-Control', 'public, max-age=3600');
+    }
+  },
+}));
 
 const ctxManager = new ContextManager({
   maxTurns: config.context?.maxTurns || 20,
   maxContextTokens: config.context?.maxContextTokens || 131072,
 });
 
+const MAX_CHAT_MSG_CHARS = 200000;
+
 function sanitize(str) {
   if (typeof str !== 'string') return '';
-  return str.replace(/<[^>]*>/g, '').slice(0, 50000);
+  // JANGAN strip <...> — merusak kode/XML (<div>, Array<string>, dsb).
+  // Frontend sudah escape HTML user (escapeHtml) + sanitasi HTML asisten,
+  // jadi backend cukup buang NUL dan batasi panjang.
+  return str.replace(/\0/g, '').slice(0, MAX_CHAT_MSG_CHARS);
 }
 
 function asyncHandler(fn) {
@@ -240,8 +663,8 @@ function validateChatBody(body) {
     if (!msg.role || !['user', 'assistant', 'system'].includes(msg.role)) {
       return { valid: false, error: 'Invalid message role' };
     }
-    if (typeof msg.content !== 'string' || msg.content.length > 50000) {
-      return { valid: false, error: 'Message content too long (max 50000 chars)' };
+    if (typeof msg.content !== 'string' || msg.content.length > MAX_CHAT_MSG_CHARS) {
+      return { valid: false, error: `Message content too long (max ${MAX_CHAT_MSG_CHARS} chars)` };
     }
   }
   const validProviders = ['openagentic', 'nvidia', 'puter', 'vector'];
@@ -284,19 +707,40 @@ async function saveMessagesToDb(sessionId, messages, newAssistantContent, tokens
 
 // ==================== FILE UPLOAD ENDPOINT ====================
 
-app.post('/api/upload', upload.single('file'), asyncHandler(async (req, res) => {
+// Bungkus multer agar error (tipe file, ukuran, dsb) selalu JSON 400 yang jelas,
+// bukan 500/HTML generik yang membuat frontend hanya tampil "[Failed to read]".
+function handleUpload(req, res, next) {
+  upload.single('file')(req, res, (err) => {
+    if (err) {
+      if (err instanceof multer.MulterError) {
+        if (err.code === 'LIMIT_FILE_SIZE') {
+          return res.status(413).json({ success: false, error: 'File terlalu besar. Maksimal 20MB per file.' });
+        }
+        if (err.code === 'LIMIT_FILE_COUNT' || err.code === 'LIMIT_UNEXPECTED_FILE') {
+          return res.status(400).json({ success: false, error: 'Upload satu file per request (field "file").' });
+        }
+        return res.status(400).json({ success: false, error: `Upload gagal: ${err.message}` });
+      }
+      return res.status(400).json({ success: false, error: err.message || 'Upload gagal' });
+    }
+    next();
+  });
+}
+
+app.post('/api/upload', handleUpload, asyncHandler(async (req, res) => {
   if (!req.file) {
-    return res.status(400).json({ success: false, error: 'No file uploaded' });
+    return res.status(400).json({ success: false, error: 'No file uploaded (field "file" wajib diisi)' });
   }
 
   const { buffer, mimetype, originalname, size } = req.file;
 
   try {
-    const content = await extractFileContent(buffer, mimetype, originalname);
+    const detailed = await extractFileContentDetailed(buffer, mimetype, originalname);
+    const content = detailed.content;
 
-    // For images, also return base64 for potential vision use
+    // For images, also return base64 for potential vision use (batasi 5MB agar respons tidak jumbo)
     let imageData = null;
-    if (mimetype.startsWith('image/')) {
+    if ((mimetype && mimetype.startsWith('image/')) && buffer.length <= 5 * 1024 * 1024) {
       imageData = `data:${mimetype};base64,${buffer.toString('base64')}`;
     }
 
@@ -311,8 +755,15 @@ app.post('/api/upload', upload.single('file'), asyncHandler(async (req, res) => 
       content,
       preview,
       imageData,
+      pages: detailed.pages ?? null,
+      charCount: detailed.charCount ?? content.length,
+      truncated: Boolean(detailed.truncated),
+      engine: detailed.engine || null,
     });
   } catch (err) {
+    if (err.code === 'PDF_LOCKED') {
+      return res.status(422).json({ success: false, error: err.message });
+    }
     res.status(500).json({ success: false, error: `Failed to process file: ${err.message}` });
   }
 }));
@@ -440,16 +891,73 @@ app.delete('/api/sessions/:id', (req, res) => {
   db.deleteSession(req.params.id);
   res.json({ success: true });
 });
-
 app.patch('/api/sessions/:id', (req, res) => {
   const { title } = req.body;
   if (title) db.updateSessionTitle(req.params.id, sanitize(title).slice(0, 200));
   res.json({ success: true });
 });
 
+// ==================== TOOL APPROVAL (HUMAN-IN-THE-LOOP) ====================
+//
+// The agent cannot execute side-effecting tools without a human approval bound
+// to the exact tool + target. These endpoints are the human-facing half of that
+// gate. See src/security/action-gate.js for the model.
+
+/** List the tools that require approval, plus any pending approvals. */
+app.get('/api/tool-approvals', (req, res) => {
+  res.json({
+    success: true,
+    gatedTools: Object.keys(actionGate.GATED_TOOLS),
+    pending: actionGate.listApprovals(),
+    ttlMs: actionGate.config.approvalTtlMs,
+  });
+});
+
+/**
+ * Approve a specific (tool, target) pair.
+ *
+ * The approval is single-use and expires. `target` must match exactly what the
+ * agent will pass, because the gate binds the authorization to it.
+ */
+app.post('/api/tool-approvals', rateLimiters.strict, (req, res) => {
+  const { tool, target, reason } = req.body || {};
+  if (!tool || !target) {
+    return res.status(400).json({ success: false, error: 'tool and target are required' });
+  }
+  if (!actionGate.GATED_TOOLS[tool]) {
+    return res.status(400).json({
+      success: false,
+      error: `Tool "${tool}" is not gated and does not require approval.`,
+    });
+  }
+
+  // Out-of-scope targets are refused at mint time so the operator gets the bad
+  // news immediately instead of after the agent retries and fails.
+  const scope = actionGate.checkTargetScope(tool, target);
+  if (!scope.allowed) {
+    return res.status(403).json({ success: false, error: scope.reason, code: scope.code });
+  }
+
+  const approval = actionGate.mintApproval({
+    tool,
+    target,
+    reason,
+    approvedBy: req.user?.email || req.user?.id || 'operator',
+  });
+  authMonitor.recordAdminAction(req, 'tool_approval_granted', { tool, target });
+  res.status(201).json({ success: true, approval });
+});
+
+/** Revoke a pending approval. */
+app.delete('/api/tool-approvals/:id', (req, res) => {
+  const removed = actionGate.revokeApproval(req.params.id);
+  res.json({ success: removed });
+});
+
+// ==================== END TOOL APPROVAL ====================
+
 app.get('/api/sessions/:id/messages', (req, res) => {
-  const messages = db.getMessages(req.params.id);
-  res.json({ messages });
+  const messages = db.getMessages(req.params.id);  res.json({ messages });
 });
 
 app.post('/api/chat', rateLimiters.chat, asyncHandler(async (req, res) => {
@@ -594,7 +1102,7 @@ app.post('/api/chat/stream', rateLimiters.chat, asyncHandler(async (req, res) =>
   const messages = req.body.messages.map(m => ({ role: m.role, content: sanitize(m.content) }));
   const sessionId = req.body.session_id || null;
 
-  let systemPrompt = WANAR_SYSTEM_PROMPT_WEB;
+  let systemPrompt = req.body.voice ? WANAR_VOICE_PROMPT : WANAR_SYSTEM_PROMPT_WEB;
 
   if (ragEngine.enabled && ragEngine.initialized) {
     const lastUserMsg = messages.filter(m => m.role === 'user').pop();
@@ -655,6 +1163,10 @@ app.post('/api/chat/stream', rateLimiters.chat, asyncHandler(async (req, res) =>
       provider,
       model,
       systemPrompt,
+      voiceMode: Boolean(req.body.voice),
+      voice: Boolean(req.body.voice),
+      // Jawaban suara wajib pendek (1-3 kalimat): batasi output agar stream selesai cepat.
+      maxTokens: req.body.voice ? 2000 : req.body.maxTokens,
       top_p: req.body.top_p ?? 1,
       seed: req.body.seed,
     });
@@ -673,6 +1185,11 @@ app.post('/api/chat/stream', rateLimiters.chat, asyncHandler(async (req, res) =>
         if (!sendEvent('tool_start', { name: chunk.name, args: chunk.args })) break;
       } else if (chunk.type === 'tool_end') {
         if (!sendEvent('tool_end', { name: chunk.name, result: chunk.result })) break;
+      } else if (chunk.type === 'provider_switch') {
+        if (!sendEvent('provider_switch', {
+          from: chunk.from, to: chunk.to, model: chunk.model,
+          reason: chunk.reason, attempt: chunk.attempt, reset: chunk.reset,
+        })) break;
       } else if (chunk.type === 'error') {
         sendEvent('error', { message: chunk.content });
       } else if (chunk.type === 'done') {
@@ -761,7 +1278,7 @@ app.get('/api/tools', (req, res) => {
   res.json({ tools: getToolDefinitions() });
 });
 
-app.post('/api/tools/execute', asyncHandler(async (req, res) => {
+app.post('/api/tools/execute', rateLimiters.strict, asyncHandler(async (req, res) => {
   const { name, args } = req.body;
   if (!name || !args) return res.status(400).json({ error: 'name and args required' });
   const result = await executeTool(name, args);
@@ -774,17 +1291,17 @@ app.get('/api/providers', (req, res) => {
   for (const [name, prov] of Object.entries(providers)) {
     safe[name] = { ...prov, apiKey: prov.apiKey ? '••••••' + prov.apiKey.slice(-4) : null };
   }
-  res.json({ providers: safe });
+  res.json({ providers: safe, failover: aiManager.failover?.stats?.() || null });
 });
 
-app.post('/api/providers/test', asyncHandler(async (req, res) => {
+app.post('/api/providers/test', rateLimiters.strict, asyncHandler(async (req, res) => {
   const { baseUrl, apiKey, model, format } = req.body;
   if (!baseUrl || !apiKey || !model) return res.status(400).json({ success: false, error: 'baseUrl, apiKey, and model required' });
   const result = await providerRegistry.testProviderConnection(baseUrl, apiKey, model, { format });
   res.json(result);
 }));
 
-app.post('/api/providers', asyncHandler(async (req, res) => {
+app.post('/api/providers', rateLimiters.strict, asyncHandler(async (req, res) => {
   const { name, ...provConfig } = req.body;
   if (!name || !provConfig.baseUrl || !provConfig.apiKey) {
     return res.status(400).json({ success: false, error: 'name, baseUrl, and apiKey required' });
@@ -964,25 +1481,30 @@ app.get('/api/health', (req, res) => {
     uptime: process.uptime(),
     tokenLimitReached: limitCheck.blocked,
     providers: {
-      openagentic: { available: aiManager.openagenticProvider.isAvailable(), configured: Boolean(config.openagentic.apiKey) },
-      nvidia: { available: aiManager.nvidiaProvider.isAvailable(), keyCount: aiManager.nvidiaProvider.getKeyCount?.() || 1 },
+      openagentic: { available: Boolean(aiManager.openagenticProvider.isAvailable()), configured: Boolean(config.openagentic.apiKey) },
+      nvidia: { available: Boolean(aiManager.nvidiaProvider.isAvailable()), keyCount: aiManager.nvidiaProvider.getKeyCount?.() || 1 },
     },
     context: {
       maxTurns: config.context?.maxTurns || 20,
     },
     rag: ragEngine.getStats(),
     cluster: coordinator.redisAvailable ? { instances: coordinator.getInstanceCount(), redisConnected: true } : { standalone: true },
+    httpPool: getPoolStats(),
   });
 });
 
 app.get('/api/cluster', (req, res) => {
   const stats = coordinator.getStats();
+  // Never echo a Redis URL that may embed credentials.
+  const redactedRedis = typeof stats.redisUrl === 'string'
+    ? stats.redisUrl.replace(/(:\/\/[^:@/]*):[^@/]*@/, '$1:****@')
+    : stats.redisUrl;
   res.json({
     instanceId: stats.instanceId,
     mode: stats.redisAvailable ? 'distributed' : 'standalone',
     instances: stats.instances,
     instanceList: stats.instanceList,
-    redis: stats.redisUrl,
+    redis: redactedRedis,
   });
 });
 
@@ -1018,6 +1540,8 @@ app.post('/api/auth/google', rateLimiters.auth, asyncHandler(async (req, res) =>
   const { idToken } = req.body;
   if (!idToken) return res.status(400).json({ success: false, error: 'idToken required' });
   const result = await auth.loginWithGoogle(idToken);
+  if (result.success) authMonitor.recordLoginSuccess(req, result.user, 'google');
+  else authMonitor.recordLoginFailure(req, result.error || 'invalid_google_token', undefined, 'google');
   res.status(result.success ? 200 : 401).json(result);
 }));
 
@@ -1025,11 +1549,15 @@ app.post('/api/auth/api-key', rateLimiters.auth, (req, res) => {
   const { apiKey } = req.body;
   if (!apiKey) return res.status(400).json({ success: false, error: 'apiKey required' });
   const user = db.getUserByApiKey(apiKey);
-  if (!user) return res.status(401).json({ success: false, error: 'Invalid API key' });
+  if (!user) {
+    authMonitor.recordLoginFailure(req, 'invalid_api_key', undefined, 'api_key');
+    return res.status(401).json({ success: false, error: 'Invalid API key' });
+  }
+  authMonitor.recordLoginSuccess(req, user, 'api_key');
   const jwtToken = jwt.sign(
     { id: user.id, role: user.role, name: user.name },
     auth.JWT_SECRET_FINAL,
-    { expiresIn: '7d' }
+    { algorithm: auth.JWT_ALGORITHM, expiresIn: '7d' }
   );
   res.json({ success: true, token: jwtToken, user });
 });
@@ -1048,8 +1576,19 @@ app.get('/api/auth/admin/users', rateLimiters.auth, auth.authMiddleware, auth.ad
 app.patch('/api/auth/admin/users/:id/role', rateLimiters.auth, auth.authMiddleware, auth.adminOnly, (req, res) => {
   const { role } = req.body;
   if (!['user', 'admin', 'superadmin'].includes(role)) return res.status(400).json({ error: 'Invalid role' });
-  db.updateUserRole(parseInt(req.params.id), role);
+  const targetId = parseInt(req.params.id);
+  db.updateUserRole(targetId, role);
+  authMonitor.recordAdminAction(req, 'update_user_role', { userId: targetId, role });
   res.json({ success: true });
+});
+
+app.get('/api/auth/admin/security/events', rateLimiters.auth, auth.authMiddleware, auth.adminOnly, (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit) || 50, 500);
+  res.json({
+    success: true,
+    stats: authMonitor.getStats(),
+    events: authMonitor.getRecentEvents(limit),
+  });
 });
 
 // ==================== ANALYTICS API ENDPOINTS ====================
@@ -1208,7 +1747,19 @@ app.post('/api/teams/:teamId/workspaces', enterprise.authMiddleware, enterprise.
 }));
 
 app.delete('/api/teams/:teamId/workspaces/:wsId', enterprise.authMiddleware, enterprise.requireTeamRole('admin'), asyncHandler(async (req, res) => {
-  enterprise.deleteWorkspace(parseInt(req.params.wsId));
+  const teamId = parseInt(req.params.teamId, 10);
+  const wsId = parseInt(req.params.wsId, 10);
+
+  // Authorization must bind the object to the team named in the path. Checking
+  // only that the caller is an admin of *some* team, then deleting by wsId,
+  // lets them delete another team's workspace (IDOR).
+  const teamWorkspaces = enterprise.getWorkspaces(teamId);
+  if (!teamWorkspaces.some((w) => w.id === wsId)) {
+    authMonitor.recordAuthzDenied(req, 'workspace_not_in_team');
+    return res.status(404).json({ success: false, error: 'Workspace not found in this team' });
+  }
+
+  enterprise.deleteWorkspace(wsId);
   res.json({ success: true });
 }));
 
@@ -1246,7 +1797,143 @@ app.get('/api/teams/:teamId/usage', enterprise.authMiddleware, enterprise.requir
 // by Wisnu Alfian Nur Ashar
 // ============================================
 
-app.post('/api/security/scan', asyncHandler(async (req, res) => {
+// Scope authorization: only targets the operator declared as owned may be
+// scanned. This prevents the endpoints from being used as an open mass-scanner.
+function requireInScope(req, res, next) {
+  const target = req.body?.target;
+  if (!target) return res.status(400).json({ success: false, error: 'Target URL required' });
+  const auth = authorizeTarget(target);
+  if (!auth.allowed) {
+    return res.status(403).json({
+      success: false,
+      error: `Target "${auth.host || target}" is out of scope (${auth.reason}).`,
+      reason: auth.reason,
+      hint: auth.hint || 'Add the host to SCAN_ALLOWED_TARGETS to authorize it.',
+      scope: getScope(),
+    });
+  }
+  req.scanScope = auth;
+  next();
+}
+
+app.get('/api/security/scope', (req, res) => {
+  res.json({ success: true, scope: getScope(), loadTestLimits: LOAD_LIMITS });
+});
+
+// Close the visible ("watch") browser window opened by the agent.
+app.post('/api/browser/close', asyncHandler(async (req, res) => {
+  await closeVisibleBrowser();
+  res.json({ success: true });
+}));
+
+// Live state of the visible browser (for voice split-screen panel).
+// Poll dari frontend tiap ~2 detik saat voice call aktif.
+app.get('/api/browser/live', asyncHandler(async (req, res) => {
+  const state = await getLiveBrowserState();
+  res.json({ success: true, ...state });
+}));
+
+// Human-like TTS (opsional, bila ada API key).
+// Prioritas: OpenAI TTS (gpt-4o-mini-tts, suara natural Indonesia-friendly)
+// lalu ElevenLabs (suara paling manusiawi). Tanpa key → 501 agar
+// frontend fallback ke suara natural browser (Microsoft/Google id-ID).
+app.post('/api/voice/tts', asyncHandler(async (req, res) => {
+  const text = String(req.body?.text || '').slice(0, 2000);
+  if (!text.trim()) return res.status(400).json({ success: false, error: 'text required' });
+  const voice = req.body?.voice || 'alloy';
+
+  // 1) OpenAI TTS
+  if (process.env.OPENAI_API_KEY) {
+    try {
+      const r = await fetch('https://api.openai.com/v1/audio/speech', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: process.env.OPENAI_TTS_MODEL || 'gpt-4o-mini-tts',
+          voice: process.env.OPENAI_TTS_VOICE || voice,
+          input: text,
+          response_format: 'mp3',
+        }),
+      });
+      if (r.ok) {
+        const buf = Buffer.from(await r.arrayBuffer());
+        res.setHeader('Content-Type', 'audio/mpeg');
+        return res.send(buf);
+      }
+    } catch { /* fallback below */ }
+  }
+
+  // 2) ElevenLabs (paling manusiawi)
+  if (process.env.ELEVENLABS_API_KEY) {
+    try {
+      const vid = process.env.ELEVENLABS_VOICE_ID || 'pNInz6obpgDQGcFmaJgB';
+      const r = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${vid}`, {
+        method: 'POST',
+        headers: {
+          'xi-api-key': process.env.ELEVENLABS_API_KEY,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          text,
+          model_id: 'eleven_multilingual_v2',
+          voice_settings: { stability: 0.55, similarity_boost: 0.8, style: 0.4 },
+        }),
+      });
+      if (r.ok) {
+        const buf = Buffer.from(await r.arrayBuffer());
+        res.setHeader('Content-Type', 'audio/mpeg');
+        return res.send(buf);
+      }
+    } catch { /* fallback below */ }
+  }
+
+  // 3) Google Translate TTS Bahasa Indonesia — GRATIS, tanpa key.
+  // Kualitas jauh lebih manusiawi daripada suara robot browser.
+  // Client meminta per kalimat (pendek), jadi pas dengan batas endpoint ini.
+  try {
+    const q = text.slice(0, 500);
+    const r = await fetch(
+      `https://translate.google.com/translate_tts?ie=UTF-8&client=gtx&tl=id&q=${encodeURIComponent(q)}`,
+      {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+          'Referer': 'https://translate.google.com/',
+        },
+      }
+    );
+    if (r.ok) {
+      const buf = Buffer.from(await r.arrayBuffer());
+      const ct = r.headers.get('content-type') || '';
+      if (buf.length > 1024 && ct.includes('audio')) {
+        res.setHeader('Content-Type', 'audio/mpeg');
+        return res.send(buf);
+      }
+    }
+  } catch { /* fallback ke suara browser */ }
+
+  return res.status(501).json({
+    success: false,
+    error: 'no_tts_key',
+    hint: 'Isi OPENAI_API_KEY atau ELEVENLABS_API_KEY di .env untuk suara super manusiawi. Sementara pakai suara natural browser (id-ID).',
+  });
+}));
+
+// Bounded load test — capacity measurement with automatic safety abort.
+app.post('/api/security/load-test', rateLimiters.strict, requireInScope, asyncHandler(async (req, res) => {
+  const result = await runLoadTest(req.body || {});
+  res.status(result.success ? 200 : 403).json(result);
+}));
+
+// Rate-limit validation — proves the target's limiter engages (429 + Retry-After).
+app.post('/api/security/rate-limit-test', rateLimiters.strict, requireInScope, asyncHandler(async (req, res) => {
+  const result = await validateRateLimit(req.body || {});
+  res.status(result.success ? 200 : 403).json(result);
+}));
+
+app.post('/api/security/scan', rateLimiters.strict, requireInScope, asyncHandler(async (req, res) => {
   const { target, scanType, modules, aggressive } = req.body;
   
   if (!target) {
@@ -1266,12 +1953,8 @@ app.post('/api/security/scan', asyncHandler(async (req, res) => {
   }
 }));
 
-app.post('/api/security/auth-test', asyncHandler(async (req, res) => {
+app.post('/api/security/auth-test', rateLimiters.strict, requireInScope, asyncHandler(async (req, res) => {
   const { target, username, password, testTypes } = req.body;
-  
-  if (!target) {
-    return res.status(400).json({ success: false, error: 'Target URL required' });
-  }
 
   try {
     const result = await securityScanner.testAuthentication(
@@ -1315,12 +1998,8 @@ app.post('/api/security/dependency-scan', asyncHandler(async (req, res) => {
 }));
 
 // Realtime Security Scan via SSE
-app.post('/api/security/scan/stream', asyncHandler(async (req, res) => {
+app.post('/api/security/scan/stream', rateLimiters.strict, requireInScope, asyncHandler(async (req, res) => {
   const { target, scanType, modules } = req.body;
-
-  if (!target) {
-    return res.status(400).json({ success: false, error: 'Target URL required' });
-  }
 
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
@@ -1759,18 +2438,15 @@ app.get('*', (req, res, next) => {
   }
   const indexPath = path.join(clientDist, 'index.html');
   if (fs.existsSync(indexPath)) {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     return res.sendFile(indexPath);
   }
   return next();
 });
 
 // Deep Attack Stream - Professional Pentest
-app.post('/api/security/attack/stream', asyncHandler(async (req, res) => {
+app.post('/api/security/attack/stream', rateLimiters.strict, requireInScope, asyncHandler(async (req, res) => {
   const { target, scanType } = req.body;
-
-  if (!target) {
-    return res.status(400).json({ success: false, error: 'Target URL required' });
-  }
 
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
@@ -1861,9 +2537,8 @@ app.post('/api/security/report', asyncHandler(async (req, res) => {
 }));
 
 // Professional Attack: Data Extraction
-app.post('/api/security/professional/extract', asyncHandler(async (req, res) => {
+app.post('/api/security/professional/extract', rateLimiters.strict, requireInScope, asyncHandler(async (req, res) => {
   const { target } = req.body;
-  if (!target) return res.status(400).json({ success: false, error: 'Target required' });
 
   try {
     const extraction = await securityScanner.performDeepExtraction(target);
@@ -1935,9 +2610,63 @@ app.post('/api/security/notify', asyncHandler(async (req, res) => {
   }
 }));
 
+// ==================== PROMPT RULE LAB (LOCAL) ====================
+// Local, offline analysis of a rule set (system prompt / persona rules).
+// lint is pure and never touches the network; review asks a model to critique
+// the rule set as inert data (it is instructed never to adopt it).
+
+app.post('/api/prompt-lab/lint', (req, res) => {
+  const { ruleSet } = req.body || {};
+
+  if (typeof ruleSet !== 'string' || !ruleSet.trim()) {
+    return res.status(400).json({ success: false, error: 'ruleSet (string) wajib diisi' });
+  }
+  if (ruleSet.length > MAX_RULE_SET_CHARS) {
+    return res.status(413).json({
+      success: false,
+      error: `ruleSet terlalu panjang (maks ${MAX_RULE_SET_CHARS} karakter)`,
+    });
+  }
+
+  res.json({ success: true, report: lintRuleSet(ruleSet) });
+});
+
+app.post('/api/prompt-lab/review', rateLimiters.chat, asyncHandler(async (req, res) => {
+  const { ruleSet, provider, model } = req.body || {};
+
+  if (typeof ruleSet !== 'string' || !ruleSet.trim()) {
+    return res.status(400).json({ success: false, error: 'ruleSet (string) wajib diisi' });
+  }
+  if (ruleSet.length > MAX_RULE_SET_CHARS) {
+    return res.status(413).json({
+      success: false,
+      error: `ruleSet terlalu panjang (maks ${MAX_RULE_SET_CHARS} karakter)`,
+    });
+  }
+
+  const report = lintRuleSet(ruleSet);
+
+  let aiReview;
+  try {
+    aiReview = await reviewRuleSetWithAI(ruleSet, { aiManager, provider, model });
+  } catch (error) {
+    aiReview = { available: false, error: error.message };
+  }
+
+  res.json({ success: true, report, aiReview });
+}));
+
 app.use((err, req, res, next) => {
   console.error('[ERROR]', err.stack || err.message);
   if (res.headersSent) return next(err);
+  // Jangan sembunyikan error upload/multer di balik 500 generik.
+  if (err instanceof multer.MulterError) {
+    const status = err.code === 'LIMIT_FILE_SIZE' ? 413 : 400;
+    return res.status(status).json({ success: false, error: err.message });
+  }
+  if (err && /File type|Invalid filename|Filename/i.test(err.message || '')) {
+    return res.status(400).json({ success: false, error: err.message });
+  }
   res.status(500).json({ success: false, error: 'Internal server error' });
 });
 
@@ -1976,9 +2705,23 @@ async function startServer() {
   console.log(`RAG       : ${config.rag?.enabled ? 'Enabled' : 'Disabled'}\n`);
   console.log('Press Ctrl+C to stop\n');
   console.log(`Cluster   : ${coordinator.redisAvailable ? `Distributed (${coordinator.getInstanceCount()} instances)` : 'Standalone'}\n`);
+
+  // Pre-warm browser pool di background agar browser_open pertama cepat.
+  import('./tools/browser-pool.js').then(async ({ warmPool }) => {
+    try {
+      const ok = await warmPool();
+      console.log(`Browser    : pool ${ok ? 'warm' : 'disabled'}`);
+    } catch (e) {
+      console.log(`Browser    : pool warmup gagal (${e.message})`);
+    }
+  }).catch(() => {});
   });
 }
 
 export default app;
 
-startServer();
+// Jangan auto-listen saat diimpor oleh test (vitest) — hanya saat dijalankan langsung.
+// Vitest menyetel process.env.VITEST='true'.
+if (!process.env.VITEST && process.env.NODE_ENV !== 'test') {
+  startServer();
+}

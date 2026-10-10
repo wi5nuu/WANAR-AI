@@ -2,7 +2,7 @@
  * Wanar AI - Full-Stack Project Generator Engine
  * Generates complete runnable projects file-by-file using any configured AI provider.
  *
- * @author Wisnu Alfian Nur Ashar & Siti Nurfadhila Az Zahra Syam
+ * @author Wisnu Alfian Nur Ashar
  */
 
 import fs from 'fs';

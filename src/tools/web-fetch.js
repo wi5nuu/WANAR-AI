@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { checkOutboundUrl, getSafeAgents } from '../security/ssrf-guard.js';
 import { convert } from 'html-to-text';
 
 // ============================================
@@ -75,13 +76,28 @@ async function webFetch(args) {
     };
   }
 
+  // SSRF guard: refuse anything that resolves to loopback, private, link-local,
+  // or cloud-metadata space. This is the control that stops the agent (or a
+  // prompt-injected page) from using this tool to reach internal services or
+  // steal cloud credentials.
+  const safety = await checkOutboundUrl(validUrl.toString());
+  if (!safety.allowed) {
+    return {
+      error: 'URL blocked by SSRF guard',
+      details: `Refused to fetch: ${safety.reason}. Only public internet hosts are allowed.`,
+    };
+  }
+
   try {
-    // Fetch content
+    // Fetch content. The custom agents re-validate the peer address at connect
+    // time, so a redirect (or a DNS rebind) cannot smuggle us onto a private
+    // address after the pre-flight check above passed.
     const response = await axios({
       method: 'GET',
       url: validUrl.toString(),
       timeout: timeout * 1000,
       maxRedirects: follow_redirects ? 5 : 0,
+      ...getSafeAgents(),
       validateStatus: (status) => status < 500, // Accept redirects and client errors
       headers: {
         'User-Agent': 'Wanar-AI/1.0.1 (Research Bot)',

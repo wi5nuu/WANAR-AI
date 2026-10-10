@@ -5,7 +5,10 @@
 
 import { useMemo, useState, useRef, useEffect } from 'react';
 import { marked } from 'marked';
-import hljs from 'highlight.js';
+// Use the "common" build (~37 popular languages) instead of the full highlight.js
+// bundle (190+ languages, ~900 kB). Covers JS/TS/Python/JSON/bash/SQL/etc.; any
+// unknown language falls back to highlightAuto over the registered set.
+import hljs from 'highlight.js/lib/common';
 
 // Configure marked for better markdown rendering
 marked.setOptions({
@@ -89,13 +92,25 @@ export default function MessageBubble({ msg, index, onEdit, processing }) {
     if (isUser) {
       return `<p>${escapeHtml(msg.content).replace(/\n/g, '<br>')}</p>`;
     }
-    return marked.parse(msg.content || '');
+    return sanitizeAssistantHtml(marked.parse(msg.content || ''));
   }, [msg.content, isUser, editing]);
 
-  // Format timestamp
-  const timestamp = msg.timestamp 
-    ? new Date(msg.timestamp).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })
-    : '';
+  // Format timestamp: jam + tanggal (hanya tanggal shown jika bukan hari ini)
+  const { timeLabel, showDate, dateLabel } = useMemo(() => {
+    if (!msg.timestamp) return { timeLabel: '', showDate: false, dateLabel: '' };
+    const d = new Date(msg.timestamp);
+    if (isNaN(d.getTime())) return { timeLabel: '', showDate: false, dateLabel: '' };
+    const time = d.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+    const today = new Date();
+    const isToday = d.toDateString() === today.toDateString();
+    const yesterday = new Date(today); yesterday.setDate(today.getDate() - 1);
+    const isYesterday = d.toDateString() === yesterday.toDateString();
+    let date = '';
+    if (isToday) date = 'Hari ini';
+    else if (isYesterday) date = 'Kemarin';
+    else date = d.toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: d.getFullYear() !== today.getFullYear() ? 'numeric' : undefined });
+    return { timeLabel: time, showDate: !isToday, dateLabel: date };
+  }, [msg.timestamp]);
 
   return (
     <div className={`message ${isUser ? 'user' : 'assistant'}`}>
@@ -125,8 +140,11 @@ export default function MessageBubble({ msg, index, onEdit, processing }) {
           <span className="message-role">
             {isUser ? 'You' : 'Wanar AI'}
           </span>
-          {timestamp && (
-            <span className="message-time">{timestamp}</span>
+          {(timeLabel || showDate) && (
+            <span className="message-time" title={dateLabel ? `${dateLabel} · ${timeLabel}` : timeLabel}>
+              {showDate && <span className="message-date">{dateLabel}</span>}
+              {timeLabel}
+            </span>
           )}
         </div>
 
@@ -293,15 +311,18 @@ function escapeHtml(text) {
   return div.innerHTML;
 }
 
-// Add hover effect to show actions
-if (typeof document !== 'undefined') {
-  document.addEventListener('DOMContentLoaded', () => {
-    const style = document.createElement('style');
-    style.textContent = `
-      .message:hover .message-actions {
-        opacity: 1 !important;
-      }
-    `;
-    document.head.appendChild(style);
-  });
+/**
+ * Sanitasi HTML hasil markdown model agar tidak bisa XSS.
+ * Menghapus <script>/<iframe>/<object>/<embed>, event handler on*,
+ * dan javascript:/data:text/html URL.
+ */
+function sanitizeAssistantHtml(html) {
+  if (typeof html !== 'string' || !html) return '';
+  let out = String(html);
+  out = out.replace(/<(script|iframe|object|embed|form|base|link|meta)[^>]*>[\s\S]*?<\/\1\s*>/gi, '');
+  out = out.replace(/<(script|iframe|object|embed|form|base|link|meta)[^>]*\/?>/gi, '');
+  out = out.replace(/\s+on[a-z]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, '');
+  out = out.replace(/(href|src|xlink:href)\s*=\s*("|\')\s*javascript:[^"']*("|\')/gi, '$1="#"');
+  out = out.replace(/(href|src)\s*=\s*("|\')\s*data:text\/html[^"']*("|\')/gi, '$1="#"');
+  return out;
 }

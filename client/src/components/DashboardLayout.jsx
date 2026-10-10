@@ -39,6 +39,18 @@ const PentestIcon = ({ color }) => (
   </svg>
 );
 
+const VoiceIcon = ({ color }) => (
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z" fill={color}/>
+  </svg>
+);
+
+const LabIcon = ({ color }) => (
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path d="M19.8 18.4L14 10.67V6.5l1.35-1.69c.26-.33.03-.81-.39-.81H9.04c-.42 0-.65.48-.39.81L10 6.5v4.17L4.2 18.4c-.49.66-.02 1.6.8 1.6h14c.82 0 1.29-.94.8-1.6z" fill={color}/>
+  </svg>
+);
+
 export default function DashboardLayout({ children }) {
   const navigate = useNavigate();
   const location = useLocation();
@@ -52,9 +64,11 @@ export default function DashboardLayout({ children }) {
 
   const menuItems = [
     { path: '/', label: 'Chat', icon: ChatIcon },
+    { path: '/voice', label: 'Voice Talk', icon: VoiceIcon },
     { path: '/dashboard', label: 'Analytics', icon: AnalyticsIcon },
     { path: '/security', label: 'Security', icon: SecurityIcon },
     { path: '/security/professional', label: 'Pentest', icon: PentestIcon },
+    { path: '/prompt-lab', label: 'Rule Lab', icon: LabIcon },
     { path: '/settings', label: 'Settings', icon: SettingsIcon },
     { path: '/profile', label: 'Profile', icon: ProfileIcon },
   ];

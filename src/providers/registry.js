@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { checkOutboundUrl } from '../security/ssrf-guard.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REGISTRY_PATH = path.join(__dirname, '..', '..', 'data', 'provider-registry.json');
@@ -30,6 +31,19 @@ function saveRegistry() {
 
 export async function testProviderConnection(baseUrl, apiKey, model, options = {}) {
   const signal = AbortSignal.timeout(15000);
+
+  // SSRF guard. `baseUrl` arrives from a request body (POST /api/providers/test)
+  // and is otherwise unvalidated, so it could point at internal services or the
+  // cloud metadata endpoint and turn this into a credential-exfiltration proxy.
+  const safety = await checkOutboundUrl(baseUrl);
+  if (!safety.allowed) {
+    return {
+      success: false,
+      error: `Provider baseUrl blocked by SSRF guard: ${safety.reason}`,
+      code: 'SSRF_BLOCKED',
+    };
+  }
+
   try {
     const testMessages = [{ role: 'user', content: 'Hi, respond with exactly: OK' }];
 
@@ -103,6 +117,18 @@ export async function addProvider(name, config_) {
   const reg = loadRegistry();
   if (reg[name]) {
     return { success: false, error: `Provider "${name}" already exists` };
+  }
+
+  // Validate the URL BEFORE the optional connection test. Skipping this would
+  // let a caller pass `requireValidation:false` and persist a baseUrl aimed at
+  // an internal service, which the chat path would then happily call.
+  const safety = await checkOutboundUrl(config_.baseUrl);
+  if (!safety.allowed) {
+    return {
+      success: false,
+      error: `Provider baseUrl blocked by SSRF guard: ${safety.reason}`,
+      code: 'SSRF_BLOCKED',
+    };
   }
 
   const testResult = await testProviderConnection(

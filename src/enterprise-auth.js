@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
 import db from './database.js';
-import { JWT_SECRET_FINAL as JWT_SECRET } from './auth.js';
+import { JWT_SECRET_FINAL as JWT_SECRET, JWT_ALGORITHM } from './auth.js';
 
 /**
  * Enterprise Authentication Module
@@ -85,7 +85,7 @@ export function createToken(user, extra = {}) {
   return jwt.sign(
     { id: user.id, role: user.role, name: user.name, email: user.email, ...extra },
     JWT_SECRET,
-    { expiresIn: '7d' }
+    { algorithm: JWT_ALGORITHM, expiresIn: '7d' }
   );
 }
 
@@ -95,8 +95,10 @@ export function createToken(user, extra = {}) {
  * @returns {object|null} Decoded token payload or null if invalid
  */
 export function verifyToken(token) {
+  if (typeof token !== 'string' || !token) return null;
   try {
-    return jwt.verify(token, JWT_SECRET);
+    // Algorithm is pinned to prevent algorithm-confusion attacks.
+    return jwt.verify(token, JWT_SECRET, { algorithms: [JWT_ALGORITHM] });
   } catch {
     return null;
   }

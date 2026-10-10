@@ -6,7 +6,7 @@
  * @version 2.0.0
  */
 
-import axios from 'axios';
+import axios from './http-client.js';
 import BaseProvider from './base-provider.js';
 import config from '../../config/config.js';
 

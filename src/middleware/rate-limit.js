@@ -2,11 +2,17 @@ import coordinator from '../distributed.js';
 
 const localCounters = new Map();
 
+/**
+ * Derives the rate-limit bucket key.
+ *
+ * Deliberately uses `req.ip`, NOT the raw `x-forwarded-for` header. A client can
+ * send any value it likes in that header, so trusting it directly lets an
+ * attacker rotate the value per request and bypass every limit. `req.ip`
+ * honours the `trust proxy` setting, so it is only influenced by a proxy we
+ * have explicitly declared as trusted.
+ */
 function defaultKeyGenerator(req) {
-  return req.headers['x-forwarded-for']?.split(',')[0]?.trim()
-    || req.socket.remoteAddress
-    || req.ip
-    || 'unknown';
+  return req.ip || req.socket?.remoteAddress || 'unknown';
 }
 
 export function distributedRateLimit(options = {}) {

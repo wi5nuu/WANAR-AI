@@ -3,15 +3,45 @@
  * by Wisnu Alfian Nur Ashar
  */
 
-export default function Header({ 
-  sidebarOpen, 
-  onToggleSidebar, 
-  onThemeToggle, 
+import { useState, useRef, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
+
+const APPS_MENU = [
+  { path: '/dashboard', label: 'Analytics', desc: 'Statistik pemakaian' },
+  { path: '/voice', label: 'Voice Talk', desc: 'Ngobrol suara dengan AI' },
+  { path: '/generator', label: 'Project Generator', desc: 'Generate project dengan AI' },
+  { path: '/job-agent', label: 'Job Agent', desc: 'Scan & apply lowongan' },
+  { path: '/profile', label: 'Profil', desc: 'Data diri & lamaran' },
+  { path: '/security', label: 'Security Testing', desc: 'Uji keamanan web' },
+  { path: '/settings', label: 'Settings', desc: 'Pengaturan' },
+];
+
+export default function Header({
+  sidebarOpen,
+  onToggleSidebar,
+  onThemeToggle,
   theme,
   connected = true,
   provider = '',
   model = ''
 }) {
+  const navigate = useNavigate();
+  const [appsOpen, setAppsOpen] = useState(false);
+  const appsRef = useRef(null);
+
+  useEffect(() => {
+    if (!appsOpen) return;
+    const onDown = (e) => {
+      if (appsRef.current && !appsRef.current.contains(e.target)) setAppsOpen(false);
+    };
+    const onKey = (e) => { if (e.key === 'Escape') setAppsOpen(false); };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [appsOpen]);
   return (
     <header className="header">
       <div className="header-left">
@@ -45,7 +75,7 @@ export default function Header({
             Wanar AI v1.0.5
           </div>
           <div className="header-subtitle">
-            by Wisnu Alfian Nur Ashar & Siti Nurfadhila Az Zahra Syam
+            by Wisnu Alfian Nur Ashar
           </div>
         </div>
       </div>
@@ -65,9 +95,9 @@ export default function Header({
         )}
         
         {/* Theme Toggle */}
-        <button 
-          className="header-theme-toggle" 
-          onClick={onThemeToggle} 
+        <button
+          className="header-theme-toggle"
+          onClick={onThemeToggle}
           title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
           aria-label="Toggle theme"
         >
@@ -89,6 +119,39 @@ export default function Header({
             </svg>
           )}
         </button>
+
+        {/* Menu fitur lain — disamarkan jadi satu tombol ⋯ */}
+        <div className="header-apps" ref={appsRef}>
+          <button
+            className="header-apps-btn"
+            onClick={() => setAppsOpen(o => !o)}
+            aria-label="Menu fitur lainnya"
+            title="Fitur lainnya"
+            aria-expanded={appsOpen}
+            aria-haspopup="menu"
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+              <circle cx="5" cy="12" r="1.8"/>
+              <circle cx="12" cy="12" r="1.8"/>
+              <circle cx="19" cy="12" r="1.8"/>
+            </svg>
+          </button>
+          {appsOpen && (
+            <div className="header-apps-menu" role="menu">
+              {APPS_MENU.map(item => (
+                <button
+                  key={item.path}
+                  className="header-apps-item"
+                  role="menuitem"
+                  onClick={() => { setAppsOpen(false); navigate(item.path); }}
+                >
+                  <span className="header-apps-item-label">{item.label}</span>
+                  <span className="header-apps-item-desc">{item.desc}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
     </header>
   );

@@ -12,80 +12,107 @@ const config = {
   openagentic: {
     apiKey: process.env.OPENAGENTIC_API_KEY,
     baseUrl: process.env.OPENAGENTIC_BASE_URL || 'https://openagentic.id/api/v1',
-    defaultModel: process.env.OPENAGENTIC_DEFAULT_MODEL || 'claude-sonnet-4-5',
+    defaultModel: process.env.OPENAGENTIC_DEFAULT_MODEL || 'deepseek-v4.1-flash-free',
+    // Disinkronkan dengan live API (GET /models). CATATAN: ID gateway memakai TITIK (claude-sonnet-4.6),
+    // bukan dash (claude-sonnet-4-6). Ketersediaan per model bergantung plan yang aktif di akun.
+    // Untuk daftar real-time sesuai plan: GET {baseUrl}/models atau endpoint /api/models/live.
     models: [
       // ===== Anthropic Claude =====
-      { id: 'claude-sonnet-4-5',        label: 'Claude Sonnet 4.5',           family: 'Anthropic', rec: true, tags: ['Unlimited', 'Coding', 'Reasoning', '200K Context'] },
-      { id: 'claude-sonnet-4-5-20251101', label: 'Claude Sonnet 4.5 (Nov)',   family: 'Anthropic', tags: ['Latest', 'Coding'] },
-      { id: 'claude-sonnet-4-6',        label: 'Claude Sonnet 4.6',           family: 'Anthropic', tags: ['Latest', 'Coding', 'Reasoning'] },
-      { id: 'claude-sonnet-4-5-1m',     label: 'Claude Sonnet 4.5 (1M)',      family: 'Anthropic', tags: ['Long Context', '1M Tokens'] },
-      { id: 'claude-sonnet-4',          label: 'Claude Sonnet 4',             family: 'Anthropic', tags: ['Stable', 'Balanced'] },
-      { id: 'claude-opus-4-5',          label: 'Claude Opus 4.5',             family: 'Anthropic', rec: true, tags: ['Most Capable', 'Deep Analysis'] },
-      { id: 'claude-opus-4',            label: 'Claude Opus 4',               family: 'Anthropic', tags: ['Powerful', 'Complex Tasks'] },
-      { id: 'claude-haiku-4-5',         label: 'Claude Haiku 4.5',            family: 'Anthropic', tags: ['Fast', 'Lightweight', 'Budget'] },
-      { id: 'claude-3-5-sonnet-20241022', label: 'Claude 3.5 Sonnet',         family: 'Anthropic', rec: true, tags: ['Coding', 'Fast', 'Stable'] },
-      { id: 'claude-3-5-haiku-20241022',  label: 'Claude 3.5 Haiku',          family: 'Anthropic', tags: ['Fast', 'Budget', 'Lightweight'] },
-      { id: 'claude-3-opus-20240229',     label: 'Claude 3 Opus',             family: 'Anthropic', tags: ['Deep Analysis', 'Stable'] },
+      { id: 'claude-sonnet-4.6',        label: 'Claude Sonnet 4.6',           family: 'Anthropic', rec: true, tags: ['Latest', 'Coding', 'Reasoning'], contextWindow: 1000000, maxOutput: 64000 },
+      { id: 'claude-opus-4.8',          label: 'Claude Opus 4.8',             family: 'Anthropic', rec: true, tags: ['Most Capable', 'Deep Analysis'], contextWindow: 1000000, maxOutput: 65000 },
+      { id: 'claude-opus-4.8-thinking', label: 'Claude Opus 4.8 Thinking',    family: 'Anthropic', tags: ['Reasoning', 'Extended Thinking'], contextWindow: 1000000, maxOutput: 65000 },
+      { id: 'claude-opus-5',            label: 'Claude Opus 5',               family: 'Anthropic', tags: ['Newest', 'Frontier'], contextWindow: 1000000, maxOutput: 65000 },
 
       // ===== OpenAI GPT =====
-      { id: 'gpt-4.5',                  label: 'GPT-4.5',                     family: 'OpenAI', rec: true, tags: ['Latest', 'Multimodal', 'Tool Calling'] },
-      { id: 'gpt-4.1',                  label: 'GPT-4.1',                     family: 'OpenAI', tags: ['Balanced', 'Tool Calling'] },
-      { id: 'gpt-4.1-mini',             label: 'GPT-4.1 Mini',                family: 'OpenAI', tags: ['Fast', 'Budget'] },
-      { id: 'gpt-4.1-nano',             label: 'GPT-4.1 Nano',                family: 'OpenAI', tags: ['Ultra Fast', 'Budget'] },
-      { id: 'gpt-4o',                   label: 'GPT-4o',                      family: 'OpenAI', rec: true, tags: ['Fast', 'Multimodal', '128K'] },
-      { id: 'gpt-4o-mini',              label: 'GPT-4o Mini',                 family: 'OpenAI', tags: ['Fast', 'Cheap'] },
-      { id: 'gpt-4-turbo',              label: 'GPT-4 Turbo',                 family: 'OpenAI', tags: ['Powerful', '128K'] },
-      { id: 'o3',                       label: 'o3',                          family: 'OpenAI', rec: true, tags: ['Reasoning', 'Advanced'] },
-      { id: 'o3-mini',                  label: 'o3 Mini',                     family: 'OpenAI', tags: ['Reasoning', 'Fast', 'Coding'] },
-      { id: 'o4-mini',                  label: 'o4 Mini',                     family: 'OpenAI', tags: ['Reasoning', 'Latest', 'Coding'] },
-      { id: 'o1',                       label: 'o1',                          family: 'OpenAI', tags: ['Reasoning', 'Deep Analysis'] },
-      { id: 'o1-mini',                  label: 'o1 Mini',                     family: 'OpenAI', tags: ['Reasoning', 'Fast'] },
+      { id: 'gpt-5.6-luna',             label: 'GPT-5.6 Luna',                family: 'OpenAI', rec: true, tags: ['Latest', 'Multimodal'], contextWindow: 1000000, maxOutput: 65000 },
+      { id: 'gpt-5.6-sol',              label: 'GPT-5.6 Sol',                 family: 'OpenAI', tags: ['Fast', 'Multimodal'], contextWindow: 1000000, maxOutput: 65000 },
+      { id: 'gpt-5.6-terra',            label: 'GPT-5.6 Terra',               family: 'OpenAI', tags: ['Balanced', 'Multimodal'], contextWindow: 1000000, maxOutput: 65000 },
 
       // ===== Google Gemini =====
-      { id: 'gemini-2.5-pro',           label: 'Gemini 2.5 Pro',              family: 'Google', rec: true, tags: ['Latest', 'Powerful', '2M Context'] },
-      { id: 'gemini-2.5-flash',         label: 'Gemini 2.5 Flash',            family: 'Google', rec: true, tags: ['Fast', 'Latest', '2M Context'] },
-      { id: 'gemini-2.0-flash',         label: 'Gemini 2.0 Flash',            family: 'Google', tags: ['Fast', '1M Context'] },
-      { id: 'gemini-2.0-flash-thinking', label: 'Gemini 2.0 Flash Thinking',  family: 'Google', tags: ['Reasoning', 'Thinking'] },
-      { id: 'gemini-1.5-pro',           label: 'Gemini 1.5 Pro',              family: 'Google', tags: ['Stable', '2M Context'] },
-      { id: 'gemini-1.5-flash',         label: 'Gemini 1.5 Flash',            family: 'Google', tags: ['Fast', '1M Context'] },
-
-      // ===== xAI Grok =====
-      { id: 'grok-3',                   label: 'Grok 3',                      family: 'xAI', rec: true, tags: ['Powerful', 'Reasoning'] },
-      { id: 'grok-3-mini',              label: 'Grok 3 Mini',                 family: 'xAI', tags: ['Fast', 'Budget'] },
-      { id: 'grok-2',                   label: 'Grok 2',                      family: 'xAI', tags: ['Stable', 'Fast'] },
-
-      // ===== Meta Llama =====
-      { id: 'llama-4-maverick',         label: 'Llama 4 Maverick',            family: 'Meta', rec: true, tags: ['Latest', 'Multimodal'] },
-      { id: 'llama-4-scout',            label: 'Llama 4 Scout',               family: 'Meta', tags: ['Fast', 'Efficient'] },
-      { id: 'llama-3.3-70b-instruct',   label: 'Llama 3.3 70B',              family: 'Meta', tags: ['Open Source', 'Reasoning'] },
-      { id: 'llama-3.1-405b-instruct',  label: 'Llama 3.1 405B',             family: 'Meta', tags: ['Open Source', 'Powerful'] },
-      { id: 'llama-3.1-70b-instruct',   label: 'Llama 3.1 70B',              family: 'Meta', tags: ['Open Source', 'Balanced'] },
-      { id: 'llama-3.1-8b-instruct',    label: 'Llama 3.1 8B',               family: 'Meta', tags: ['Fast', 'Budget'] },
+      { id: 'gemini-3.5-flash',         label: 'Gemini 3.5 Flash',            family: 'Google', rec: true, tags: ['Fast', 'Latest'], contextWindow: 1000000, maxOutput: 65536 },
+      { id: 'gemini-3.1-pro',           label: 'Gemini 3.1 Pro',              family: 'Google', rec: true, tags: ['Powerful', 'Reasoning'], contextWindow: 1000000, maxOutput: 65536 },
+      { id: 'gemini-3.8-flash-high',    label: 'Gemini 3.8 Flash High',       family: 'Google', tags: ['Fast', 'High Quality'], contextWindow: 1000000, maxOutput: 65536 },
 
       // ===== DeepSeek =====
-      { id: 'deepseek-v3',              label: 'DeepSeek V3',                 family: 'DeepSeek', rec: true, tags: ['Coding', 'Reasoning', 'MoE'] },
-      { id: 'deepseek-v3-0324',         label: 'DeepSeek V3 (Mar 24)',        family: 'DeepSeek', tags: ['Coding', 'Latest'] },
-      { id: 'deepseek-r1',              label: 'DeepSeek R1',                 family: 'DeepSeek', rec: true, tags: ['Reasoning', 'Math', 'Chain-of-Thought'] },
-      { id: 'deepseek-r1-0528',         label: 'DeepSeek R1 (May 28)',        family: 'DeepSeek', tags: ['Reasoning', 'Latest'] },
-      { id: 'deepseek-r1-distill-llama-70b', label: 'DeepSeek R1 Distill 70B', family: 'DeepSeek', tags: ['Reasoning', 'Fast'] },
-
-      // ===== Mistral =====
-      { id: 'mistral-large-2',          label: 'Mistral Large 2',             family: 'Mistral', rec: true, tags: ['Powerful', 'Multilingual', 'Tool Calling'] },
-      { id: 'mistral-small-3',          label: 'Mistral Small 3',             family: 'Mistral', tags: ['Fast', 'Efficient'] },
-      { id: 'codestral',                label: 'Codestral',                   family: 'Mistral', tags: ['Coding', 'Fill-in-the-Middle'] },
-      { id: 'mixtral-8x22b-instruct',   label: 'Mixtral 8x22B',              family: 'Mistral', tags: ['MoE', 'Powerful'] },
+      { id: 'deepseek-v4-flash',        label: 'DeepSeek V4 Flash',           family: 'DeepSeek', rec: true, tags: ['Coding', 'Fast'], contextWindow: 1000000, maxOutput: 65536 },
+      { id: 'deepseek-v4-flash-free',   label: 'DeepSeek V4 Flash (Free)',    family: 'DeepSeek', tags: ['FREE', 'Coding', 'Fast'], contextWindow: 1000000, maxOutput: 65536 },
+      { id: 'deepseek-v4-flash-0731',   label: 'DeepSeek V4 Flash 0731',      family: 'DeepSeek', tags: ['Coding', 'Fast'], contextWindow: 1000000, maxOutput: 65536 },
+      { id: 'deepseek-v4-flash-vision-exp', label: 'DeepSeek V4 Flash Vision', family: 'DeepSeek', tags: ['Vision', 'Experimental'], contextWindow: 1000000, maxOutput: 65536 },
+      { id: 'deepseek-v4.1-flash-free', label: 'DeepSeek V4.1 Flash (Free)',  family: 'DeepSeek', tags: ['FREE', 'Coding', 'Fast'], contextWindow: 1000000, maxOutput: 65536 },
+      { id: 'deepseek-v4-pro-0813',     label: 'DeepSeek V4 Pro',             family: 'DeepSeek', tags: ['Coding', 'Powerful'], contextWindow: 1000000, maxOutput: 65536 },
 
       // ===== Qwen / Alibaba =====
-      { id: 'qwen3-235b-a22b',          label: 'Qwen3 235B MoE',             family: 'Alibaba', rec: true, tags: ['Latest', 'MoE', 'Reasoning'] },
-      { id: 'qwen3-32b',                label: 'Qwen3 32B',                  family: 'Alibaba', tags: ['Reasoning', 'Coding'] },
-      { id: 'qwen2.5-72b-instruct',     label: 'Qwen2.5 72B',               family: 'Alibaba', tags: ['Coding', 'Multilingual'] },
-      { id: 'qwen2.5-coder-32b-instruct', label: 'Qwen2.5 Coder 32B',       family: 'Alibaba', tags: ['Coding', 'Specialized'] },
+      { id: 'qwen3.8-flash-free',       label: 'Qwen3.8 Flash (Free)',        family: 'Alibaba', tags: ['FREE', 'Fast'], contextWindow: 1000000, maxOutput: 65536 },
+      { id: 'qwen3.8-max',              label: 'Qwen3.8 Max',                 family: 'Alibaba', rec: true, tags: ['Powerful'], contextWindow: 1000000, maxOutput: 65000 },
+      { id: 'qwen3.7-max',              label: 'Qwen3.7 Max',                 family: 'Alibaba', tags: ['Powerful'], contextWindow: 1000000, maxOutput: 65000 },
+      { id: 'qwen3.6-plus',             label: 'Qwen3.6 Plus',                family: 'Alibaba', tags: ['Balanced'], contextWindow: 1000000, maxOutput: 65536 },
 
-      // ===== Microsoft =====
-      { id: 'phi-4',                    label: 'Phi-4',                       family: 'Microsoft', tags: ['Efficient', 'Reasoning', 'Lightweight'] },
-      { id: 'phi-4-mini',               label: 'Phi-4 Mini',                  family: 'Microsoft', tags: ['Ultra Fast', 'Budget'] },
+      // ===== Moonshot Kimi =====
+      { id: 'kimi-k3',                  label: 'Kimi K3',                     family: 'Moonshot', rec: true, tags: ['Long Context', 'Coding'], contextWindow: 1000000 },
+      { id: 'kimi-k3-high',             label: 'Kimi K3 High',                family: 'Moonshot', tags: ['Long Context', 'High Quality'], contextWindow: 1000000 },
+      { id: 'kimi-k3-low',              label: 'Kimi K3 Low',                 family: 'Moonshot', tags: ['Long Context', 'Fast'], contextWindow: 1000000 },
+      { id: 'kimi-k2.7-code',           label: 'Kimi K2.7 Code',              family: 'Moonshot', tags: ['Coding'], contextWindow: 1000000 },
+
+      // ===== Mistral / MiniMax / Muse Spark =====
+      { id: 'mistral-large-3',          label: 'Mistral Large 3',             family: 'Mistral', tags: ['Powerful', 'Reasoning'], contextWindow: 256000 },
+      { id: 'minimax-m3-free',          label: 'MiniMax M3 (Free)',           family: 'MiniMax', tags: ['FREE', 'Fast'], contextWindow: 1000000 },
+      { id: 'muse-spark-1.3-free',      label: 'Muse Spark 1.3 (Free)',       family: 'Meta', tags: ['FREE', 'Reasoning'], contextWindow: 1000000 },
+
+      // ===== Zhipu GLM =====
+      { id: 'glm-5.3-flash',            label: 'GLM 5.3 Flash',               family: 'Zhipu', rec: true, tags: ['Fast', 'Tool Calling', 'Plan-friendly'], contextWindow: 1000000, maxOutput: 16384 },
+      { id: 'glm-5.3',                  label: 'GLM 5.3',                     family: 'Zhipu', tags: ['Powerful'], contextWindow: 1000000, maxOutput: 65536 },
+      { id: 'glm-5.2',                  label: 'GLM 5.2',                     family: 'Zhipu', tags: ['Stable'], contextWindow: 1000000, maxOutput: 65536 },
+      { id: 'glm-5.1',                  label: 'GLM 5.1',                     family: 'Zhipu', tags: ['Stable'], contextWindow: 1000000, maxOutput: 65536 },
+
+      // ===== xAI Grok =====
+      { id: 'grok-4.5',                 label: 'Grok 4.5',                    family: 'xAI', rec: true, tags: ['Powerful', 'Reasoning'], contextWindow: 1000000, maxOutput: 65536 },
+
+      // ===== Image (output gambar) =====
+      { id: 'ali-z-image-turbo',        label: 'Z Image Turbo (Free)',        family: 'Alibaba', tags: ['FREE', 'Image', 'Text-to-Image'], contextWindow: 4096, maxOutput: 4096 },
     ],
-    maxTokens: parseInt(process.env.OPENAGENTIC_MAX_TOKENS || '200000', 10),
+    // Model yang DILARANG dipakai di sistem ini. Jika ada request/pilihan model memakai id ini,
+    // provider otomatis memetakan ke varian "-free" (contoh: deepseek-v4.1-flash -> deepseek-v4.1-flash-free).
+    blockedModels: ['deepseek-v4.1-flash'],
+    // Batas OUTPUT (bukan context window), dipakai bila model tidak ada di maxTokensByModel.
+    maxTokens: parseInt(process.env.OPENAGENTIC_MAX_TOKENS || '16000', 10),
+    // max_tokens per model — nilai conservative, naikkan per model setelah probe ceiling upstream.
+    // Terverifikasi: glm-5.3-flash menolak 200000 (upstream 503 "All accounts failed"); 16000 OK.
+    maxTokensByModel: {
+      'default': 16000,
+      'glm-5.3-flash': 16000,
+      'glm-5.3': 32000,
+      'glm-5.2': 32000,
+      'glm-5.1': 32000,
+      'claude-sonnet-4.6': 64000,
+      'claude-opus-4.8': 32000,
+      'claude-opus-4.8-thinking': 32000,
+      'claude-opus-5': 32000,
+      'gpt-5.6-luna': 32000,
+      'gpt-5.6-sol': 32000,
+      'gpt-5.6-terra': 32000,
+      'gemini-3.5-flash': 32000,
+      'gemini-3.1-pro': 32000,
+      'gemini-3.8-flash-high': 32000,
+      'deepseek-v4-flash': 32000,
+      'deepseek-v4-flash-free': 16000,
+      'deepseek-v4-flash-0731': 32000,
+      'deepseek-v4-flash-vision-exp': 16000,
+      'deepseek-v4.1-flash-free': 16000,
+      'deepseek-v4-pro-0813': 32000,
+      'qwen3.8-flash-free': 16000,
+      'qwen3.8-max': 32000,
+      'qwen3.7-max': 32000,
+      'qwen3.6-plus': 32000,
+      'kimi-k3': 32000,
+      'kimi-k3-high': 32000,
+      'kimi-k3-low': 16000,
+      'kimi-k2.7-code': 32000,
+      'mistral-large-3': 32000,
+      'minimax-m3-free': 16000,
+      'muse-spark-1.3-free': 16000,
+      'grok-4.5': 32000,
+      'ali-z-image-turbo': 4096,
+    },
   },
 
   anthropic: {

@@ -6,15 +6,65 @@ const JWT_SECRET = process.env.JWT_SECRET;
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 const TOKEN_DAILY_LIMIT = parseInt(process.env.USER_TOKEN_DAILY_LIMIT || '10000', 10);
 
-if (!JWT_SECRET) {
-  console.error('CRITICAL: JWT_SECRET is not set in environment variables');
-  if (process.env.NODE_ENV === 'production') {
-    throw new Error('JWT_SECRET must be set in production environment');
+/**
+ * The only HMAC algorithm we accept. Pinning this prevents "algorithm
+ * confusion": an attacker who can craft a token must not be able to downgrade
+ * to `none`, or trick a future asymmetric setup into verifying an HS256 token
+ * against a public key.
+ */
+export const JWT_ALGORITHM = 'HS256';
+
+/**
+ * Minimum secret length. HS256's security is bounded by the secret's entropy;
+ * a short secret is brute-forceable offline from a single captured token.
+ */
+const MIN_SECRET_LENGTH = 32;
+
+/**
+ * Values that ship in .env.example or appear in public writeups. Any of these
+ * is treated as "not configured", because they are known to every reader of the
+ * repository and therefore provide zero security.
+ */
+const PLACEHOLDER_SECRETS = new Set([
+  'change-me-to-a-long-random-string',
+  'wanar-ai-jwt-secret-dev-only-insecure',
+  'changeme',
+  'secret',
+  'your-secret-here',
+]);
+
+function assertUsableSecret(secret) {
+  const fail = (why) => {
+    throw new Error(
+      `FATAL: ${why} Refusing to start. Generate one with:\n` +
+        `  node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"\n` +
+        `then set JWT_SECRET in your .env (and rotate it if it was ever exposed).`
+    );
+  };
+
+  if (!secret) fail('JWT_SECRET is not set.');
+  if (secret.length < MIN_SECRET_LENGTH) {
+    fail(`JWT_SECRET is too short (${secret.length} chars, need >= ${MIN_SECRET_LENGTH}).`);
   }
-  console.warn('Using default JWT_SECRET for development only');
+  if (PLACEHOLDER_SECRETS.has(secret.trim().toLowerCase())) {
+    fail('JWT_SECRET is still the public example value, so anyone can forge tokens.');
+  }
 }
 
-export const JWT_SECRET_FINAL = JWT_SECRET || 'wanar-ai-jwt-secret-dev-only-insecure';
+// Uses this in tests to opt into a deterministic secret explicitly rather than
+// relying on an insecure implicit fallback.
+if (process.env.NODE_ENV !== 'test') {
+  assertUsableSecret(JWT_SECRET);
+}
+
+/**
+ * In production the secret must be explicitly configured. In test only, a fixed
+ * value is permitted so suites are deterministic — but it is never accepted
+ * implicitly in a real deployment.
+ */
+export const JWT_SECRET_FINAL =
+  JWT_SECRET || (process.env.NODE_ENV === 'test' ? 'test-only-jwt-secret-not-for-production-use' : '');
+
 const googleClient = GOOGLE_CLIENT_ID ? new OAuth2Client(GOOGLE_CLIENT_ID) : null;
 
 /**
@@ -42,7 +92,7 @@ export async function loginWithGoogle(idToken) {
     const token = jwt.sign(
       { id: user.id, role: user.role, name: user.name, email: user.email },
       JWT_SECRET_FINAL,
-      { expiresIn: '7d' }
+      { algorithm: JWT_ALGORITHM, expiresIn: '7d' }
     );
     return {
       success: true,
@@ -50,7 +100,11 @@ export async function loginWithGoogle(idToken) {
       user: { id: user.id, name: user.name, email: user.email, avatar: user.avatar, role: user.role },
     };
   } catch (err) {
-    return { success: false, error: 'Invalid Google token: ' + err.message };
+    // Do not echo library internals back to the caller: verification error
+    // strings can leak whether a token was malformed vs. signed with a wrong
+    // key, which is useful reconnaissance.
+    console.warn('[AUTH] Google token verification failed:', err.message);
+    return { success: false, error: 'Invalid or expired Google token' };
   }
 }
 
@@ -60,8 +114,11 @@ export async function loginWithGoogle(idToken) {
  * @returns {object|null} Decoded token payload or null if invalid
  */
 export function verifyToken(token) {
+  if (typeof token !== 'string' || !token) return null;
   try {
-    return jwt.verify(token, JWT_SECRET_FINAL);
+    // `algorithms` is pinned: without it, a token whose header claims a
+    // different algorithm can be accepted in certain library configurations.
+    return jwt.verify(token, JWT_SECRET_FINAL, { algorithms: [JWT_ALGORITHM] });
   } catch {
     return null;
   }
@@ -95,9 +152,27 @@ export function authMiddleware(req, res, next) {
  * @returns {void}
  */
 export function adminOnly(req, res, next) {
-  if (!['admin', 'superadmin'].includes(req.user?.role)) {
+  const userId = req.user?.id;
+  if (!userId) {
     return res.status(403).json({ error: 'Admin access required' });
   }
+
+  // Re-read the role from the database instead of trusting the token's claim.
+  // A JWT stays valid for its entire lifetime (7d), so if an admin is demoted or
+  // an account is deleted, a token-only check would keep granting access until
+  // it expired. The DB is the source of truth.
+  let user;
+  try {
+    user = getUserById(userId);
+  } catch {
+    return res.status(403).json({ error: 'Admin access required' });
+  }
+
+  if (!user || !['admin', 'superadmin'].includes(user.role)) {
+    return res.status(403).json({ error: 'Admin access required' });
+  }
+
+  req.user = { ...req.user, role: user.role };
   next();
 }
 

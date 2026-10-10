@@ -1,0 +1,462 @@
+/**
+ * AgentFlow v2 — gaya klinis swimlane + garis hidup (live edges)
+ * Design token dari flowchart referensi:
+ *   kanvas #F4F8FB · node #CFE2F3 / #1F4E79 · lane gelap #0E3A5D · lane terang #5BA3D0
+ * by Wisnu Alfian Nur Ashar
+ */
+
+.af-canvas-wrap {
+  --af-canvas: #F4F8FB;
+  --af-node-fill: #CFE2F3;
+  --af-node-stroke: #1F4E79;
+  --af-lane-dark: #0E3A5D;
+  --af-lane-light: #5BA3D0;
+  --af-active: #F59E0B;
+  --af-active-2: #FDE68A;
+  --af-done: #10B981;
+  --af-error: #EF4444;
+  --af-pending: #cbd8e6;
+  --flow-speed: 1; /* global: 2 = dua kali lebih cepat */
+  --af-travel: 900ms;
+  --af-dash-dur: calc(0.9s / var(--flow-speed));
+  --af-sweep-dur: calc(0.4s / var(--flow-speed));
+
+  position: relative;
+  background: var(--af-canvas);
+  border: 1px solid rgba(31, 78, 121, .25);
+  border-radius: 8px;
+  padding: 8px;
+  width: 100%;
+}
+
+.af-canvas-scroll {
+  position: relative;
+  overflow: hidden;
+  border-radius: 6px;
+}
+
+.af-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  min-height: 380px;
+  max-height: 58vh;
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+.af-svg:active { cursor: grabbing; }
+
+.af-canvas-bg { fill: var(--af-canvas); }
+
+.af-viewport { will-change: transform; }
+.af-view-anim { transition: transform .45s cubic-bezier(.22, .8, .3, 1); }
+
+/* ── Kontrol zoom/follow ── */
+.af-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+  flex-wrap: wrap;
+}
+.af-ctrl-btn {
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 5px;
+  border: 1px solid rgba(31, 78, 121, .3);
+  background: #FFFFFF;
+  color: #12324f;
+  cursor: pointer;
+}
+.af-ctrl-btn:hover { background: var(--af-node-fill); }
+.af-ctrl-follow {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  color: #33546f;
+  cursor: pointer;
+}
+.af-ctrl-zoom { margin-left: auto; font-size: 11px; color: #6b8496; }
+
+/* ── Lane ── */
+.af-lane-sep {
+  stroke: #555555;
+  stroke-width: 1;
+  stroke-dasharray: 6 4;
+}
+
+.af-lane-chip { animation: laneChip .35s ease-out both; }
+
+.af-lane-chip-bg { stroke: rgba(255, 255, 255, .5); stroke-width: .75; }
+.af-tone-dark  { fill: var(--af-lane-dark); }
+.af-tone-light { fill: var(--af-lane-light); }
+
+.af-lane-chip-text {
+  fill: #FFFFFF;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .3px;
+}
+
+/* ── Edges ── */
+.af-edge-hit {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 14;
+  pointer-events: stroke;
+}
+
+.af-edge-base {
+  fill: none;
+  stroke: var(--af-node-stroke);
+  stroke-width: 1.5;
+  stroke-opacity: .35;
+  pointer-events: none;
+  transition: stroke-opacity .3s ease, stroke-width .15s ease;
+}
+
+.af-es-done  .af-edge-base { stroke-opacity: .9; stroke: var(--af-done); }
+.af-es-active .af-edge-base { stroke-opacity: .9; }
+.af-es-error .af-edge-base { stroke-opacity: .95; stroke: var(--af-error); }
+
+.af-edge-glow {
+  fill: none;
+  stroke-width: 4.5;
+  stroke-linecap: round;
+  stroke-opacity: .22;
+  pointer-events: none;
+}
+.af-es-active .af-edge-glow { stroke: var(--af-active); stroke-opacity: .3; }
+.af-es-done   .af-edge-glow { stroke: var(--af-done);  stroke-opacity: .16; }
+.af-es-error  .af-edge-glow { stroke: var(--af-error); stroke-opacity: .3; }
+
+.af-edge-dash {
+  fill: none;
+  stroke: var(--af-active);
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-dasharray: 6 10;
+  pointer-events: none;
+  animation: flowDash var(--af-dash-dur) linear infinite;
+}
+
+.af-es-error .af-edge-dash { stroke: var(--af-error); animation-duration: calc(var(--af-dash-dur) / 2.5); }
+
+.af-edge-grad {
+  fill: none;
+  stroke: url(#af-active-grad);
+  stroke-width: 2.6;
+  stroke-linecap: round;
+  pointer-events: none;
+  opacity: .95;
+}
+
+/* jejak done — "arus listrik mengisi kabel", sekali (400ms) */
+.af-edge-sweep {
+  fill: none;
+  stroke: var(--af-done);
+  stroke-width: 2.6;
+  stroke-linecap: round;
+  pointer-events: none;
+  stroke-dasharray: 100;
+  stroke-dashoffset: 100;
+  animation: fillSweep var(--af-sweep-dur) ease-out forwards;
+}
+
+.af-comet-group { pointer-events: none; }
+.af-comet { stroke: rgba(255, 255, 255, .9); stroke-width: .8; }
+.af-comet-head { fill: var(--af-active); filter: drop-shadow(0 0 5px var(--af-active)); }
+.af-comet-t1 { fill: var(--af-active); opacity: .55; }
+.af-comet-t2 { fill: var(--af-active-2); opacity: .3; }
+.af-es-error .af-comet-head,
+.af-es-error .af-comet-t1 { fill: var(--af-error); filter: drop-shadow(0 0 5px var(--af-error)); }
+
+.af-edge-label {
+  fill: #333333;
+  font-size: 11px;
+  font-weight: 600;
+  pointer-events: none;
+  paint-order: stroke;
+  stroke: var(--af-canvas);
+  stroke-width: 3px;
+  transition: font-size .12s ease;
+}
+
+.af-edge:hover .af-edge-base { stroke-width: 2.5; stroke-opacity: .95; }
+.af-edge:hover .af-edge-label { font-size: 12.5px; }
+
+/* highlight cabang yang benar-benar diambil (klik decision) */
+.af-traced .af-edge-base { stroke-opacity: 1; stroke-width: 2.4; stroke: var(--af-node-stroke); }
+.af-traced .af-edge-glow { stroke: var(--af-node-stroke); stroke-opacity: .25; }
+.af-untraced { opacity: .15; }
+
+.af-arrowhead { fill: var(--af-node-stroke); stroke: none; }
+
+/* ── Nodes ── */
+.af-node { transition: opacity .3s ease; cursor: pointer; outline: none; }
+.af-node-dim { opacity: .35; }
+
+.af-node-shape {
+  fill: var(--af-node-fill);
+  stroke: var(--af-node-stroke);
+  stroke-width: 1.5;
+  transition: fill .3s ease, stroke .3s ease;
+}
+
+.af-node:focus .af-node-shape {
+  stroke: #2563eb;
+  stroke-width: 2.5;
+  stroke-dasharray: 4 3;
+}
+
+.af-node-inner { stroke: var(--af-node-stroke); stroke-width: 1; opacity: .65; }
+
+.af-node-icon  { font-size: 12px; }
+.af-node-title { fill: #12324f; font-size: 12px; font-weight: 700; }
+.af-node-desc  { fill: #33546f; font-size: 11px; }
+
+.af-st-pending .af-node-shape { fill: var(--af-pending); fill-opacity: .55; stroke-opacity: .5; }
+.af-st-pending .af-node-title { fill: #4b6577; }
+.af-st-pending .af-node-desc  { fill: #6b8496; }
+
+.af-st-active .af-node-shape {
+  stroke: var(--af-active);
+  stroke-width: 2.5;
+  filter: drop-shadow(0 0 8px rgba(245, 158, 11, .55));
+  animation: nodePulse 1.2s ease-in-out infinite;
+}
+
+.af-st-done .af-node-shape {
+  fill: #cfe9dd;
+  stroke: var(--af-done);
+  stroke-opacity: .85;
+  filter: drop-shadow(0 1px 3px rgba(16, 185, 129, .25));
+}
+.af-st-done .af-node-title { fill: #0b4a37; }
+.af-st-done .af-node-desc  { fill: #16684f; }
+
+.af-st-error .af-node-shape {
+  fill: #f7dcdc;
+  stroke: var(--af-error);
+  stroke-width: 2;
+  filter: drop-shadow(0 0 7px rgba(239, 68, 68, .45));
+  animation: nodePulse 1.2s ease-in-out infinite;
+}
+.af-st-error .af-node-title { fill: #6b1414; }
+.af-st-error .af-node-desc  { fill: #8c2626; }
+
+.af-live-badge-bg {
+  fill: var(--af-active);
+  stroke: rgba(255, 255, 255, .75);
+  stroke-width: .75;
+}
+.af-st-error .af-live-badge-bg { fill: var(--af-error); }
+.af-live-badge-text { fill: #FFFFFF; font-size: 8.5px; font-weight: 800; letter-spacing: .5px; }
+
+/* ── Tooltip ── */
+.af-tooltip {
+  position: absolute;
+  transform: translate(-50%, calc(-100% - 10px));
+  z-index: 30;
+  min-width: 180px;
+  max-width: 260px;
+  background: #FFFFFF;
+  border: 1px solid rgba(31, 78, 121, .4);
+  border-radius: 6px;
+  box-shadow: 0 6px 20px rgba(14, 58, 93, .18);
+  padding: 8px 10px;
+  pointer-events: none;
+}
+.af-tooltip-title { font-size: 12px; font-weight: 700; color: #12324f; }
+.af-tooltip-desc { font-size: 11px; color: #33546f; margin-top: 2px; }
+.af-tooltip-meta { display: flex; gap: 10px; margin-top: 5px; font-size: 10.5px; color: #6b8496; }
+.af-tooltip-status { text-transform: uppercase; font-weight: 700; letter-spacing: .4px; }
+.af-tooltip-status.af-st-active { color: var(--af-active); }
+.af-tooltip-status.af-st-done { color: var(--af-done); }
+.af-tooltip-status.af-st-error { color: var(--af-error); }
+.af-tooltip-tech { margin-top: 3px; font-size: 10.5px; font-family: ui-monospace, monospace; color: #4b6577; }
+
+/* ── Mini-map ── */
+.af-minimap {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  background: rgba(255, 255, 255, .92);
+  border: 1px solid rgba(31, 78, 121, .45);
+  border-radius: 6px;
+  box-shadow: 0 2px 10px rgba(14, 58, 93, .15);
+  cursor: pointer;
+  z-index: 20;
+}
+.af-mm-bg { fill: var(--af-canvas); }
+.af-mm-node { fill: var(--af-pending); stroke: rgba(31, 78, 121, .4); stroke-width: 4; }
+.af-mm-done { fill: #9ed3bd; }
+.af-mm-active { fill: var(--af-active); }
+.af-mm-error { fill: #f0a6a6; }
+.af-mm-viewport {
+  fill: rgba(91, 163, 208, .12);
+  stroke: var(--af-lane-dark);
+  stroke-width: 12;
+}
+
+.af-tech-note {
+  margin-top: 8px;
+  font-size: 11.5px;
+  color: #33546f;
+}
+.af-tech-note code {
+  background: rgba(31, 78, 121, .08);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 11px;
+}
+
+/* ── Toolbar demo ── */
+.af-demo-btn {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 5px 12px;
+  border-radius: 6px;
+  border: 1px solid rgba(31, 78, 121, .35);
+  background: var(--af-lane-light, #5BA3D0);
+  color: #FFFFFF;
+  cursor: pointer;
+}
+.af-demo-btn.on { background: var(--af-error, #ef4444); border-color: var(--af-error, #ef4444); }
+
+/* ── Tombol layar penuh (fullscreen) ── */
+.af-fullscreen-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 6px;
+  border: 1px solid rgba(31, 78, 121, .35);
+  background: var(--af-lane-dark, #0E3A5D);
+  color: #FFFFFF;
+  cursor: pointer;
+  transition: background .15s ease, transform .1s ease;
+  flex-shrink: 0;
+}
+.af-fullscreen-btn:hover { background: var(--af-node-stroke, #1F4E79); transform: scale(1.06); }
+.af-fullscreen-btn:active { transform: scale(.96); }
+
+/* ── Mode layar penuh ── */
+/* Fallback CSS (browser tanpa Fullscreen API / API ditolak): modal memaksakan diri penuh. */
+.agent-flow-modal.fullscreen {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  max-width: none;
+  height: 100%;
+  max-height: none;
+  border-radius: 0;
+  z-index: 10000;
+  background: var(--af-canvas, #F4F8FB);
+}
+.agent-flow-modal.fullscreen .af-svg {
+  min-height: calc(100vh - 240px);
+  max-height: calc(100vh - 200px);
+}
+.agent-flow-modal.fullscreen .agent-flow-header,
+.agent-flow-modal.fullscreen .agent-flow-toggle {
+  max-width: 1080px;
+  width: 100%;
+  margin-left: auto;
+  margin-right: auto;
+}
+.agent-flow-modal.fullscreen .agent-flow-body {
+  flex: 1;
+}
+/* Saat native fullscreen, overlay tidak perlu tampil penuh — hindari letterbox */
+.agent-flow-overlay.is-fullscreen {
+  padding: 0;
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+/* ── Panel samping node ── */
+.af-panel {
+  margin-top: 10px;
+  border: 1px solid rgba(31, 78, 121, .3);
+  border-radius: 8px;
+  background: #FFFFFF;
+  padding: 10px 12px;
+}
+.af-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: #12324f;
+  margin-bottom: 6px;
+}
+.af-panel-close {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 13px;
+  color: #6b8496;
+}
+.af-panel-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11.5px;
+  color: #33546f;
+  padding: 4px 6px;
+  border-radius: 5px;
+  background: rgba(31, 78, 121, .05);
+  margin-bottom: 4px;
+}
+.af-panel-item b { color: #12324f; }
+.af-panel-item .ok { color: #0b8a5b; }
+.af-panel-item .err { color: #b91c1c; }
+.af-panel-empty { font-size: 11.5px; color: #6b8496; font-style: italic; }
+
+/* ── Keyframes ── */
+@keyframes flowDash {
+  from { stroke-dashoffset: 0; }
+  to   { stroke-dashoffset: -16; }
+}
+
+@keyframes fillSweep {
+  from { stroke-dashoffset: 100; }
+  to   { stroke-dashoffset: 0; }
+}
+
+@keyframes nodePulse {
+  0%, 100% { stroke-opacity: 1; }
+  50%      { stroke-opacity: .45; }
+}
+
+@keyframes laneChip {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .af-edge-dash,
+  .af-edge-grad,
+  .af-edge-sweep,
+  .af-comet-group,
+  .af-node-shape,
+  .af-lane-chip {
+    animation: none !important;
+  }
+  .af-edge-dash,
+  .af-edge-grad,
+  .af-edge-sweep,
+  .af-comet-group { display: none; }
+  .af-view-anim { transition: none !important; }
+  .af-es-active .af-edge-base { stroke-opacity: 1; stroke: var(--af-active); }
+  .af-es-active .af-edge-glow { stroke-opacity: .4; }
+}

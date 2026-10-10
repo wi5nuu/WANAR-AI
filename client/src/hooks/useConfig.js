@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 
 const PROVIDER_MAP = {
-  openagentic: { label: 'OpenAgentic', key: 'openagentic', hasRoute: false },
+  openagentic: { label: 'Wisnu Alfian Nur Ashar', key: 'openagentic', hasRoute: false },
   nvidia:      { label: 'NVIDIA',      key: 'nvidia',      hasRoute: false },
   puter:       { label: 'Puter.js',    key: 'puter',       hasRoute: false },
   vector:      { label: 'VectorEngine',key: 'vector',      hasRoute: false },
@@ -14,7 +14,7 @@ export function useConfig() {
     () => localStorage.getItem('wanar_provider') || 'openagentic'
   );
   const [model, setModel] = useState(
-    () => localStorage.getItem('wanar_model') || ''
+    () => localStorage.getItem('wanar_model_v2') || ''
   );
   const [route, setRoute] = useState('');
 
@@ -42,7 +42,7 @@ export function useConfig() {
     if (!ids.includes(model)) {
       const defaultModel = cfg.defaultModel || ids[0] || '';
       setModel(defaultModel);
-      localStorage.setItem('wanar_model', defaultModel);
+      localStorage.setItem('wanar_model_v2', defaultModel);
     }
   }, [config, provider]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -53,7 +53,7 @@ export function useConfig() {
 
   const handleSetModel = useCallback((m) => {
     setModel(m);
-    localStorage.setItem('wanar_model', m);
+    localStorage.setItem('wanar_model_v2', m);
   }, []);
 
   const providerInfo = PROVIDER_MAP[provider] || PROVIDER_MAP.openagentic;

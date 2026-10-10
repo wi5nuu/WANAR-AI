@@ -2,11 +2,11 @@
  * Together AI Provider - Free Tier with Premium Models
  * Access Llama 405B, Qwen, and more
  * 
- * @author Wisnu Alfian Nur Ashar & Siti Nurfadhila Az Zahra Syam
+ * @author Wisnu Alfian Nur Ashar
  * @version 1.0.0
  */
 
-import axios from 'axios';
+import axios from './http-client.js';
 import { BaseProvider } from './base-provider.js';
 
 export default class TogetherProvider extends BaseProvider {

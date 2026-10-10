@@ -247,7 +247,7 @@ export default function Generator() {
 
             <label style={styles.label}>Provider AI *</label>
             <select style={styles.select} value={provider} onChange={e => setProvider(e.target.value)}>
-              {cfgProviders.map(p => <option key={p} value={p}>{p}</option>)}
+              {cfgProviders.map(p => <option key={p} value={p}>{p === 'openagentic' ? 'Wisnu Alfian Nur Ashar' : p}</option>)}
             </select>
             <div style={{ fontSize: 11.5, color: '#889', marginTop: 4 }}>
               Gunakan provider gratis yang sehat (mis. nvidia) agar tidak boros saldo
