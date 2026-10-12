@@ -87,6 +87,15 @@ export function createRateLimiters() {
       max: 5,
       message: 'Too many attempts. Please try again later.',
     }),
+
+    // Operator actions in the Automation page (approve / run / pause / delete…).
+    // Generous enough for normal clicking, still a brake on runaway scripts.
+    automation: distributedRateLimit({
+      name: 'automation',
+      windowMs: 60 * 1000,
+      max: 60,
+      message: 'Terlalu banyak aksi otomasi. Tunggu sebentar.',
+    }),
   };
 }
 

@@ -48,6 +48,9 @@ import { runLoadTest, validateRateLimit, LIMITS as LOAD_LIMITS } from './securit
 import { closeVisibleBrowser, getLiveBrowserState } from './tools/browser.js';
 import { lintRuleSet, reviewRuleSetWithAI, MAX_RULE_SET_CHARS } from './prompt-lab.js';
 import { getPoolStats } from './providers/http-client.js';
+import sqliteDb from './database.js';
+import { initAutomation } from './automation/runtime.js';
+import { createAutomationRouter } from './automation/routes.js';
 
 const coordinator = new DistributedCoordinator();
 
@@ -57,6 +60,9 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = config.server.port;
 const aiManager = new AIManager();
+
+// Automation (scheduler + bulk email). Constructed here, started in startServer().
+const automation = initAutomation({ db: sqliteDb, aiManager });
 
 // ==================== MULTER FILE UPLOAD CONFIG ====================
 const ALLOWED_MIMETYPES = new Set([
@@ -955,6 +961,14 @@ app.delete('/api/tool-approvals/:id', (req, res) => {
 });
 
 // ==================== END TOOL APPROVAL ====================
+
+// ==================== AUTOMATION ====================
+app.use('/api/automation', createAutomationRouter({
+  automation,
+  rateLimiters,
+  actorOf: (req) => req.user?.email || String(req.user?.id || 'operator'),
+}));
+// ==================== END AUTOMATION ====================
 
 app.get('/api/sessions/:id/messages', (req, res) => {
   const messages = db.getMessages(req.params.id);  res.json({ messages });
@@ -2705,6 +2719,20 @@ async function startServer() {
   console.log(`RAG       : ${config.rag?.enabled ? 'Enabled' : 'Disabled'}\n`);
   console.log('Press Ctrl+C to stop\n');
   console.log(`Cluster   : ${coordinator.redisAvailable ? `Distributed (${coordinator.getInstanceCount()} instances)` : 'Standalone'}\n`);
+
+  // Penjadwal otomasi (email terjadwal, job AI). Hanya saat server benar-benar jalan.
+  try {
+    automation.scheduler.start();
+    console.log('Automation : scheduler aktif (mode email: ' + automation.mailer.mode + ')');
+  } catch (e) {
+    console.log('Automation : gagal start (' + e.message + ')');
+  }
+  for (const sig of ['SIGINT', 'SIGTERM']) {
+    process.once(sig, () => {
+      try { automation.scheduler.stop(); automation.mailer.close(); } catch { /* ignore */ }
+      process.exit(0);
+    });
+  }
 
   // Pre-warm browser pool di background agar browser_open pertama cepat.
   import('./tools/browser-pool.js').then(async ({ warmPool }) => {

@@ -36,7 +36,11 @@
     "scope": "node scripts/authorize.mjs list",
     "loadtest": "node scripts/load-test.mjs",
     "inventory": "node scripts/inventory.mjs",
-    "postinstall": "node scripts/postinstall.js"
+    "postinstall": "node scripts/postinstall.js",
+    "service:install": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/service/wanar-service.ps1 install",
+    "service:uninstall": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/service/wanar-service.ps1 uninstall",
+    "service:status": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/service/wanar-service.ps1 status",
+    "service:restart": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/service/wanar-service.ps1 restart"
   },
   "keywords": [
     "ai",
@@ -86,6 +90,7 @@
     "jszip": "^3.10.1",
     "marked": "^18.0.6",
     "multer": "^2.2.0",
+    "nodemailer": "^8.0.11",
     "ora": "^7.0.1",
     "pdf-parse": "2.4.5",
     "playwright": "^1.62.1",
