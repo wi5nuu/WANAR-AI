@@ -215,3 +215,17 @@ Komputer yang mati/tidur tidak menjalankan job; yang terlewat <= `AUTOMATION_CAT
 
 ### Akses dari jaringan
 Secara bawaan otomasi hanya bisa dibuka dari localhost. Untuk akses dari komputer lain isi `AUTOMATION_TOKEN` di `.env`; UI akan meminta token sekali.
+
+### Kanal pesan (bukan hanya email)
+
+| Kanal | Cara kerja | Catatan |
+| --- | --- | --- |
+| Email | SMTP | Lampiran, HTML, daftar suppress |
+| Telegram | Bot API resmi | Lampiran dokumen; pelanggan mendaftar lewat `/start`, berhenti lewat `/stop`; `@subscribers` = semua pelanggan |
+| WhatsApp | **Cloud API resmi (Meta)** | Template wajib untuk memulai percakapan; nomor Indonesia otomatis dinormalisasi (0812… → 62812…) |
+| Slack / Discord / Teams | Incoming webhook | Tujuan tetap dari `.env`; Discord tanpa @mention |
+| Webhook | POST JSON bertanda tangan HMAC | Untuk n8n, Zapier, Make, atau layanan sendiri |
+
+Satu job bisa menarget beberapa kanal sekaligus; satu kanal yang gagal tidak menghentikan yang lain. Kuota harian dihitung **per kanal**.
+
+**Sengaja tidak ada** integrasi WhatsApp tidak resmi (whatsapp-web/Baileys): itu melanggar ketentuan WhatsApp dan berisiko membuat nomor Anda diblokir permanen.

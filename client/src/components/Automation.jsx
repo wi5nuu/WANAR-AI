@@ -116,16 +116,36 @@ const CAMPAIGN_STATUS = {
 const PAUSE_REASON = {
   daily_cap: 'batas kirim harian tercapai — lanjut otomatis besok',
   quota: 'kuota penyedia SMTP habis — lanjut otomatis besok',
-  auth: 'login SMTP ditolak — periksa SMTP_USER / SMTP_PASS',
+  auth: 'kredensial kanal ditolak — periksa token/password di .env',
+  config: 'konfigurasi kanal bermasalah (template/webhook) — periksa pengaturan lalu lanjutkan',
   manual: 'dijeda manual',
   attachment_missing: 'file lampiran hilang dari server — unggah ulang lalu buat kampanye baru',
 };
 const TYPE_LABEL = {
-  email: 'Email tetap',
-  ai_email: 'Email ditulis AI',
+  email: 'Pesan tetap',
+  ai_email: 'Pesan ditulis AI',
   ai_task: 'Tugas AI',
 };
 const OUTBOX_CHIP = { sent: 'ok', failed: 'err', skipped: 'warn', queued: '', sending: 'brand' };
+
+const CHANNELS = ['email', 'telegram', 'whatsapp', 'slack', 'discord', 'teams', 'webhook'];
+const CHANNEL_LABEL = {
+  email: 'Email', telegram: 'Telegram', whatsapp: 'WhatsApp', slack: 'Slack', discord: 'Discord', teams: 'Teams', webhook: 'Webhook',
+};
+const FIXED_DEST = new Set(['slack', 'discord', 'teams', 'webhook']);
+const RECIPIENT_PLACEHOLDER = {
+  email: 'Satu email per baris, atau CSV dengan header:\nnama,email,perusahaan\nBudi,budi@contoh.com,PT Maju',
+  telegram: 'Satu chat ID per baris, atau CSV dengan header:\nnama,chat_id\nBudi,123456789\n\nKetik @subscribers untuk semua pelanggan yang mendaftar lewat /start',
+  whatsapp: 'Satu nomor per baris (0812… atau 62812…), atau CSV dengan header:\nnama,telepon\nBudi,0812-3456-7890',
+};
+const ENV_GUIDE = {
+  telegram: 'TELEGRAM_BOT_TOKEN=123456789:ABC-token-dari-BotFather\n# opsional\nTELEGRAM_POLLING=true        # pelanggan mendaftar lewat /start\nTELEGRAM_JOIN_CODE=kode-rahasia  # /start kode-rahasia\nTELEGRAM_ALLOWED_CHAT_IDS=111,222',
+  whatsapp: 'WHATSAPP_TOKEN=token-permanen-system-user\nWHATSAPP_PHONE_NUMBER_ID=1234567890\nWHATSAPP_TEMPLATE_NAME=pengumuman   # wajib untuk pelanggan baru\nWHATSAPP_TEMPLATE_LANG=id\nWHATSAPP_DAILY_CAP=250',
+  slack: 'SLACK_WEBHOOK_URL=https://hooks.slack.com/services/T000/B000/XXXX',
+  discord: 'DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/ID/TOKEN',
+  teams: 'TEAMS_WEBHOOK_URL=https://prod-00.westus.logic.azure.com/workflows/...',
+  webhook: 'WEBHOOK_URL=https://n8n.perusahaan.id/webhook/abc\nWEBHOOK_SECRET=rahasia-hmac\nWEBHOOK_BEARER_TOKEN=opsional',
+};
 
 const SCHEDULE_PRESETS = [
   ['Setiap hari 08:00', 'daily@08:00'],
@@ -181,7 +201,7 @@ function Confirm({ open, title, children, confirmLabel = 'Lanjutkan', danger, bu
 
 function Overview({ overview, jobs, campaigns, feed, onGoto }) {
   if (!overview) return <div className="au-empty">Memuat ringkasan…</div>;
-  const { mailer, usage, counts, upcoming } = overview;
+  const { mailer, usage, counts, upcoming, channels = [] } = overview;
   const usedPct = Math.min(100, Math.round((usage.sentToday / usage.dailyCap) * 100));
   const reviews = campaigns.filter((c) => c.status === 'draft' && c.created_by === 'scheduler');
   const pending = jobs.filter((j) => j.status === 'pending_approval');
@@ -222,6 +242,22 @@ function Overview({ overview, jobs, campaigns, feed, onGoto }) {
           <div className="k">Kampanye</div>
           <div className="v">{counts.campaignsRunning}</div>
           <div className="s">berjalan · {counts.campaignsDraft} draf · {counts.suppressed} di-suppress</div>
+        </div>
+      </div>
+
+      <div className="au-card" style={{ marginTop: '1rem' }}>
+        <h3>Kanal pengiriman <small>{channels.filter((c) => c.mode === 'live').length} dari {channels.length} aktif</small></h3>
+        <div className="au-chan-grid">
+          {channels.map((c) => (
+            <div key={c.id} className={`au-chan-card ${c.mode === 'live' ? 'live' : ''}`}>
+              <div className="au-row between">
+                <b>{CHANNEL_LABEL[c.id] || c.label}</b>
+                <Chip kind={c.mode === 'live' ? 'ok' : 'warn'}>{c.mode === 'live' ? 'Live' : 'Simulasi'}</Chip>
+              </div>
+              <div className="au-tiny">hari ini {c.sentToday || 0} / {c.limits?.dailyCap ?? '—'}</div>
+              {c.mode !== 'live' && c.missing?.length > 0 && <div className="au-tiny">kurang: {c.missing.join(', ')}</div>}
+            </div>
+          ))}
         </div>
       </div>
 
@@ -389,7 +425,7 @@ function SchedulePicker({ value, onChange, timezone }) {
   );
 }
 
-function RecipientsField({ value, onChange, label = 'Penerima', hint }) {
+function RecipientsField({ value, onChange, label = 'Penerima', hint, channel = 'email' }) {
   const debounced = useDebounced(value, 400);
   const [info, setInfo] = useState(null);
   const fileRef = useRef(null);
@@ -397,11 +433,11 @@ function RecipientsField({ value, onChange, label = 'Penerima', hint }) {
   useEffect(() => {
     let cancelled = false;
     if (!debounced.trim()) { setInfo(null); return undefined; }
-    api('/recipients/parse', { method: 'POST', body: { text: debounced } })
+    api('/recipients/parse', { method: 'POST', body: { text: debounced, channel } })
       .then((d) => { if (!cancelled) setInfo(d); })
       .catch(() => { if (!cancelled) setInfo(null); });
     return () => { cancelled = true; };
-  }, [debounced]);
+  }, [debounced, channel]);
 
   const onFile = (e) => {
     const f = e.target.files?.[0];
@@ -424,9 +460,16 @@ function RecipientsField({ value, onChange, label = 'Penerima', hint }) {
         className="au-textarea mono"
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        placeholder={'Satu email per baris, atau CSV dengan header:\nnama,email,perusahaan\nBudi,budi@contoh.com,PT Maju'}
+        placeholder={RECIPIENT_PLACEHOLDER[channel] || RECIPIENT_PLACEHOLDER.email}
         spellCheck={false}
       />
+      {channel === 'telegram' && !/^[ \t]*@subscribers/im.test(value) && (
+        <div className="au-chips-row">
+          <button type="button" className="au-chipbtn" onClick={() => onChange(`@subscribers${value ? '\n' + value : ''}`)}>
+            + semua pelanggan (@subscribers)
+          </button>
+        </div>
+      )}
       {hint && <div className="au-tiny">{hint}</div>}
       {info && (
         <div className="au-row" style={{ gap: '0.4rem' }}>
@@ -442,7 +485,42 @@ function RecipientsField({ value, onChange, label = 'Penerima', hint }) {
   );
 }
 
-function JobForm({ onCreated, notify, onCancel, limits }) {
+/** Pick one or more delivery channels, each with its own recipient list. */
+function ChannelTargets({ channels, picked, onPick, recipients, onRecipients, label }) {
+  const info = (id) => (channels || []).find((c) => c.id === id);
+  return (
+    <div className="au-field">
+      <label>{label}</label>
+      <div className="au-chips-row" role="group" aria-label="Kanal tujuan">
+        {CHANNELS.map((id) => (
+          <button
+            type="button" key={id} aria-pressed={Boolean(picked[id])}
+            className={`au-chan ${picked[id] ? 'active' : ''}`}
+            onClick={() => onPick(id, !picked[id])}
+          >
+            {CHANNEL_LABEL[id]}
+            {info(id) && <i className={`au-dot-s ${info(id).mode === 'live' ? 'on' : ''}`} title={info(id).mode === 'live' ? 'Live' : 'Simulasi'} />}
+          </button>
+        ))}
+      </div>
+      {CHANNELS.filter((id) => picked[id]).map((id) => (
+        FIXED_DEST.has(id) ? (
+          <div key={id} className="au-tiny">{CHANNEL_LABEL[id]}: tujuan tetap dari .env — tidak perlu daftar penerima.</div>
+        ) : (
+          <RecipientsField
+            key={id} channel={id}
+            label={`Penerima ${CHANNEL_LABEL[id]}`}
+            value={recipients[id] || ''}
+            onChange={(v) => onRecipients(id, v)}
+          />
+        )
+      ))}
+      {!Object.values(picked).some(Boolean) && <div className="au-tiny">Pilih minimal satu kanal.</div>}
+    </div>
+  );
+}
+
+function JobForm({ onCreated, notify, onCancel, limits, channels }) {
   const [type, setType] = useState('email');
   const [name, setName] = useState('');
   const [schedule, setSchedule] = useState('daily@08:00');
@@ -452,7 +530,8 @@ function JobForm({ onCreated, notify, onCancel, limits }) {
   const [tone, setTone] = useState('profesional dan ramah');
   const [prompt, setPrompt] = useState('');
   const [kind, setKind] = useState('text');
-  const [recipients, setRecipients] = useState('');
+  const [picked, setPicked] = useState({ email: true });
+  const [recipientsBy, setRecipientsBy] = useState({});
   const [autoSend, setAutoSend] = useState(false);
   const [activate, setActivate] = useState(true);
   const [attachments, setAttachments] = useState([]);
@@ -462,10 +541,15 @@ function JobForm({ onCreated, notify, onCancel, limits }) {
     e.preventDefault();
     setBusy(true);
     try {
+      const targets = CHANNELS.filter((id) => picked[id]).map((id) => ({
+        channel: id,
+        recipients: FIXED_DEST.has(id) ? undefined : (recipientsBy[id] || ''),
+      }));
+      if (type !== 'ai_task' && targets.length === 0) throw new Error('Pilih minimal satu kanal tujuan.');
       let payload;
-      if (type === 'email') payload = { subject, bodyText: body, recipients };
-      else if (type === 'ai_email') payload = { brief, tone, recipients, autoSend };
-      else payload = { prompt, kind, subject: subject || undefined, recipients: recipients.trim() || undefined, autoSend };
+      if (type === 'email') payload = { subject, bodyText: body, targets };
+      else if (type === 'ai_email') payload = { brief, tone, targets, autoSend };
+      else payload = { prompt, kind, subject: subject || undefined, targets: targets.length ? targets : undefined, autoSend };
       payload.attachmentIds = attachments.map((a) => a.id);
       const d = await api('/jobs', {
         method: 'POST',
@@ -491,9 +575,9 @@ function JobForm({ onCreated, notify, onCancel, limits }) {
         <div className="au-field">
           <label>Tipe</label>
           <select className="au-select" value={type} onChange={(e) => setType(e.target.value)}>
-            <option value="email">Email tetap (template) ke daftar penerima</option>
-            <option value="ai_email">Email ditulis AI dari brief, tiap kali jalan</option>
-            <option value="ai_task">Tugas AI (ringkasan / kode), opsional dikirim via email</option>
+            <option value="email">Pesan tetap (template) ke satu atau banyak kanal</option>
+            <option value="ai_email">Pesan ditulis AI dari brief, tiap kali jalan</option>
+            <option value="ai_task">Tugas AI (ringkasan / kode), opsional dikirim ke kanal</option>
           </select>
         </div>
       </div>
@@ -504,7 +588,7 @@ function JobForm({ onCreated, notify, onCancel, limits }) {
         <>
           <div className="au-field">
             <label>Subjek</label>
-            <input className="au-input" value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="Laporan {{tanggal}}" required />
+            <input className="au-input" value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="Laporan {{tanggal}}" required={Boolean(picked.email)} />
           </div>
           <div className="au-field">
             <label>Isi email</label>
@@ -552,10 +636,13 @@ function JobForm({ onCreated, notify, onCancel, limits }) {
         </>
       )}
 
-      <RecipientsField
-        value={recipients}
-        onChange={setRecipients}
-        label={type === 'ai_task' ? 'Kirim hasil ke (opsional)' : 'Penerima'}
+      <ChannelTargets
+        channels={channels}
+        picked={picked}
+        onPick={(id, on) => setPicked((p) => ({ ...p, [id]: on }))}
+        recipients={recipientsBy}
+        onRecipients={(id, v) => setRecipientsBy((r) => ({ ...r, [id]: v }))}
+        label={type === 'ai_task' ? 'Kirim hasil ke (opsional)' : 'Kirim ke kanal'}
       />
 
       <AttachmentPicker value={attachments} onChange={setAttachments} notify={notify} limits={limits} />
@@ -613,7 +700,7 @@ function JobRuns({ jobId, tick }) {
   );
 }
 
-function JobsTab({ jobs, refresh, notify, tick, limits }) {
+function JobsTab({ jobs, refresh, notify, tick, limits, channels }) {
   const [creating, setCreating] = useState(false);
   const [open, setOpen] = useState(null);
   const [confirmDel, setConfirmDel] = useState(null);
@@ -657,6 +744,7 @@ function JobsTab({ jobs, refresh, notify, tick, limits }) {
       {creating && (
         <JobForm
           limits={limits}
+          channels={channels}
           notify={notify}
           onCancel={() => setCreating(false)}
           onCreated={() => { setCreating(false); refresh(); }}
@@ -777,6 +865,7 @@ function CampaignDetail({ id, tick, notify, refresh, onClose }) {
       </div>
       <div className="au-row" style={{ margin: '0.5rem 0', gap: '0.4rem' }}>
         {statusChip(CAMPAIGN_STATUS, c.status)}
+        <Chip kind="info">{CHANNEL_LABEL[c.channel || 'email']}</Chip>
         {c.mode && <Chip kind={c.mode === 'live' ? 'brand' : ''}>{c.mode === 'live' ? 'KIRIM NYATA' : 'SIMULASI'}</Chip>}
         {c.status_reason && c.status === 'paused' && <span className="au-tiny">{PAUSE_REASON[c.status_reason] || c.status_reason}</span>}
       </div>
@@ -820,7 +909,7 @@ function CampaignDetail({ id, tick, notify, refresh, onClose }) {
       </div>
       <div className="au-tablewrap">
         <table className="au-table">
-          <thead><tr><th>Email</th><th>Nama</th><th>Status</th><th>Percobaan</th><th>Keterangan</th></tr></thead>
+          <thead><tr><th>Tujuan</th><th>Nama</th><th>Status</th><th>Percobaan</th><th>Keterangan</th></tr></thead>
           <tbody>
             {data.recipients.length === 0 && <tr><td colSpan={5} className="wrap">Tidak ada data.</td></tr>}
             {data.recipients.map((r) => (
@@ -844,7 +933,7 @@ function CampaignDetail({ id, tick, notify, refresh, onClose }) {
         onConfirm={() => act('start', 'Pengiriman dimulai.')}
         onCancel={() => setConfirm(null)}
       >
-        Subjek “{c.subject}”. Email akan dikirim satu per satu dengan jeda otomatis.
+        {c.subject ? `Judul “${c.subject}”. ` : ''}Pesan akan dikirim satu per satu dengan jeda otomatis.
         <br />Anda bisa menjeda atau membatalkan kapan saja.
       </Confirm>
       <Confirm
@@ -883,6 +972,7 @@ function CampaignDetail({ id, tick, notify, refresh, onClose }) {
 }
 
 function CampaignComposer({ overview, notify, refresh, seed, onSeedConsumed, onSent }) {
+  const [channel, setChannel] = useState('email');
   const [name, setName] = useState('');
   const [subject, setSubject] = useState('');
   const [body, setBody] = useState('');
@@ -896,16 +986,46 @@ function CampaignComposer({ overview, notify, refresh, seed, onSeedConsumed, onS
   const [confirm, setConfirm] = useState(false);
   const bodyRef = useRef(null);
 
+  // Templates for every channel come from one AI brief; edits are kept per channel.
+  const draftsRef = useRef({});
+  const prevChannel = useRef(channel);
+  const [templated, setTemplated] = useState([]);
+
   useEffect(() => {
     if (!seed) return;
-    if (seed.subject) setSubject(seed.subject);
+    if (seed.drafts) {
+      draftsRef.current = { ...seed.drafts };
+      setTemplated(Object.keys(seed.drafts));
+    }
+    if (seed.channel && seed.channel !== channel) {
+      prevChannel.current = seed.channel; // do not file the current text under the old channel
+      setChannel(seed.channel);
+    }
+    if (seed.name && !name.trim()) setName(seed.name);
+    if (seed.subject !== undefined) setSubject(seed.subject || '');
     if (seed.body) setBody(seed.body);
     setDraft(null);
     onSeedConsumed();
   }, [seed, onSeedConsumed]);
 
   // Editing the content invalidates a previously generated draft/preview.
-  useEffect(() => { setDraft(null); }, [name, subject, body, recipients, replyTo, attachments]);
+  useEffect(() => { setDraft(null); }, [channel, name, subject, body, recipients, replyTo, attachments]);
+
+  // A different channel means a different address format: start that list fresh.
+  useEffect(() => { setRecipients(''); }, [channel]);
+
+  // Switching channel swaps in that channel's template (edits stay per channel).
+  useEffect(() => {
+    const prev = prevChannel.current;
+    if (prev === channel) return;
+    draftsRef.current[prev] = { subject, body };
+    prevChannel.current = channel;
+    const t = draftsRef.current[channel];
+    if (t) {
+      setSubject(t.subject || '');
+      setBody(t.body || '');
+    }
+  }, [channel]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const insertVar = (v) => {
     const el = bodyRef.current;
@@ -920,10 +1040,14 @@ function CampaignComposer({ overview, notify, refresh, seed, onSeedConsumed, onS
   const writeWithAI = async () => {
     setAiBusy(true);
     try {
-      const d = await api('/compose/email', { method: 'POST', body: { brief } });
-      setSubject(d.subject);
-      setBody(d.body);
-      notify('ok', `Draf email ditulis AI${d.model ? ` (${d.model})` : ''}. Periksa sebelum dikirim.`);
+      const d = await api('/compose/package', { method: 'POST', body: { brief } });
+      draftsRef.current = { ...d.drafts };
+      setTemplated(Object.keys(d.drafts));
+      if (!name.trim()) setName(d.name);
+      const mine = d.drafts[channel] || {};
+      setSubject(mine.subject || '');
+      setBody(mine.body || '');
+      notify('ok', `Template untuk ${Object.keys(d.drafts).length} kanal dibuat${d.model ? ` (${d.model})` : ''}. Ganti kanal untuk melihat versinya, lalu sesuaikan.`);
     } catch (e) {
       notify('err', e.message);
     } finally {
@@ -939,6 +1063,7 @@ function CampaignComposer({ overview, notify, refresh, seed, onSeedConsumed, onS
         method: 'POST',
         body: {
           name, subject, bodyText: body, recipients, replyTo: replyTo || undefined,
+          channel,
           attachmentIds: attachments.map((a) => a.id),
         },
       });
@@ -960,6 +1085,7 @@ function CampaignComposer({ overview, notify, refresh, seed, onSeedConsumed, onS
       const id = draft.campaign.id;
       setDraft(null);
       setName(''); setSubject(''); setBody(''); setRecipients(''); setAttachments([]);
+      draftsRef.current = {}; setTemplated([]);
       await refresh();
       onSent(id);
     } catch (err) {
@@ -969,20 +1095,43 @@ function CampaignComposer({ overview, notify, refresh, seed, onSeedConsumed, onS
     }
   };
 
-  const mode = overview?.mailer?.mode;
+  const chInfo = (overview?.channels || []).find((c) => c.id === channel);
+  const mode = chInfo?.mode || overview?.mailer?.mode;
+  const caps = chInfo?.capabilities || {};
+  const isEmail = channel === 'email';
+  const fixed = FIXED_DEST.has(channel);
   const report = draft?.report;
 
   return (
     <form className="au-card" onSubmit={createDraft}>
-      <h3>Kampanye email baru <small>kirim ke banyak penerima sekaligus</small></h3>
+      <h3>Kirim pesan baru <small>ke banyak penerima sekaligus</small></h3>
 
       <div className="au-field">
-        <label>Minta AI menulis (opsional)</label>
+        <label>Kanal</label>
+        <div className="au-chips-row" role="radiogroup" aria-label="Kanal">
+          {CHANNELS.map((id) => {
+            const info = (overview?.channels || []).find((c) => c.id === id);
+            return (
+              <button
+                type="button" key={id} role="radio" aria-checked={channel === id}
+                className={`au-chan ${channel === id ? 'active' : ''}`}
+                onClick={() => setChannel(id)}
+              >
+                {CHANNEL_LABEL[id]}
+                {info && <i className={`au-dot-s ${info.mode === 'live' ? 'on' : ''}`} title={info.mode === 'live' ? 'Live' : 'Simulasi'} />}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="au-field">
+        <label>Minta AI membuatkan template semua kanal (opsional){templated.length > 0 && <span className="au-tiny"> · template siap: {templated.map((c) => CHANNEL_LABEL[c]).join(', ')}</span>}</label>
         <div className="au-row" style={{ flexWrap: 'nowrap' }}>
           <input className="au-input" value={brief} onChange={(e) => setBrief(e.target.value)}
             placeholder="mis. Undangan rapat evaluasi Jumat jam 10.00 di ruang meeting lantai 3" />
           <button type="button" className="au-btn" disabled={aiBusy || !brief.trim()} onClick={writeWithAI}>
-            {aiBusy && <span className="au-spin" />} Tulis dengan AI
+            {aiBusy && <span className="au-spin" />} Buat template AI
           </button>
         </div>
       </div>
@@ -992,19 +1141,21 @@ function CampaignComposer({ overview, notify, refresh, seed, onSeedConsumed, onS
           <label>Nama kampanye</label>
           <input className="au-input" value={name} onChange={(e) => setName(e.target.value)} placeholder="mis. Undangan rapat evaluasi" />
         </div>
-        <div className="au-field">
-          <label>Reply-To (opsional)</label>
-          <input className="au-input" type="email" value={replyTo} onChange={(e) => setReplyTo(e.target.value)} placeholder="balasan@perusahaan.co.id" />
-        </div>
+        {isEmail && (
+          <div className="au-field">
+            <label>Reply-To (opsional)</label>
+            <input className="au-input" type="email" value={replyTo} onChange={(e) => setReplyTo(e.target.value)} placeholder="balasan@perusahaan.co.id" />
+          </div>
+        )}
       </div>
 
       <div className="au-field">
-        <label>Subjek</label>
-        <input className="au-input" value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="Undangan: {{nama|Bapak/Ibu}}, rapat evaluasi {{hari}}" required />
+        <label>{isEmail ? 'Subjek' : 'Judul (opsional)'}</label>
+        <input className="au-input" value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="Undangan: {{nama|Bapak/Ibu}}, rapat evaluasi {{hari}}" required={isEmail} />
       </div>
 
       <div className="au-field">
-        <label>Isi email</label>
+        <label>{isEmail ? 'Isi email' : 'Isi pesan'} <span className="au-tiny">· {body.length} karakter{!isEmail && caps.maxTextLength ? ` · batas ${caps.maxTextLength}` : ''}</span></label>
         <textarea ref={bodyRef} className="au-textarea" style={{ minHeight: 180 }} value={body} onChange={(e) => setBody(e.target.value)}
           placeholder={'Yth. {{nama|Bapak/Ibu}},\n\n…\n\nSalam hormat,\nWisnu'} required />
         <div className="au-chips-row">
@@ -1014,9 +1165,21 @@ function CampaignComposer({ overview, notify, refresh, seed, onSeedConsumed, onS
         </div>
       </div>
 
-      <AttachmentPicker value={attachments} onChange={setAttachments} notify={notify} limits={overview?.attachmentLimits} />
+      {caps.attachments === false ? (
+        <div className="au-tiny" style={{ marginBottom: '0.8rem' }}>
+          {CHANNEL_LABEL[channel]} tidak mendukung lampiran{channel === 'whatsapp' ? ' pada mode template' : ''}.
+        </div>
+      ) : (
+        <AttachmentPicker value={attachments} onChange={setAttachments} notify={notify} limits={overview?.attachmentLimits} />
+      )}
 
-      <RecipientsField value={recipients} onChange={setRecipients} hint="Kolom CSV tambahan otomatis menjadi variabel, mis. kolom “perusahaan” → {{perusahaan}}." />
+      {fixed ? (
+        <div className="au-alert info">
+          <b>{CHANNEL_LABEL[channel]}</b> mengirim ke satu tujuan tetap yang diatur di <b>.env</b> — tidak perlu daftar penerima.
+        </div>
+      ) : (
+        <RecipientsField channel={channel} value={recipients} onChange={setRecipients} hint="Kolom CSV tambahan otomatis menjadi variabel, mis. kolom “perusahaan” → {{perusahaan}}." />
+      )}
 
       <div className="au-row">
         <button className="au-btn" disabled={busy}>{busy && <span className="au-spin" />} Buat draf & pratinjau</button>
@@ -1025,7 +1188,7 @@ function CampaignComposer({ overview, notify, refresh, seed, onSeedConsumed, onS
       {draft && (
         <div style={{ marginTop: '1.2rem' }}>
           {mode !== 'live' && (
-            <div className="au-alert warn"><b>Mode simulasi</b> — email tidak benar-benar dikirim karena SMTP belum dikonfigurasi.</div>
+            <div className="au-alert warn"><b>Mode simulasi</b> — pesan tidak benar-benar dikirim karena kanal {CHANNEL_LABEL[channel]} belum dikonfigurasi.</div>
           )}
           <div className="au-row" style={{ gap: '0.4rem', marginBottom: '0.7rem' }}>
             <Chip kind="ok">{report.valid} penerima valid</Chip>
@@ -1033,6 +1196,9 @@ function CampaignComposer({ overview, notify, refresh, seed, onSeedConsumed, onS
             {report.duplicates.length > 0 && <Chip kind="warn">{report.duplicates.length} duplikat dibuang</Chip>}
             {report.suppressed.length > 0 && <Chip kind="warn">{report.suppressed.length} di-suppress</Chip>}
           </div>
+          {report.warnings?.length > 0 && (
+            <div className="au-alert warn">{report.warnings.map((w) => <div key={w}>{w}</div>)}</div>
+          )}
           {report.recipientsWithMissingCount > 0 && (
             <div className="au-alert warn">
               <b>{report.recipientsWithMissingCount} penerima kekurangan data variabel</b> dan akan <b>dilewati</b>{' '}
@@ -1073,9 +1239,9 @@ function CampaignComposer({ overview, notify, refresh, seed, onSeedConsumed, onS
         onConfirm={send}
         onCancel={() => setConfirm(false)}
       >
-        Anda akan mengirim <b>{draft?.report?.valid ?? 0}</b> email dengan subjek “{subject}”.
-        <br />Mode: <b>{mode === 'live' ? `KIRIM NYATA via ${overview?.mailer?.host}` : 'SIMULASI (tidak benar-benar terkirim)'}</b>.
-        <br />Email yang sudah terkirim tidak dapat ditarik kembali.
+        Anda akan mengirim <b>{draft?.report?.valid ?? 0}</b> pesan {CHANNEL_LABEL[channel]}{subject ? <> dengan judul “{subject}”</> : null}.
+        <br />Mode: <b>{mode === 'live' ? `KIRIM NYATA via ${CHANNEL_LABEL[channel]}` : 'SIMULASI (tidak benar-benar terkirim)'}</b>.
+        <br />Pesan yang sudah terkirim tidak dapat ditarik kembali.
       </Confirm>
     </form>
   );
@@ -1114,6 +1280,7 @@ function CampaignsTab({ overview, campaigns, refresh, notify, tick, seed, onSeed
                     <div className="t">
                       {c.name}
                       {statusChip(CAMPAIGN_STATUS, c.status)}
+                      <Chip kind="info">{CHANNEL_LABEL[c.channel || 'email']}</Chip>
                       {c.mode === 'dry-run' && <Chip>simulasi</Chip>}
                       {c.created_by === 'scheduler' && <Chip kind="info">dari jadwal</Chip>}
                     </div>
@@ -1138,7 +1305,7 @@ function CampaignsTab({ overview, campaigns, refresh, notify, tick, seed, onSeed
 // ----------------------------------------------------------------- compose
 
 function ComposeTab({ notify, onUseEmail }) {
-  const [mode, setMode] = useState('email');
+  const [mode, setMode] = useState('package');
   const [brief, setBrief] = useState('');
   const [tone, setTone] = useState('profesional dan ramah');
   const [audience, setAudience] = useState('');
@@ -1152,7 +1319,8 @@ function ComposeTab({ notify, onUseEmail }) {
     setResult(null);
     try {
       let d;
-      if (mode === 'email') d = await api('/compose/email', { method: 'POST', body: { brief, tone, audience } });
+      if (mode === 'package') d = await api('/compose/package', { method: 'POST', body: { brief, tone, audience } });
+      else if (mode === 'email') d = await api('/compose/email', { method: 'POST', body: { brief, tone, audience } });
       else if (mode === 'code') d = await api('/compose/code', { method: 'POST', body: { brief, language } });
       else d = await api('/compose/text', { method: 'POST', body: { prompt: brief } });
       setResult({ mode, ...d });
@@ -1177,22 +1345,22 @@ function ComposeTab({ notify, onUseEmail }) {
       <form className="au-card" onSubmit={run}>
         <h3>Tulis dengan AI</h3>
         <div className="au-tabs" style={{ marginBottom: '1rem' }}>
-          {[['email', 'Email'], ['code', 'Kode'], ['text', 'Teks bebas']].map(([k, label]) => (
+          {[['package', 'Semua kanal'], ['email', 'Email'], ['code', 'Kode'], ['text', 'Teks bebas']].map(([k, label]) => (
             <button type="button" key={k} className={`au-tab ${mode === k ? 'active' : ''}`} onClick={() => { setMode(k); setResult(null); }}>{label}</button>
           ))}
         </div>
 
         <div className="au-field">
-          <label>{mode === 'email' ? 'Brief email' : mode === 'code' ? 'Apa yang ingin dibuat?' : 'Permintaan'}</label>
+          <label>{mode === 'email' || mode === 'package' ? 'Brief pesan' : mode === 'code' ? 'Apa yang ingin dibuat?' : 'Permintaan'}</label>
           <textarea className="au-textarea" value={brief} onChange={(e) => setBrief(e.target.value)} required
             placeholder={
-              mode === 'email' ? 'mis. Balas klien yang menanyakan keterlambatan pengiriman, minta maaf, dan tawarkan jadwal baru Selasa.'
+              mode === 'email' || mode === 'package' ? 'mis. Balas klien yang menanyakan keterlambatan pengiriman, minta maaf, dan tawarkan jadwal baru Selasa.'
                 : mode === 'code' ? 'mis. Script Python yang membaca semua file CSV di folder dan menggabungkannya menjadi satu Excel.'
                   : 'mis. Ringkas poin-poin rapat berikut menjadi notulen singkat: …'
             } />
         </div>
 
-        {mode === 'email' && (
+        {(mode === 'email' || mode === 'package') && (
           <div className="au-split">
             <div className="au-field"><label>Nada</label><input className="au-input" value={tone} onChange={(e) => setTone(e.target.value)} /></div>
             <div className="au-field"><label>Penerima</label><input className="au-input" value={audience} onChange={(e) => setAudience(e.target.value)} placeholder="mis. klien korporat" /></div>
@@ -1212,6 +1380,25 @@ function ComposeTab({ notify, onUseEmail }) {
         <h3>Hasil {result?.model && <small>{result.model}</small>}</h3>
         {!result ? (
           <div className="au-empty"><b>Belum ada hasil</b>Isi permintaan di kiri lalu tekan “Buat sekarang”.</div>
+        ) : result.mode === 'package' ? (
+          <>
+            <div className="au-field"><label>Nama kampanye</label><div className="au-pre">{result.name}</div></div>
+            {Object.entries(result.drafts).map(([ch, dr]) => (
+              <div className="au-preview" key={ch}>
+                <div className="to"><b>{CHANNEL_LABEL[ch]}</b></div>
+                {dr.subject && <div className="sub">{dr.subject}</div>}
+                <div className="au-pre" style={{ maxHeight: 150 }}>{dr.body}</div>
+                <div className="au-row" style={{ marginTop: '0.4rem' }}>
+                  <button
+                    type="button" className="au-btn sm primary"
+                    onClick={() => onUseEmail({ name: result.name, drafts: result.drafts, channel: ch, subject: dr.subject, body: dr.body })}
+                  >
+                    Pakai di {CHANNEL_LABEL[ch]}
+                  </button>
+                </div>
+              </div>
+            ))}
+          </>
         ) : result.mode === 'email' ? (
           <>
             <div className="au-field"><label>Subjek</label><div className="au-pre">{result.subject}</div></div>
@@ -1257,6 +1444,125 @@ MAIL_FROM="Nama Anda <anda@gmail.com>"
 EMAIL_DAILY_CAP=450        # batas kirim per hari
 EMAIL_THROTTLE_MS=1200     # jeda antar email
 EMAIL_MAX_RECIPIENTS=1000  # maks penerima per kampanye`;
+
+/** Telegram / WhatsApp / Slack / Discord / Teams / Webhook: status, setup and test. */
+function ChannelsSettings({ overview, notify, refresh }) {
+  const channels = (overview?.channels || []).filter((c) => c.id !== 'email');
+  const [tests, setTests] = useState({});
+  const [subs, setSubs] = useState({ counts: null, list: [] });
+  const [newSub, setNewSub] = useState('');
+  const inbox = overview?.telegramInbox;
+
+  const loadSubs = useCallback(async () => {
+    try {
+      const d = await api('/subscribers/telegram');
+      setSubs({ counts: d.counts, list: d.subscribers });
+    } catch { /* ignore */ }
+  }, []);
+  useEffect(() => { loadSubs(); }, [loadSubs]);
+
+  const setTest = (id, patch) => setTests((t) => ({ ...t, [id]: { ...(t[id] || {}), ...patch } }));
+
+  const runTest = async (c) => {
+    setTest(c.id, { busy: true, result: null });
+    try {
+      const d = await api(`/channels/${c.id}/test`, { method: 'POST', body: { to: tests[c.id]?.to || '' } });
+      setTest(c.id, { busy: false, result: { ok: true, text: `Pesan uji terkirim${d.verified ? ` (${d.verified})` : ''}.` } });
+    } catch (err) {
+      const miss = err.data?.missing;
+      setTest(c.id, { busy: false, result: { ok: false, text: err.message + (miss?.length ? ` (kurang: ${miss.join(', ')})` : '') } });
+    }
+  };
+
+  const addSub = async () => {
+    try {
+      await api('/subscribers/telegram', { method: 'POST', body: { address: newSub } });
+      setNewSub('');
+      await Promise.all([loadSubs(), refresh()]);
+    } catch (err) { notify('err', err.message); }
+  };
+  const rmSub = async (address) => {
+    try {
+      await api(`/subscribers/telegram/${encodeURIComponent(address)}`, { method: 'DELETE' });
+      await loadSubs();
+    } catch (err) { notify('err', err.message); }
+  };
+
+  return (
+    <>
+      {channels.map((c) => (
+        <div className="au-card" key={c.id}>
+          <h3>
+            {CHANNEL_LABEL[c.id] || c.label}
+            <Chip kind={c.mode === 'live' ? 'ok' : 'warn'}>{c.mode === 'live' ? 'Live' : 'Simulasi'}</Chip>
+          </h3>
+          <div className="au-muted" style={{ marginBottom: '0.6rem' }}>{c.hint}</div>
+          {c.sendMode && <div className="au-tiny" style={{ marginBottom: '0.5rem' }}>Mode kirim: {c.sendMode}</div>}
+          {c.destination && <div className="au-tiny" style={{ marginBottom: '0.5rem' }}>Tujuan: {c.destination}</div>}
+          {c.mode !== 'live' && c.missing?.length > 0 && (
+            <div className="au-alert warn">Belum diatur di <b>.env</b>: {c.missing.join(', ')}.</div>
+          )}
+          <pre className="au-pre au-code" style={{ maxHeight: 150 }}>{ENV_GUIDE[c.id]}</pre>
+          <div className="au-row" style={{ flexWrap: 'nowrap', marginTop: '0.6rem' }}>
+            {!FIXED_DEST.has(c.id) && (
+              <input
+                className="au-input"
+                value={tests[c.id]?.to || ''}
+                onChange={(e) => setTest(c.id, { to: e.target.value })}
+                placeholder={c.id === 'whatsapp' ? '0812-3456-7890' : 'chat ID, mis. 123456789'}
+              />
+            )}
+            <button className="au-btn primary" disabled={tests[c.id]?.busy} onClick={() => runTest(c)}>
+              {tests[c.id]?.busy && <span className="au-spin" />} Tes
+            </button>
+          </div>
+          {tests[c.id]?.result && (
+            <div className={`au-alert ${tests[c.id].result.ok ? 'ok' : 'err'}`} style={{ marginTop: '0.6rem' }}>{tests[c.id].result.text}</div>
+          )}
+        </div>
+      ))}
+
+      <div className="au-card" style={{ gridColumn: '1 / -1' }}>
+        <h3>
+          Pelanggan Telegram
+          <small>
+            {subs.counts ? `${subs.counts.active} aktif dari ${subs.counts.total}` : '—'}
+            {inbox ? (inbox.running ? ' · inbox aktif' : ' · inbox mati (set TELEGRAM_POLLING=true)') : ''}
+          </small>
+        </h3>
+        <div className="au-muted" style={{ marginBottom: '0.6rem' }}>
+          Orang mendaftar sendiri dengan mengirim <b>/start</b> ke bot{inbox?.requiresJoinCode ? ' (butuh kode undangan)' : ''}, dan berhenti dengan <b>/stop</b>.
+          Pakai <b>@subscribers</b> sebagai penerima untuk mengirim ke semuanya.
+        </div>
+        <div className="au-row" style={{ flexWrap: 'nowrap', marginBottom: '0.8rem' }}>
+          <input className="au-input" value={newSub} onChange={(e) => setNewSub(e.target.value)} placeholder="Tambah manual: chat ID (mis. 123456789)" />
+          <button className="au-btn" onClick={addSub} disabled={!newSub.trim()}>Tambah</button>
+        </div>
+        {subs.list.length === 0 ? (
+          <div className="au-muted">Belum ada pelanggan.</div>
+        ) : (
+          <div className="au-tablewrap">
+            <table className="au-table">
+              <thead><tr><th>Chat ID</th><th>Nama</th><th>Username</th><th>Status</th><th>Sejak</th><th /></tr></thead>
+              <tbody>
+                {subs.list.map((u) => (
+                  <tr key={u.address}>
+                    <td>{u.address}</td>
+                    <td>{u.name || '—'}</td>
+                    <td>{u.username ? `@${u.username}` : '—'}</td>
+                    <td><Chip kind={u.active ? 'ok' : ''}>{u.active ? 'aktif' : 'berhenti'}</Chip></td>
+                    <td>{fmtDateTime(u.created_at)}</td>
+                    <td style={{ textAlign: 'right' }}><button className="au-btn sm" onClick={() => rmSub(u.address)}>Hapus</button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
 
 function SettingsTab({ overview, notify, refresh }) {
   const [to, setTo] = useState('');
@@ -1353,6 +1659,8 @@ function SettingsTab({ overview, notify, refresh }) {
           Kredensial hanya dibaca dari .env — tidak pernah disimpan di database atau dikirim ke browser.
         </div>
       </div>
+
+      <ChannelsSettings overview={overview} notify={notify} refresh={refresh} />
 
       <div className="au-card" style={{ gridColumn: '1 / -1' }}>
         <h3>Daftar suppress <small>{supp.length} alamat tidak akan pernah dikirimi</small></h3>
@@ -1486,7 +1794,7 @@ export default function Automation() {
   const tabs = useMemo(() => ([
     ['overview', 'Ringkasan', 0],
     ['jobs', 'Jadwal', pendingJobs],
-    ['campaigns', 'Email Massal', draftCampaigns],
+    ['campaigns', 'Kirim Pesan', draftCampaigns],
     ['compose', 'Tulis dengan AI', 0],
     ['settings', 'Pengaturan', 0],
   ]), [pendingJobs, draftCampaigns]);
@@ -1497,7 +1805,7 @@ export default function Automation() {
         <div className="au-hero">
           <div>
             <h1><span>Otomasi</span> kerja kantor</h1>
-            <p>Jadwalkan tugas harian, tulis email dan kode dengan AI, dan kirim ke ratusan penerima — Anda tinggal menyetujui.</p>
+            <p>Jadwalkan tugas harian, tulis pesan dan kode dengan AI, lalu kirim ke ratusan penerima lewat email, WhatsApp, Telegram, Slack, dan lainnya — Anda tinggal menyetujui.</p>
           </div>
           <span className={`au-live ${live ? 'on' : ''}`} title="Koneksi realtime ke server">
             <i className="au-dot" /> {live ? 'Realtime aktif' : 'Menyambungkan…'}
@@ -1517,7 +1825,12 @@ export default function Automation() {
         </div>
 
         {tab === 'overview' && <Overview overview={overview} jobs={jobs} campaigns={campaigns} feed={feed} onGoto={gotoTab} />}
-        {tab === 'jobs' && <JobsTab jobs={jobs} refresh={refresh} notify={notify} tick={tick} limits={overview?.attachmentLimits} />}
+        {tab === 'jobs' && (
+          <JobsTab
+            jobs={jobs} refresh={refresh} notify={notify} tick={tick}
+            limits={overview?.attachmentLimits} channels={overview?.channels}
+          />
+        )}
         {tab === 'campaigns' && (
           <CampaignsTab
             overview={overview} campaigns={campaigns} refresh={refresh} notify={notify} tick={tick}

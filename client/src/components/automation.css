@@ -249,3 +249,29 @@
   .au-progress.running > i, .au-live.on .au-dot, .au-spin { animation: none; }
   .au-stat:hover { transform: none; }
 }
+
+/* ---------- channel picker & status cards ---------- */
+.au-chan {
+  display: inline-flex; align-items: center; gap: 0.45rem;
+  border: 1px solid var(--border-primary); background: var(--bg-secondary); color: var(--text-secondary);
+  border-radius: 999px; padding: 0.35rem 0.8rem; font: inherit; font-size: 0.82rem; font-weight: 700;
+  cursor: pointer; transition: border-color 0.15s, background 0.15s, color 0.15s, transform 0.15s;
+}
+.au-chan:hover { border-color: rgba(255, 152, 0, 0.55); color: var(--text-primary); transform: translateY(-1px); }
+.au-chan.active {
+  background: var(--brand-gradient); color: #fff; border-color: transparent;
+  box-shadow: 0 4px 12px rgba(255, 107, 0, 0.25);
+}
+.au-chan:focus-visible { outline: 0; box-shadow: var(--focus-ring); }
+.au-dot-s { width: 8px; height: 8px; border-radius: 50%; background: var(--text-tertiary); display: inline-block; }
+.au-dot-s.on { background: var(--success); box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.25); }
+.au-chan.active .au-dot-s { box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.35); }
+
+.au-chan-grid { display: grid; gap: 0.7rem; grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr)); }
+.au-chan-card {
+  min-width: 0; padding: 0.75rem 0.85rem; border-radius: 12px; border: 1px solid var(--border-primary);
+  background: var(--bg-primary); display: flex; flex-direction: column; gap: 0.3rem;
+  transition: border-color 0.15s, transform 0.2s;
+}
+.au-chan-card.live { border-color: rgba(16, 185, 129, 0.45); }
+@media (hover: hover) { .au-chan-card:hover { transform: translateY(-2px); } }
