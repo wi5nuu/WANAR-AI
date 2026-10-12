@@ -348,6 +348,9 @@ export class AIManager {
       const providerInstance = this.providers[cand.provider];
       if (!providerInstance) continue;
       if (typeof providerInstance.isAvailable === 'function' && !providerInstance.isAvailable()) continue;
+      // Re-checked per candidate: earlier failures in THIS request may have
+      // revealed a dead provider (bad key) or a rate-limited one.
+      if (i > 0 && this.failover.shouldSkip(cand.provider, cand.model)) continue;
 
       if (i > 0 || cand.provider !== provider) {
         yield { type: 'provider_switch', from: provider, to: cand.provider, model: cand.model, reason: cand.reason || 'failover', attempt: i, reset: true };
@@ -482,6 +485,11 @@ export class AIManager {
         // Lewati provider yang tidak tersedia.
         if (!providerInstance) { chainIndex++; continue; }
         if (typeof providerInstance.isAvailable === 'function' && !providerInstance.isAvailable()) {
+          chainIndex++; continue;
+        }
+        // Skip candidates that earlier failures in this request have ruled out
+        // (rejected key => whole provider; repeated 429 => circuit open).
+        if (chainIndex > 0 && this.failover.shouldSkip(cand.provider, cand.model)) {
           chainIndex++; continue;
         }
 

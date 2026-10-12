@@ -108,6 +108,8 @@ export class SmartFailover {
     this._saveTimer = null;
     /** @type {Map<string, number>} key `provider::model` → timestamp bebas */
     this.cooldown = new Map();
+    /** @type {Map<string, number>} provider -> timestamp (credential rejected) */
+    this.providerDown = new Map();
     /** @type {Map<string, {fails:number, openedAt:number}>} sirkuit per provider */
     this.circuit = new Map();
     this.history = [];
@@ -154,6 +156,23 @@ export class SmartFailover {
 
   _key(provider, model) { return `${provider}::${model || ''}`; }
 
+  /**
+   * Is the whole provider known-bad right now? A rejected credential fails for
+   * every model of that provider, so there is no point trying the other 30.
+   */
+  isProviderDown(provider) {
+    const until = this.providerDown.get(provider);
+    return Boolean(until && until > Date.now());
+  }
+
+  /**
+   * Re-evaluated for EVERY candidate while a request walks the chain (the chain
+   * itself is built once, before anything has failed).
+   */
+  shouldSkip(provider, model) {
+    return this.isProviderDown(provider) || this.isCircuitOpen(provider) || this.isCoolingDown(provider, model);
+  }
+
   isCoolingDown(provider, model) {
     const until = this.cooldown.get(this._key(provider, model));
     return Boolean(until && until > Date.now());
@@ -174,6 +193,8 @@ export class SmartFailover {
     const cd = COOLDOWN_MS[reason] || COOLDOWN_MS[FailReason.UNKNOWN];
     const key = this._key(provider, model);
     this.cooldown.set(key, Date.now() + cd);
+    // A bad/placeholder API key is a property of the provider, not of one model.
+    if (reason === FailReason.AUTH) this.providerDown.set(provider, Date.now() + cd);
     if (PERSIST_REASONS.has(reason)) {
       this._persisted.set(key, { until: Date.now() + cd, reason });
       this._scheduleSave();
@@ -187,6 +208,7 @@ export class SmartFailover {
 
   markSuccess(provider, model) {
     this.cooldown.delete(this._key(provider, model));
+    this.providerDown.delete(provider);
     if (this._persisted.delete(this._key(provider, model))) this._scheduleSave();
     const c = this.circuit.get(provider);
     if (c) { c.fails = 0; c.openedAt = 0; }
