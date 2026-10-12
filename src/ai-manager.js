@@ -14,7 +14,7 @@ import FireworksProvider from './providers/fireworks.js';
 import OpenCodeProvider from './providers/opencode.js';
 import ContextManager from './context-manager.js';
 import { executeTool, getToolDefinitions } from './tools/registry.js';
-import { SmartFailover, classifyError } from './ai-failover.js';
+import { SmartFailover, classifyError, DEFAULT_STATE_PATH } from './ai-failover.js';
 import * as db from './database.js';
 import config from '../config/config.js';
 
@@ -218,7 +218,9 @@ export class AIManager {
     this.systemPrompt = WANAR_SYSTEM_PROMPT;
 
     // Smart auto-failover: pindah model/provider otomatis saat quota habis, dll.
-    this.failover = new SmartFailover(this.providers, config);
+    this.failover = new SmartFailover(this.providers, config, {
+      statePath: process.env.VITEST ? null : DEFAULT_STATE_PATH,
+    });
 
   }
 
