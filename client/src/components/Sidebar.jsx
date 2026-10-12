@@ -6,16 +6,72 @@
  * Pengaturan provider/model ada di InputBar, fitur lain ada di menu header.
  */
 
+import { useMemo, useState } from 'react';
+
+const DAY = 86_400_000;
+
+/** SQLite stores "YYYY-MM-DD HH:MM:SS" in UTC. */
+function toMs(value) {
+  if (!value) return 0;
+  const t = Date.parse(String(value).includes('T') ? value : `${String(value).replace(' ', 'T')}Z`);
+  return Number.isFinite(t) ? t : 0;
+}
+
+function groupLabel(ms, now) {
+  const startToday = new Date(now);
+  startToday.setHours(0, 0, 0, 0);
+  const age = startToday.getTime() - ms;
+  if (ms >= startToday.getTime()) return 'Hari ini';
+  if (age <= DAY) return 'Kemarin';
+  if (age <= 7 * DAY) return '7 hari terakhir';
+  if (age <= 30 * DAY) return '30 hari terakhir';
+  return 'Lebih lama';
+}
+
+const GROUP_ORDER = ['Hari ini', 'Kemarin', '7 hari terakhir', '30 hari terakhir', 'Lebih lama'];
+
 export default function Sidebar({
   sessions,
   currentId,
   onSwitch,
   onDelete,
+  onCleanup,
   onNew,
   open,
   onClose,
 }) {
-  const list = sessions || [];
+  const [query, setQuery] = useState('');
+  const [cleaning, setCleaning] = useState(false);
+  const all = sessions || [];
+
+  // A session with no messages is not a conversation: hide it (except the one
+  // currently open) so leftovers never clutter the history.
+  const nonEmpty = useMemo(
+    () => all.filter((s) => (s.msg_count ?? 1) > 0 || s.id === currentId),
+    [all, currentId]
+  );
+  const emptyCount = all.length - nonEmpty.length;
+
+  const groups = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    const now = Date.now();
+    const buckets = new Map();
+    for (const s of nonEmpty) {
+      if (q && !String(s.title || '').toLowerCase().includes(q)) continue;
+      const label = groupLabel(toMs(s.updated_at || s.created_at), now);
+      if (!buckets.has(label)) buckets.set(label, []);
+      buckets.get(label).push(s);
+    }
+    return GROUP_ORDER.filter((l) => buckets.has(l)).map((l) => ({ label: l, items: buckets.get(l) }));
+  }, [nonEmpty, query]);
+
+  const list = nonEmpty;
+
+  const runCleanup = async () => {
+    if (!onCleanup || cleaning) return;
+    setCleaning(true);
+    try { await onCleanup(); } finally { setCleaning(false); }
+  };
 
   return (
     <>
@@ -72,8 +128,25 @@ export default function Sidebar({
 
       {/* Sessions List */}
       <div className="sidebar-sessions">
+        {list.length > 6 && (
+          <div className="sidebar-search">
+            <input
+              type="search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Cari percakapan…"
+              aria-label="Cari percakapan"
+            />
+          </div>
+        )}
+        {list.length > 0 && groups.length === 0 && (
+          <div className="sidebar-empty-note">Tidak ada percakapan yang cocok.</div>
+        )}
         {list.length > 0 ? (
-          list.map(session => (
+          groups.map((g) => (
+            <div key={g.label} className="sidebar-group">
+              <div className="sidebar-group-label">{g.label}</div>
+              {g.items.map(session => (
             <div
               key={session.id}
               className={`sidebar-session ${session.id === currentId ? 'active' : ''}`}
@@ -114,6 +187,8 @@ export default function Sidebar({
                 </svg>
               </button>
             </div>
+              ))}
+            </div>
           ))
         ) : (
           <div style={{
@@ -131,6 +206,14 @@ export default function Sidebar({
       <div className="sidebar-footer sidebar-footer-min">
         <span className="sidebar-ver">v1.0.5</span>
       </div>
+
+      {emptyCount > 0 && onCleanup && (
+        <div className="sidebar-cleanup">
+          <button type="button" onClick={runCleanup} disabled={cleaning}>
+            {cleaning ? 'Membersihkan…' : `Bersihkan ${emptyCount} sesi kosong`}
+          </button>
+        </div>
+      )}
       </aside>
     </>
   );

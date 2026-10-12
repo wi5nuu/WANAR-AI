@@ -1143,3 +1143,179 @@ describe('team channels never greet "Bapak/Ibu"', async () => {
     for (const ch of ['slack', 'discord', 'teams']) expect(drafts[ch].body).not.toMatch(/Bapak\/Ibu/);
   });
 });
+
+// ================================================= Telegram AI chat replies
+
+describe('Telegram inbox: AI chat replies', () => {
+  const OWNER = '1811580954';
+  const privateMsg = (chatId, text, type = 'private') => ({
+    update_id: 1,
+    message: { text, chat: { id: Number(chatId), type }, from: { first_name: 'Wisnu' } },
+  });
+
+  function setup({ env = {}, responder } = {}) {
+    const a = makeAuto({ env: { ...TG, ...env }, fetchImpl: fakeFetch() });
+    const sent = [];
+    const channel = a.channels.get('telegram');
+    channel.reply = vi.fn(async (chatId, html) => { sent.push({ chatId: String(chatId), html }); });
+    channel.sendAction = vi.fn(async () => {});
+    const resp = responder || vi.fn(async ({ text }) => `Jawaban untuk: ${text}`);
+    const inbox = new TelegramInbox({
+      channel, store: a.store, env: { ...TG, ...env }, responder: resp,
+    });
+    return { a, inbox, sent, channel, resp };
+  }
+
+  it('answers a plain message from an allow-listed private chat', async () => {
+    const { inbox, sent, resp, channel } = setup({ env: { TELEGRAM_AI_CHAT_IDS: OWNER } });
+    const r = await inbox.handleUpdate(privateMsg(OWNER, 'halo, apa kabar?'));
+    expect(r.action).toBe('ai_reply');
+    await r.done;
+
+    expect(resp).toHaveBeenCalledTimes(1);
+    expect(channel.sendAction).toHaveBeenCalledWith(OWNER, 'typing');
+    expect(sent).toEqual([{ chatId: OWNER, html: 'Jawaban untuk: halo, apa kabar?' }]);
+  });
+
+  it('is OFF by default: no allow-list means no AI replies at all', async () => {
+    const { inbox, sent, resp } = setup(); // TELEGRAM_AI_CHAT_IDS unset
+    expect(await inbox.handleUpdate(privateMsg(OWNER, 'halo'))).toBeNull();
+    expect(resp).not.toHaveBeenCalled();
+    expect(sent).toHaveLength(0);
+    expect(inbox.status().aiChat).toEqual({ enabled: false, chats: 0 });
+  });
+
+  it('ignores strangers, even though the bot is public', async () => {
+    const { inbox, sent, resp } = setup({ env: { TELEGRAM_AI_CHAT_IDS: OWNER } });
+    expect(await inbox.handleUpdate(privateMsg('99999999', 'halo'))).toBeNull();
+    expect(resp).not.toHaveBeenCalled();
+    expect(sent).toHaveLength(0);
+  });
+
+  it('ignores groups, even an allow-listed group id', async () => {
+    const { inbox, resp } = setup({ env: { TELEGRAM_AI_CHAT_IDS: '-1001234567890' } });
+    expect(await inbox.handleUpdate(privateMsg('-1001234567890', 'halo', 'supergroup'))).toBeNull();
+    expect(resp).not.toHaveBeenCalled();
+  });
+
+  it('keeps commands out of the AI: /start still subscribes', async () => {
+    const { a, inbox, resp } = setup({ env: { TELEGRAM_AI_CHAT_IDS: OWNER } });
+    const r = await inbox.handleUpdate(privateMsg(OWNER, '/start'));
+    expect(r.action).toBe('subscribed');
+    expect(resp).not.toHaveBeenCalled();
+    expect(a.store.subscribers.get('telegram', OWNER).active).toBe(1);
+  });
+
+  it('remembers the conversation and caps how much', async () => {
+    const seen = [];
+    const { inbox } = setup({
+      env: { TELEGRAM_AI_CHAT_IDS: OWNER },
+      responder: async ({ history, text }) => { seen.push(history.map((h) => h.content)); return `balas ${text}`; },
+    });
+    for (const t of ['satu', 'dua', 'tiga']) {
+      const r = await inbox.handleUpdate(privateMsg(OWNER, t));
+      await r.done;
+    }
+    expect(seen[0]).toEqual([]);
+    expect(seen[1]).toEqual(['satu', 'balas satu']);
+    expect(seen[2]).toEqual(['satu', 'balas satu', 'dua', 'balas dua']);
+
+    for (let i = 0; i < 10; i++) await (await inbox.handleUpdate(privateMsg(OWNER, `m${i}`))).done;
+    expect(inbox._historyFor(OWNER).length).toBeLessThanOrEqual(12);
+  });
+
+  it('escapes the answer so model output cannot inject Telegram HTML', async () => {
+    const { inbox, sent } = setup({
+      env: { TELEGRAM_AI_CHAT_IDS: OWNER },
+      responder: async () => 'Coba <b>tebal</b> & <a href="http://evil">klik</a>',
+    });
+    await (await inbox.handleUpdate(privateMsg(OWNER, 'x'))).done;
+    expect(sent[0].html).toBe('Coba &lt;b&gt;tebal&lt;/b&gt; &amp; &lt;a href="http://evil"&gt;klik&lt;/a&gt;');
+  });
+
+  it('splits long answers into several messages under the limit', async () => {
+    const long = Array.from({ length: 30 }, (_, i) => `Paragraf ${i}: ${'isi '.repeat(60)}`).join('\n\n');
+    const { inbox, sent } = setup({ env: { TELEGRAM_AI_CHAT_IDS: OWNER }, responder: async () => long });
+    await (await inbox.handleUpdate(privateMsg(OWNER, 'panjang'))).done;
+    expect(sent.length).toBeGreaterThan(1);
+    for (const m of sent) expect(m.html.length).toBeLessThanOrEqual(4096);
+  });
+
+  it('answers politely (and never leaks the error) when the AI fails', async () => {
+    const { inbox, sent } = setup({
+      env: { TELEGRAM_AI_CHAT_IDS: OWNER },
+      responder: async () => { throw new Error('401 sk-SECRET-KEY invalid'); },
+    });
+    await (await inbox.handleUpdate(privateMsg(OWNER, 'halo'))).done;
+    expect(sent).toHaveLength(1);
+    expect(sent[0].html).toMatch(/AI sedang tidak tersedia/);
+    expect(sent[0].html).not.toMatch(/SECRET|401/);
+  });
+
+  it('does not block polling while a slow model is thinking', async () => {
+    let release;
+    const gate = new Promise((r) => { release = r; });
+    const { inbox, sent } = setup({
+      env: { TELEGRAM_AI_CHAT_IDS: OWNER },
+      responder: async () => { await gate; return 'lambat tapi sampai'; },
+    });
+    const r = await inbox.handleUpdate(privateMsg(OWNER, 'halo')); // returns immediately
+    expect(r.action).toBe('ai_reply');
+    expect(sent).toHaveLength(0);
+    release();
+    await r.done;
+    expect(sent[0].html).toBe('lambat tapi sampai');
+  });
+
+  it('keeps answers in order per chat', async () => {
+    const order = [];
+    const { inbox } = setup({
+      env: { TELEGRAM_AI_CHAT_IDS: OWNER },
+      responder: async ({ text }) => {
+        await new Promise((r) => setTimeout(r, text === 'pertama' ? 40 : 1));
+        order.push(text);
+        return text;
+      },
+    });
+    const a = await inbox.handleUpdate(privateMsg(OWNER, 'pertama'));
+    const b = await inbox.handleUpdate(privateMsg(OWNER, 'kedua'));
+    await Promise.all([a.done, b.done]);
+    expect(order).toEqual(['pertama', 'kedua']);
+  });
+
+  it('rate-limits a chat that floods the AI', async () => {
+    const { inbox, resp, sent } = setup({ env: { TELEGRAM_AI_CHAT_IDS: OWNER } });
+    const results = [];
+    for (let i = 0; i < 22; i++) results.push(await inbox.handleUpdate(privateMsg(OWNER, `m${i}`)));
+    await Promise.all(results.filter((r) => r.done).map((r) => r.done));
+    expect(resp).toHaveBeenCalledTimes(20);
+    expect(results.filter((r) => r.action === 'rate_limited')).toHaveLength(2);
+    expect(sent.some((m) => /Terlalu banyak pesan/.test(m.html))).toBe(true);
+  });
+
+  it('reports AI chat as enabled in status when allow-listed', () => {
+    const { inbox } = setup({ env: { TELEGRAM_AI_CHAT_IDS: `${OWNER}, 222222` } });
+    expect(inbox.status().aiChat).toEqual({ enabled: true, chats: 2 });
+  });
+});
+
+describe('a known-dead primary provider is not retried on every request', async () => {
+  const { SmartFailover } = await import('../src/ai-failover.js');
+  const { default: AIManager } = await import('../src/ai-manager.js');
+
+  it('second request skips the primary whose key was rejected', async () => {
+    let aCalls = 0;
+    const a = { defaultModel: 'a1', isAvailable: () => true, async *chatStream() { aCalls += 1; yield { type: 'error', content: '403 forbidden invalid api key' }; } };
+    const b = { defaultModel: 'b1', isAvailable: () => true, async *chatStream() { yield { type: 'content', content: 'B' }; yield { type: 'done' }; } };
+    const ai = new AIManager();
+    ai.providers = { a, b };
+    ai.failover = new SmartFailover(ai.providers, { a: { models: [{ id: 'a1' }] }, b: { models: [{ id: 'b1' }] } });
+    ai.currentProvider = 'a';
+
+    const run = async () => { const out = []; for await (const e of ai.chatStream([{ role: 'user', content: 'x' }], { provider: 'a', model: 'a1' })) out.push(e); return out; };
+    await run();
+    await run();
+    await run();
+    expect(aCalls).toBe(1); // before: 3 (once per request)
+  });
+});

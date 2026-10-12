@@ -1,13 +1,22 @@
 import Database from 'better-sqlite3';
 import path from 'path';
+import os from 'os';
 import fs from 'fs';
 import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DB_PATH = path.join(__dirname, '..', 'data', 'wanar.db');
+// Automated tests must NEVER touch the real database: they used to create dozens
+// of junk sessions ("test", "<script>alert(1)</script>", ...) in the operator's
+// own history. Under a test runner we use a private in-memory database.
+const UNDER_TEST = Boolean(process.env.VITEST) || process.env.NODE_ENV === 'test';
+const DB_PATH = process.env.WANAR_DB_PATH
+  || (UNDER_TEST ? ':memory:' : path.join(__dirname, '..', 'data', 'wanar.db'));
 
-fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
+if (DB_PATH !== ':memory:') fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
+
+/** Where this process keeps its data (':memory:' under test). */
+export const DB_LOCATION = DB_PATH;
 
 const db = new Database(DB_PATH);
 db.pragma('journal_mode = WAL');
@@ -331,7 +340,16 @@ db.exec(`
 `);
 
 const prepared = {
-  getSessions: db.prepare('SELECT id, title, provider, model, created_at, updated_at FROM chat_sessions ORDER BY updated_at DESC LIMIT ?'),
+  getSessions: db.prepare(`
+    SELECT s.id, s.title, s.provider, s.model, s.created_at, s.updated_at,
+           (SELECT COUNT(*) FROM chat_messages m WHERE m.session_id = s.id) AS msg_count
+    FROM chat_sessions s ORDER BY s.updated_at DESC LIMIT ?
+  `),
+  deleteEmptySessions: db.prepare(`
+    DELETE FROM chat_sessions
+    WHERE NOT EXISTS (SELECT 1 FROM chat_messages m WHERE m.session_id = chat_sessions.id)
+      AND created_at <= datetime('now', ?)
+  `),
   createSession: db.prepare('INSERT INTO chat_sessions (id, title, provider, model) VALUES (?, ?, ?, ?)'),
   updateSessionTitle: db.prepare("UPDATE chat_sessions SET title = ?, updated_at = datetime('now') WHERE id = ?"),
   deleteSession: db.prepare('DELETE FROM chat_sessions WHERE id = ?'),
@@ -356,6 +374,18 @@ const prepared = {
 
 export function getSessions(limit = 50) {
   return prepared.getSessions.all(limit);
+}
+
+/**
+ * Removes sessions that have no messages at all (abandoned "New Chat" rows).
+ * `olderThanMinutes` protects a conversation the user has just opened.
+ * @returns {number} how many were deleted
+ */
+export function deleteEmptySessions(olderThanMinutes = 5) {
+  // An unreadable value falls back to the PROTECTIVE default, never to 0.
+  const n = Number(olderThanMinutes);
+  const minutes = Number.isFinite(n) ? Math.max(0, Math.floor(n)) : 5;
+  return prepared.deleteEmptySessions.run(`-${minutes} minutes`).changes;
 }
 
 export function createSession(id, title, provider, model) {

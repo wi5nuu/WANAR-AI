@@ -32,6 +32,17 @@ export function useSessions() {
     await load();
   }, [currentId, load]);
 
+  const cleanup = useCallback(async () => {
+    try {
+      const r = await fetch('/api/sessions/cleanup', { method: 'POST' });
+      const res = await r.json();
+      await load();
+      return res.deleted || 0;
+    } catch (e) {
+      return 0;
+    }
+  }, [load]);
+
   const switchTo = useCallback(async (id) => {
     const r = await fetch(`/api/sessions/${id}`);
     const data = await r.json();
@@ -44,5 +55,5 @@ export function useSessions() {
     }));
   }, [load]);
 
-  return { sessions, currentId, setCurrentId, create, remove, switchTo, reload: load };
+  return { sessions, currentId, setCurrentId, create, remove, cleanup, switchTo, reload: load };
 }
