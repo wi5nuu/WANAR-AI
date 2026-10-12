@@ -14,6 +14,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { spawn } from 'node:child_process';
 import net from 'node:net';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -89,7 +90,29 @@ beforeAll(async () => {
 
   // VITEST/NODE_ENV must NOT look like a test run, otherwise the server skips
   // startServer() and never listens.
-  const env = { ...process.env, PORT: String(port), HOST: '127.0.0.1', VITEST: '', NODE_ENV: 'development' };
+  //
+  // It must still be fully ISOLATED from the operator's real installation: this
+  // child reads the real .env, so without these overrides it would use the real
+  // database (and run its housekeeping), and — worse — long-poll the operator's
+  // Telegram bot and answer chats, fighting the real server for updates.
+  const env = {
+    ...process.env,
+    PORT: String(port),
+    HOST: '127.0.0.1',
+    VITEST: '',
+    NODE_ENV: 'development',
+    WANAR_DB_PATH: path.join(os.tmpdir(), `wanar-live-test-${process.pid}-${port}.db`),
+    TELEGRAM_POLLING: 'false',
+    TELEGRAM_AI_CHAT_IDS: '',
+    TELEGRAM_BOT_TOKEN: '',
+    WHATSAPP_TOKEN: '',
+    SLACK_WEBHOOK_URL: '',
+    DISCORD_WEBHOOK_URL: '',
+    TEAMS_WEBHOOK_URL: '',
+    WEBHOOK_URL: '',
+    SMTP_HOST: '',
+    EMAIL_DRY_RUN: 'true',
+  };
 
   child = spawn(process.execPath, ['src/server.js'], {
     cwd: ROOT,

@@ -888,6 +888,12 @@ app.post('/api/sessions', (req, res) => {
   res.json({ id: sessionId });
 });
 
+/** Deletes abandoned sessions that contain no messages. Never touches real chats. */
+app.post('/api/sessions/cleanup', rateLimiters.automation || rateLimiters.strict, (req, res) => {
+  const deleted = db.deleteEmptySessions(0);
+  res.json({ success: true, deleted });
+});
+
 app.get('/api/sessions/:id', (req, res) => {
   const messages = db.getMessages(req.params.id);
   res.json({ id: req.params.id, messages });
@@ -2719,6 +2725,12 @@ async function startServer() {
   console.log(`RAG       : ${config.rag?.enabled ? 'Enabled' : 'Disabled'}\n`);
   console.log('Press Ctrl+C to stop\n');
   console.log(`Cluster   : ${coordinator.redisAvailable ? `Distributed (${coordinator.getInstanceCount()} instances)` : 'Standalone'}\n`);
+
+  // Housekeeping: drop abandoned empty sessions left behind by older runs/tests.
+  try {
+    const pruned = db.deleteEmptySessions(60);
+    if (pruned) console.log(`Housekeeping: ${pruned} sesi kosong dibersihkan`);
+  } catch { /* non-fatal */ }
 
   // Penjadwal otomasi (email terjadwal, job AI). Hanya saat server benar-benar jalan.
   try {
