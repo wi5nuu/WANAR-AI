@@ -20,6 +20,7 @@ import VoiceTalk from './components/VoiceTalk';
 import PromptLab from './components/PromptLab';
 import AgentFlow, { AgentLiveBar } from './components/AgentFlow';
 import AuroraBackground from './components/AuroraBackground';
+import Automation from './components/Automation';
 
 function ChatLayout() {
   const {
@@ -233,6 +234,7 @@ export default function App() {
       <Route path="/generator" element={<Generator />} />
       <Route path="/voice" element={<VoiceTalk />} />
       <Route path="/prompt-lab" element={<PromptLab />} />
+      <Route path="/automation" element={<Automation />} />
     </Routes>
   );
 }
