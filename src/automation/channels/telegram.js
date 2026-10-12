@@ -163,6 +163,11 @@ export function createTelegramChannel(env = process.env, { fetchImpl = globalThi
       return call('sendMessage', { chat_id: chatId, text: html, parse_mode: 'HTML', disable_web_page_preview: true });
     },
 
+    /** "typing…" indicator while the AI is thinking. Best effort. */
+    async sendAction(chatId, action = 'typing') {
+      return call('sendChatAction', { chat_id: chatId, action });
+    },
+
     /** Long-poll for inbound updates (inbox). */
     async getUpdates(offset, timeoutSec = 25) {
       const r = await httpRequest(fetchImpl, api('getUpdates'), {

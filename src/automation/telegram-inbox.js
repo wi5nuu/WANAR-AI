@@ -1,7 +1,9 @@
 /**
  * src/automation/telegram-inbox.js
  *
- * Receives Telegram updates (long polling) so people can opt in/out themselves:
+ * Receives Telegram updates (long polling). Two jobs:
+ *
+ *  1. Opt-in / opt-out, so people can subscribe themselves:
  *
  *   /start [kode]   subscribe this chat      /stop   unsubscribe + suppress
  *   /id             reply with the chat id   /help   list commands
@@ -23,16 +25,60 @@
 import { EventEmitter } from 'node:events';
 import { suppressionKey } from './store.js';
 import { ErrorKind } from './mailer.js';
+import { collect } from './ai-compose.js';
+import { chunkText } from './channels/base.js';
 
 const escapeHtml = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Builds the function that answers a plain chat message with the AI.
+ *
+ * Deliberately CHAT ONLY: no tools, no file/shell/browser access. A Telegram
+ * bot is reachable by anyone who finds its username, and its text is untrusted
+ * input, so it must never be able to act on the host.
+ */
+export function makeChatResponder({ aiManager, systemPrompt }) {
+  const system = systemPrompt || [
+    'Kamu adalah Wanar AI, asisten pribadi milik Wisnu Alfian Nur Ashar.',
+    'Kamu sedang mengobrol lewat Telegram: jawab singkat dan jelas (sekitar 1-4 kalimat, lebih panjang hanya bila diminta).',
+    'Gunakan Bahasa Indonesia yang sopan dan santai. Teks biasa saja: tanpa markdown, tanpa HTML.',
+    'Dari Telegram kamu hanya bisa mengobrol: kamu tidak bisa membuka file, menjalankan perintah, atau mengakses sistem.',
+    'Jika diminta melakukan hal itu, jelaskan singkat bahwa itu dilakukan lewat aplikasi web Wanar AI.',
+    'Jangan mengarang fakta. Jika tidak tahu, katakan tidak tahu.',
+  ].join('\n');
+
+  return async ({ history, text }) => {
+    const date = new Date().toLocaleDateString('id-ID', {
+      timeZone: process.env.AUTOMATION_TZ || 'Asia/Jakarta', weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
+    });
+    const messages = [...history, { role: 'user', content: text }];
+    const out = await collect(aiManager, messages, {
+      systemPrompt: `${system}\nHari ini: ${date}.`, temperature: 0.6, maxTokens: 1500,
+    });
+    return out.text;
+  };
+}
+
+const HISTORY_TURNS = 12;          // messages remembered per chat
+const HISTORY_TTL_MS = 60 * 60_000; // forgotten after an hour of silence
+const CHAT_RATE_WINDOW_MS = 10 * 60_000;
+const CHAT_RATE_MAX = 20;           // AI replies per chat per window
 
 export class TelegramInbox extends EventEmitter {
   /**
    * @param {{channel: object, store: object, env?: object, pollSeconds?: number}} deps
    */
-  constructor({ channel, store, env = process.env, pollSeconds = 25 }) {
+  constructor({ channel, store, env = process.env, pollSeconds = 25, responder = null }) {
     super();
+    this.responder = responder;
+    // Who may talk to the AI. Empty = AI chat is OFF (safe default).
+    this.aiChats = new Set(
+      String(env.TELEGRAM_AI_CHAT_IDS || '').split(',').map((s) => s.trim()).filter(Boolean)
+    );
+    this.history = new Map();   // chatId -> { at, turns: [{role, content}] }
+    this.rate = new Map();      // chatId -> [timestamps]
+    this._chains = new Map();   // chatId -> Promise (serialises replies per chat)
     this.channel = channel;
     this.store = store;
     this.pollSeconds = pollSeconds;
@@ -60,6 +106,7 @@ export class TelegramInbox extends EventEmitter {
       running: this.running,
       requiresJoinCode: Boolean(this.joinCode),
       restricted: this.allowed.size > 0,
+      aiChat: { enabled: Boolean(this.responder) && this.aiChats.size > 0, chats: this.aiChats.size },
       ...this.store.subscribers.counts('telegram'),
     };
   }
@@ -116,7 +163,7 @@ export class TelegramInbox extends EventEmitter {
     const chatId = String(msg.chat.id);
     const text = msg.text.trim();
     const match = /^\/([a-z_]+)(?:@\w+)?(?:\s+(.+))?$/i.exec(text);
-    if (!match) return null;
+    if (!match) return this._maybeChat(msg, chatId, text);
 
     const command = match[1].toLowerCase();
     const arg = (match[2] || '').trim();
@@ -163,6 +210,61 @@ export class TelegramInbox extends EventEmitter {
     }
 
     return null;
+  }
+
+  // ---------------------------------------------------------- AI chat
+
+  _historyFor(chatId) {
+    const h = this.history.get(chatId);
+    if (!h || Date.now() - h.at > HISTORY_TTL_MS) return [];
+    return h.turns;
+  }
+
+  _remember(chatId, role, content) {
+    const turns = this._historyFor(chatId).slice();
+    turns.push({ role, content });
+    this.history.set(chatId, { at: Date.now(), turns: turns.slice(-HISTORY_TURNS) });
+  }
+
+  /**
+   * Plain (non-command) text. Answered by the AI only for allow-listed PRIVATE
+   * chats; everyone else is ignored silently.
+   */
+  _maybeChat(msg, chatId, text) {
+    if (!this.responder || !this.aiChats.has(chatId) || msg.chat.type !== 'private') return null;
+
+    const now = Date.now();
+    const stamps = (this.rate.get(chatId) || []).filter((t) => now - t < CHAT_RATE_WINDOW_MS);
+    if (stamps.length >= CHAT_RATE_MAX) {
+      this._reply(chatId, 'Terlalu banyak pesan dalam waktu singkat. Coba lagi beberapa menit lagi ya.');
+      return { action: 'rate_limited', chatId };
+    }
+    stamps.push(now);
+    this.rate.set(chatId, stamps);
+
+    // Serialise per chat so answers stay in order, but never block polling:
+    // a slow model must not freeze the whole inbox.
+    const previous = this._chains.get(chatId) || Promise.resolve();
+    const done = previous.then(() => this._answer(chatId, text)).catch(() => {});
+    this._chains.set(chatId, done);
+    done.finally(() => { if (this._chains.get(chatId) === done) this._chains.delete(chatId); });
+    return { action: 'ai_reply', chatId, done };
+  }
+
+  async _answer(chatId, text) {
+    try {
+      await this.channel.sendAction?.(chatId, 'typing').catch(() => {});
+      const history = this._historyFor(chatId).slice();
+      const answer = String(await this.responder({ chatId, text: text.slice(0, 4000), history }) || '').trim();
+      if (!answer) throw new Error('empty');
+      this._remember(chatId, 'user', text.slice(0, 4000));
+      this._remember(chatId, 'assistant', answer.slice(0, 4000));
+      for (const part of chunkText(answer, 3500)) await this._reply(chatId, escapeHtml(part));
+      this.emit('ai_reply', { chatId });
+    } catch (e) {
+      console.warn('[TELEGRAM-INBOX] jawaban AI gagal:', e.message);
+      await this._reply(chatId, 'Maaf, AI sedang tidak tersedia. Coba lagi sebentar ya.');
+    }
   }
 
   async _reply(chatId, html) {

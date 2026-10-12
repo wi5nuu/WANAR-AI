@@ -18,7 +18,7 @@ import { Mailer } from './mailer.js';
 import { CampaignEngine } from './campaigns.js';
 import { createAttachmentService } from './attachments.js';
 import { createChannels } from './channels/index.js';
-import { TelegramInbox } from './telegram-inbox.js';
+import { TelegramInbox, makeChatResponder } from './telegram-inbox.js';
 import { AutomationScheduler } from './scheduler.js';
 
 export function createAutomation({
@@ -35,7 +35,12 @@ export function createAutomation({
   const engine = new CampaignEngine({ store, mailer, channels, attachments, ...engineOptions });
   // How long after a missed slot a job may still be run (laptop was off/asleep).
   const catchUpHours = parseFloat(env.AUTOMATION_CATCHUP_HOURS || '6');
-  const inbox = new TelegramInbox({ channel: channels.get('telegram'), store, env });
+  const inbox = new TelegramInbox({
+    channel: channels.get('telegram'),
+    store,
+    env,
+    responder: aiManager ? makeChatResponder({ aiManager }) : null,
+  });
   const scheduler = new AutomationScheduler({
     store,
     engine,
@@ -51,6 +56,7 @@ export function createAutomation({
   engine.on('alert', (e) => events.emit('event', { channel: 'alert', ...e }));
   scheduler.on('job', (e) => events.emit('event', { channel: 'job', ...e }));
   inbox.on('subscribed', (e) => events.emit('event', { channel: 'subscriber', type: 'subscribed', ...e }));
+  inbox.on('ai_reply', (e) => events.emit('event', { channel: 'subscriber', type: 'ai_reply', ...e }));
   inbox.on('unsubscribed', (e) => events.emit('event', { channel: 'subscriber', type: 'unsubscribed', ...e }));
   scheduler.on('review_needed', (e) => events.emit('event', { channel: 'review', ...e }));
 
