@@ -29,7 +29,7 @@ function ChatLayout() {
     providerInfo, providerConfig, PROVIDER_MAP, loadConfig,
   } = useConfig();
 
-  const { sessions, currentId, setCurrentId, create, remove, switchTo, reload } = useSessions();
+  const { sessions, currentId, setCurrentId, create, remove, cleanup, switchTo, reload } = useSessions();
   const [sidebarOpen, setSidebarOpen] = useState(() =>
     typeof window !== 'undefined' ? window.innerWidth > 768 : true
   );
@@ -169,6 +169,7 @@ function ChatLayout() {
         currentId={currentId}
         onSwitch={handleSwitchSession}
         onDelete={handleDeleteSession}
+        onCleanup={cleanup}
         onNew={handleNewChat}
         open={sidebarOpen}
         onClose={() => setSidebarOpen(false)}

@@ -210,18 +210,61 @@ body {
   position: relative;
 }
 
+/* Soft ambient glow. Radial gradients fade to fully transparent, so there is no
+   visible edge (the previous 400px linear band ended in a hard horizontal line). */
 .app::before {
   content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 400px;
-  background: var(--brand-gradient);
-  opacity: 0.05;
+  position: fixed;
+  inset: 0;
   pointer-events: none;
   z-index: 0;
+  background:
+    radial-gradient(1100px 520px at 62% -6%, rgba(255, 152, 0, 0.13), transparent 72%),
+    radial-gradient(800px 460px at 6% 104%, rgba(255, 107, 0, 0.08), transparent 70%);
 }
+[data-theme="dark"] .app::before {
+  background:
+    radial-gradient(1100px 520px at 62% -6%, rgba(255, 152, 0, 0.16), transparent 72%),
+    radial-gradient(800px 460px at 6% 104%, rgba(255, 107, 0, 0.10), transparent 70%);
+}
+
+/* ---- sidebar history: groups, search, cleanup ---- */
+.sidebar-group { margin-bottom: 0.4rem; }
+.sidebar-group-label {
+  padding: 0.55rem 0.9rem 0.25rem;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+.sidebar-search { padding: 0.5rem 0.75rem 0.25rem; }
+.sidebar-search input {
+  width: 100%;
+  padding: 0.5rem 0.7rem;
+  border-radius: 10px;
+  border: 1px solid var(--border-primary);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 0.85rem;
+}
+.sidebar-search input:focus-visible { outline: 0; border-color: var(--border-focus); box-shadow: var(--focus-ring); }
+.sidebar-empty-note { padding: 1rem; font-size: 0.82rem; color: var(--text-tertiary); text-align: center; }
+.sidebar-cleanup { padding: 0.5rem 0.75rem; border-top: 1px solid var(--border-primary); }
+.sidebar-cleanup button {
+  width: 100%;
+  padding: 0.45rem 0.6rem;
+  border-radius: 8px;
+  border: 1px dashed var(--border-primary);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+.sidebar-cleanup button:hover:not(:disabled) { border-color: var(--brand-primary); color: var(--brand-secondary); }
+.sidebar-cleanup button:disabled { opacity: 0.6; cursor: default; }
 
 /* ============================================
    SIDEBAR - GLASSMORPHISM
@@ -846,7 +889,9 @@ body {
    ============================================ */
 .input-container {
   padding: var(--space-lg);
-  background: var(--bg-primary);
+  /* Fades in from transparent instead of a solid slab, so the ambient glow
+     flows behind the input without a visible seam above it. */
+  background: linear-gradient(to top, var(--bg-primary) 62%, transparent);
   z-index: 10;
 }
 
