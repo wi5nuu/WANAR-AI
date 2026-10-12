@@ -350,7 +350,9 @@ export class AIManager {
       if (typeof providerInstance.isAvailable === 'function' && !providerInstance.isAvailable()) continue;
       // Re-checked per candidate: earlier failures in THIS request may have
       // revealed a dead provider (bad key) or a rate-limited one.
-      if (i > 0 && this.failover.shouldSkip(cand.provider, cand.model)) continue;
+      // The primary is also skipped when its credential is known-rejected: retrying
+      // a dead key on every request only adds latency.
+      if ((i > 0 ? this.failover.shouldSkip(cand.provider, cand.model) : this.failover.isProviderDown(cand.provider))) continue;
 
       if (i > 0 || cand.provider !== provider) {
         yield { type: 'provider_switch', from: provider, to: cand.provider, model: cand.model, reason: cand.reason || 'failover', attempt: i, reset: true };
@@ -489,7 +491,7 @@ export class AIManager {
         }
         // Skip candidates that earlier failures in this request have ruled out
         // (rejected key => whole provider; repeated 429 => circuit open).
-        if (chainIndex > 0 && this.failover.shouldSkip(cand.provider, cand.model)) {
+        if ((chainIndex > 0 ? this.failover.shouldSkip(cand.provider, cand.model) : this.failover.isProviderDown(cand.provider))) {
           chainIndex++; continue;
         }
 
