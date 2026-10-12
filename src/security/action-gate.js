@@ -72,6 +72,10 @@ export const GATED_TOOLS = Object.freeze({
   // OS-level input injection and screen capture.
   mouse_control: 'desktop_control',
   screen_capture: 'desktop_control',
+
+  // Outbound email to third parties. Irreversible; an approval must only ever
+  // cover ONE campaign (target is bound to `campaign:<id>`).
+  automation_send_campaign: 'outbound_email',
 });
 
 /** Tools whose "target" argument should be validated against the scan allowlist. */
@@ -111,6 +115,12 @@ function pruneExpired() {
  * against different arguments.
  */
 export function extractTarget(toolName, args = {}) {
+  // Email campaigns bind to the campaign id so an approval for one send can
+  // never be replayed against a different recipient list.
+  if (toolName === 'automation_send_campaign' && typeof args.campaign_id === 'string' && args.campaign_id.trim()) {
+    return `campaign:${args.campaign_id.trim()}`;
+  }
+
   const candidate =
     args.target ??
     args.url ??

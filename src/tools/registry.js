@@ -10,6 +10,7 @@ import { codeIntelligenceTools, executeCodeIntelligenceTool } from './code-intel
 import { browserTools, executeBrowserTool } from './browser.js';
 import { browserApplyTools, executeBrowserApplyTool } from './browser-apply.js';
 import { desktopTools, executeDesktopTool } from './desktop.js';
+import { automationTools, executeAutomationTool } from './automation.js';
 import {
   authorizeToolCall,
   refusalResult,
@@ -36,6 +37,7 @@ export const allTools = [
   ...browserTools,
   ...browserApplyTools,
   ...desktopTools,
+  ...automationTools,
 ];
 
 const toolExecutors = {
@@ -83,6 +85,13 @@ const toolExecutors = {
   // Desktop control (local machine, opt-in)
   mouse_control: executeDesktopTool,
   screen_capture: executeDesktopTool,
+  // Automation (scheduling + email) — proposals only; sending is gated
+  automation_status: executeAutomationTool,
+  automation_list_channels: executeAutomationTool,
+  automation_list_jobs: executeAutomationTool,
+  automation_create_job: executeAutomationTool,
+  automation_draft_email: executeAutomationTool,
+  automation_send_campaign: executeAutomationTool,
   // Agent Delegation
   agent_explore: executeAgentDelegationTool,
   agent_security: executeAgentDelegationTool,

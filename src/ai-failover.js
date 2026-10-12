@@ -18,6 +18,12 @@
  * @author Wisnu Alfian Nur Ashar
  */
 
+import fs from 'fs';
+import path from 'path';
+
+/** Default location of the cooldown state that survives restarts. */
+export const DEFAULT_STATE_PATH = path.join(process.cwd(), 'data', 'failover-state.json');
+
 export const FailReason = {
   QUOTA: 'quota',       // kredit/quota habis — pindah model/provider
   RATE: 'rate',         // rate limit / 429
@@ -30,7 +36,7 @@ export const FailReason = {
 };
 
 const PATTERNS = [
-  [FailReason.QUOTA, /(quota|insufficient|credit|balance|billing|payment required|402|exceeded your current quota|out of credits|no credits)/i],
+  [FailReason.QUOTA, /(quota|kuota|telah habis|sudah habis|kredit habis|saldo|insufficient|credit|balance|billing|payment required|402|exceeded your current quota|out of credits|no credits)/i],
   [FailReason.RATE, /(rate ?limit|too many requests|429|tokens per minute|\btpm\b|requests per minute|\brpm\b|overloaded)/i],
   [FailReason.TOKEN, /(context length|maximum context|context window|max.?tokens|token limit|too long|reduce the length)/i],
   [FailReason.AUTH, /(401|403|unauthorized|invalid api key|invalid_api_key|forbidden|authentication|api key not valid|permission)/i],
@@ -72,6 +78,11 @@ const PROVIDER_TIER = {
   puter: 4,
 };
 
+// Only cooldowns that are expensive to re-discover are persisted. AUTH is
+// deliberately excluded: after the operator fixes an API key and restarts, the
+// model must be usable immediately.
+const PERSIST_REASONS = new Set([FailReason.QUOTA, FailReason.TOKEN]);
+
 const COOLDOWN_MS = {
   [FailReason.QUOTA]: 10 * 60 * 1000,
   [FailReason.AUTH]: 10 * 60 * 1000,
@@ -88,20 +99,79 @@ export class SmartFailover {
    * @param {object} providers  map nama → instance provider (AIManager.providers)
    * @param {object} config     config global (untuk daftar model per provider)
    */
-  constructor(providers, config) {
+  constructor(providers, config, options = {}) {
     this.providers = providers || {};
     this.config = config || {};
+    this.statePath = options.statePath || null;
+    /** @type {Map<string, {until:number, reason:string}>} */
+    this._persisted = new Map();
+    this._saveTimer = null;
     /** @type {Map<string, number>} key `provider::model` → timestamp bebas */
     this.cooldown = new Map();
+    /** @type {Map<string, number>} provider -> timestamp (credential rejected) */
+    this.providerDown = new Map();
     /** @type {Map<string, {fails:number, openedAt:number}>} sirkuit per provider */
     this.circuit = new Map();
     this.history = [];
     this.maxHistory = 200;
     this.circuitThreshold = 4;      // gagal beruntun sebelum provider "dibuka"
     this.circuitOpenMs = 60 * 1000; // lama provider didiamkan
+    this._loadState();
+  }
+
+  /** Restores quota/token cooldowns so a restart does not re-probe dead models. */
+  _loadState() {
+    if (!this.statePath) return;
+    try {
+      const raw = JSON.parse(fs.readFileSync(this.statePath, 'utf8'));
+      const now = Date.now();
+      for (const [key, v] of Object.entries(raw.cooldown || {})) {
+        if (v && v.until > now && PERSIST_REASONS.has(v.reason)) {
+          this.cooldown.set(key, v.until);
+          this._persisted.set(key, v);
+        }
+      }
+    } catch { /* first run or unreadable file: start clean */ }
+  }
+
+  _scheduleSave() {
+    if (!this.statePath || this._saveTimer) return;
+    this._saveTimer = setTimeout(() => {
+      this._saveTimer = null;
+      try {
+        const now = Date.now();
+        const cooldown = {};
+        for (const [k, v] of this._persisted) {
+          if (v.until > now) cooldown[k] = v;
+          else this._persisted.delete(k);
+        }
+        fs.mkdirSync(path.dirname(this.statePath), { recursive: true });
+        const tmp = `${this.statePath}.tmp`;
+        fs.writeFileSync(tmp, JSON.stringify({ savedAt: now, cooldown }, null, 2));
+        fs.renameSync(tmp, this.statePath);
+      } catch { /* persistence is best-effort */ }
+    }, 500);
+    this._saveTimer.unref?.();
   }
 
   _key(provider, model) { return `${provider}::${model || ''}`; }
+
+  /**
+   * Is the whole provider known-bad right now? A rejected credential fails for
+   * every model of that provider, so there is no point trying the other 30.
+   */
+  isProviderDown(provider) {
+    const until = this.providerDown.get(provider);
+    return Boolean(until && until > Date.now());
+  }
+
+  /**
+   * Re-evaluated for EVERY candidate while a request walks the chain (the chain
+   * itself is built once, before anything has failed).
+   */
+  shouldSkip(provider, model) {
+    return this.isProviderDown(provider) || this.isCircuitOpen(provider) || this.isCoolingDown(provider, model);
+  }
 
   isCoolingDown(provider, model) {
     const until = this.cooldown.get(this._key(provider, model));
@@ -121,7 +191,14 @@ export class SmartFailover {
 
   markFailure(provider, model, reason = FailReason.UNKNOWN) {
     const cd = COOLDOWN_MS[reason] || COOLDOWN_MS[FailReason.UNKNOWN];
-    this.cooldown.set(this._key(provider, model), Date.now() + cd);
+    const key = this._key(provider, model);
+    this.cooldown.set(key, Date.now() + cd);
+    // A bad/placeholder API key is a property of the provider, not of one model.
+    if (reason === FailReason.AUTH) this.providerDown.set(provider, Date.now() + cd);
+    if (PERSIST_REASONS.has(reason)) {
+      this._persisted.set(key, { until: Date.now() + cd, reason });
+      this._scheduleSave();
+    }
 
     const c = this.circuit.get(provider) || { fails: 0, openedAt: 0 };
     c.fails += 1;
@@ -131,6 +208,8 @@ export class SmartFailover {
 
   markSuccess(provider, model) {
     this.cooldown.delete(this._key(provider, model));
+    this.providerDown.delete(provider);
+    if (this._persisted.delete(this._key(provider, model))) this._scheduleSave();
     const c = this.circuit.get(provider);
     if (c) { c.fails = 0; c.openedAt = 0; }
   }

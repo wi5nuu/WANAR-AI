@@ -51,10 +51,19 @@ const LabIcon = ({ color }) => (
   </svg>
 );
 
+const AutomationIcon = ({ color }) => (
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path d="M13 2L4.5 13.5H11L10 22l8.5-11.5H12L13 2z" fill={color}/>
+  </svg>
+);
+
 export default function DashboardLayout({ children }) {
   const navigate = useNavigate();
   const location = useLocation();
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  // Phones get the 60px icon rail by default; a 240px sidebar would eat most of the screen.
+  const [sidebarOpen, setSidebarOpen] = useState(() =>
+    typeof window === 'undefined' ? true : window.innerWidth > 768
+  );
   const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'light');
 
   React.useEffect(() => {
@@ -65,6 +74,7 @@ export default function DashboardLayout({ children }) {
   const menuItems = [
     { path: '/', label: 'Chat', icon: ChatIcon },
     { path: '/voice', label: 'Voice Talk', icon: VoiceIcon },
+    { path: '/automation', label: 'Otomasi', icon: AutomationIcon },
     { path: '/dashboard', label: 'Analytics', icon: AnalyticsIcon },
     { path: '/security', label: 'Security', icon: SecurityIcon },
     { path: '/security/professional', label: 'Pentest', icon: PentestIcon },

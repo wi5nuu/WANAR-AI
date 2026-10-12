@@ -175,3 +175,57 @@ All data stays local. No cloud sync. No third-party data collection.
 **Wanar AI v1.0.5 — Wisnu Alfian Nur Ashar — 2026**
 
 </div>
+
+
+## Otomasi Kerja (jadwal, email massal, tulis dengan AI)
+
+Buka **http://localhost:3000/automation**.
+
+| Fitur | Keterangan |
+| --- | --- |
+| Jadwal | `daily@08:00`, `weekdays@09:00`, `weekly:senin,kamis@07:30`, `monthly:1@08:00`, `every 30m`, atau cron 5 kolom. Zona waktu WIB. |
+| Tipe job | `email` (template tetap), `ai_email` (AI menulis dari brief), `ai_task` (ringkasan/kode, opsional dikirim) |
+| Email massal | Tempel/unggah CSV, variabel `{{nama|Bapak/Ibu}}`, pratinjau, lalu **Setujui & Kirim** |
+| Realtime | Progres kampanye & status job lewat SSE (`/api/automation/events`) |
+| Agen | Di chat: "buat jadwal kirim laporan tiap hari kerja jam 9" — agen mengusulkan, Anda menyetujui |
+
+**Keamanan bawaan**
+- Tidak ada email keluar sebelum Anda menyetujui; job usulan agen berstatus *Menunggu persetujuan*.
+- Email buatan AI masuk sebagai **draf** untuk di-review, kecuali Anda memilih kirim otomatis.
+- Daftar suppress (opt-out & bounce), batas harian, jeda antar email, dan deduplikasi penerima.
+- Error login/kuota SMTP menjeda kampanye, bukan menandai semua penerima gagal.
+- At-most-once: setelah crash, email yang sedang dikirim tidak dikirim ulang otomatis.
+- Kredensial SMTP hanya dari `.env`; tidak pernah disimpan di database atau dikirim ke browser.
+
+Tanpa `SMTP_*` di `.env`, semuanya berjalan dalam **mode simulasi**. Lihat `.env.example`.
+
+### Lampiran email
+Tambahkan file saat membuat kampanye atau job (maks 5 file, 10 MB per file, 18 MB total). File .exe/.bat/.js dan sejenisnya ditolak. Nama file dari pengguna tidak pernah dipakai sebagai path di server.
+
+### Menjaga sistem tetap hidup
+Penjadwal berjalan di dalam server, jadi server harus hidup. Pasang sebagai tugas Windows (tanpa admin):
+
+```bash
+npm run service:install   # otomatis start saat login, restart bila crash
+npm run service:status
+npm run service:uninstall
+```
+
+Komputer yang mati/tidur tidak menjalankan job; yang terlewat <= `AUTOMATION_CATCHUP_HOURS` dikejar saat server hidup lagi.
+
+### Akses dari jaringan
+Secara bawaan otomasi hanya bisa dibuka dari localhost. Untuk akses dari komputer lain isi `AUTOMATION_TOKEN` di `.env`; UI akan meminta token sekali.
+
+### Kanal pesan (bukan hanya email)
+
+| Kanal | Cara kerja | Catatan |
+| --- | --- | --- |
+| Email | SMTP | Lampiran, HTML, daftar suppress |
+| Telegram | Bot API resmi | Lampiran dokumen; pelanggan mendaftar lewat `/start`, berhenti lewat `/stop`; `@subscribers` = semua pelanggan |
+| WhatsApp | **Cloud API resmi (Meta)** | Template wajib untuk memulai percakapan; nomor Indonesia otomatis dinormalisasi (0812… → 62812…) |
+| Slack / Discord / Teams | Incoming webhook | Tujuan tetap dari `.env`; Discord tanpa @mention |
+| Webhook | POST JSON bertanda tangan HMAC | Untuk n8n, Zapier, Make, atau layanan sendiri |
+
+Satu job bisa menarget beberapa kanal sekaligus; satu kanal yang gagal tidak menghentikan yang lain. Kuota harian dihitung **per kanal**.
+
+**Sengaja tidak ada** integrasi WhatsApp tidak resmi (whatsapp-web/Baileys): itu melanggar ketentuan WhatsApp dan berisiko membuat nomor Anda diblokir permanen.
