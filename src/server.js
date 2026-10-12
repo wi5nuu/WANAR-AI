@@ -2723,13 +2723,14 @@ async function startServer() {
   // Penjadwal otomasi (email terjadwal, job AI). Hanya saat server benar-benar jalan.
   try {
     automation.scheduler.start();
+    if (automation.inbox.start()) console.log('Telegram   : inbox aktif (pelanggan mendaftar lewat /start)');
     console.log('Automation : scheduler aktif (mode email: ' + automation.mailer.mode + ')');
   } catch (e) {
     console.log('Automation : gagal start (' + e.message + ')');
   }
   for (const sig of ['SIGINT', 'SIGTERM']) {
     process.once(sig, () => {
-      try { automation.scheduler.stop(); automation.mailer.close(); } catch { /* ignore */ }
+      try { automation.scheduler.stop(); automation.inbox.stop(); automation.channels.closeAll(); } catch { /* ignore */ }
       process.exit(0);
     });
   }

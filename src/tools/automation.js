@@ -37,6 +37,17 @@ export const automationTools = [
   {
     type: 'function',
     function: {
+      name: 'automation_list_channels',
+      description:
+        'Lihat kanal pengiriman yang tersedia (email, telegram, whatsapp, slack, discord, teams, webhook): ' +
+        'mana yang sudah dikonfigurasi (live) atau masih simulasi, batas harian, pemakaian hari ini, dan jumlah pelanggan Telegram. ' +
+        'Panggil ini sebelum membuat job/kampanye agar tahu kanal yang bisa dipakai.',
+      parameters: { type: 'object', properties: {}, required: [] },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'automation_list_jobs',
       description: 'Daftar job otomasi terjadwal beserta status, jadwal, dan eksekusi berikutnya.',
       parameters: { type: 'object', properties: {}, required: [] },
@@ -47,7 +58,8 @@ export const automationTools = [
     function: {
       name: 'automation_create_job',
       description:
-        'Usulkan job otomasi terjadwal (mis. kirim email setiap hari jam 08:00). Job dibuat dalam status ' +
+        'Usulkan job otomasi terjadwal (mis. kirim email/WhatsApp/Telegram setiap hari jam 08:00). Satu job bisa ' +
+        'menarget BEBERAPA kanal sekaligus lewat parameter targets. Job dibuat dalam status ' +
         '"pending_approval" dan TIDAK berjalan sampai user menyetujuinya di halaman Otomasi (/automation). ' +
         'Selalu beri tahu user untuk menyetujui. Tipe: "email" (template tetap ke daftar penerima), ' +
         '"ai_email" (AI menulis email dari brief tiap kali jalan), "ai_task" (AI menjalankan prompt/kode, ' +
@@ -60,11 +72,31 @@ export const automationTools = [
           type: { type: 'string', enum: ['email', 'ai_email', 'ai_task'] },
           schedule: { type: 'string', description: 'Ekspresi jadwal, mis. "daily@08:00"' },
           timezone: { type: 'string', description: 'Zona waktu IANA (default Asia/Jakarta)' },
+          channel: {
+            type: 'string',
+            enum: ['email', 'telegram', 'whatsapp', 'slack', 'discord', 'teams', 'webhook'],
+            description: 'Kanal tujuan (default email). Untuk beberapa kanal sekaligus gunakan targets.',
+          },
+          targets: {
+            type: 'array',
+            description: 'Beberapa kanal sekaligus, mis. [{"channel":"email","recipients":"a@x.com"},{"channel":"telegram","recipients":"@subscribers"}]',
+            items: {
+              type: 'object',
+              properties: {
+                channel: { type: 'string', enum: ['email', 'telegram', 'whatsapp', 'slack', 'discord', 'teams', 'webhook'] },
+                recipients: {
+                  type: 'string',
+                  description: 'Email / nomor WhatsApp (0812... atau 62812...) / chat ID Telegram, satu per baris. Telegram: "@subscribers" = semua pelanggan. Slack/Discord/Teams/webhook: kosongkan.',
+                },
+              },
+              required: ['channel'],
+            },
+          },
           recipients: {
             type: 'string',
-            description: 'Penerima: satu email per baris, atau CSV dengan header "nama,email,...". Untuk ai_task boleh dikosongkan.',
+            description: 'Penerima untuk satu kanal: email / nomor WhatsApp / chat ID Telegram, satu per baris, atau CSV dengan header "nama,email|telepon|chat_id,...". Telegram: "@subscribers" = semua pelanggan. Slack/Discord/Teams/webhook tidak perlu penerima.',
           },
-          subject: { type: 'string', description: 'Subjek (tipe email / ai_task). Mendukung {{nama}}, {{tanggal}}.' },
+          subject: { type: 'string', description: 'Subjek (wajib untuk email; opsional di kanal chat). Mendukung {{nama}}, {{tanggal}}.' },
           body: { type: 'string', description: 'Isi email (tipe email). Mendukung {{nama|fallback}}, {{tanggal}}, {{hari}}.' },
           brief: { type: 'string', description: 'Brief untuk AI (tipe ai_email), mis. "Ringkasan progres proyek hari ini"' },
           prompt: { type: 'string', description: 'Prompt untuk AI (tipe ai_task)' },
@@ -84,19 +116,27 @@ export const automationTools = [
     function: {
       name: 'automation_draft_email',
       description:
-        'Buat DRAF kampanye email (mis. untuk 100 penerima) beserta pratinjau hasil personalisasi. ' +
+        'Buat DRAF kampanye pesan (email, WhatsApp, Telegram, Slack, Discord, Teams, webhook; mis. untuk 100 penerima) beserta pratinjau hasil personalisasi. ' +
         'Tidak ada yang terkirim. Setelah draf dibuat, user menekan "Setujui & Kirim" di halaman Otomasi, ' +
         'atau gunakan automation_send_campaign setelah user menyetujui.',
       parameters: {
         type: 'object',
         properties: {
           name: { type: 'string', description: 'Nama kampanye' },
-          subject: { type: 'string', description: 'Subjek; mendukung {{nama}} dst.' },
-          body: { type: 'string', description: 'Isi email teks biasa; mendukung {{nama|Bapak/Ibu}}' },
-          recipients: { type: 'string', description: 'Satu email per baris atau CSV dengan header' },
-          reply_to: { type: 'string', description: 'Alamat Reply-To (opsional)' },
+          channel: {
+            type: 'string',
+            enum: ['email', 'telegram', 'whatsapp', 'slack', 'discord', 'teams', 'webhook'],
+            description: 'Kanal tujuan (default email)',
+          },
+          subject: { type: 'string', description: 'Subjek; wajib untuk email, opsional untuk kanal chat. Mendukung {{nama}} dst.' },
+          body: { type: 'string', description: 'Isi pesan teks biasa; mendukung {{nama|Bapak/Ibu}}' },
+          recipients: {
+            type: 'string',
+            description: 'Email / nomor WhatsApp / chat ID Telegram, satu per baris atau CSV dengan header. Telegram: "@subscribers" = semua pelanggan. Slack/Discord/Teams/webhook: kosongkan.',
+          },
+          reply_to: { type: 'string', description: 'Alamat Reply-To (hanya email, opsional)' },
         },
-        required: ['subject', 'body', 'recipients'],
+        required: ['body'],
       },
     },
   },
@@ -130,6 +170,10 @@ const compactJob = (scheduler, j) => {
   };
 };
 
+function automation_channelOf(auto, id) {
+  return auto.channels.get(id || 'email');
+}
+
 export async function executeAutomationTool(name, args = {}) {
   const auto = getAutomation();
   if (!auto) return OFFLINE;
@@ -154,25 +198,48 @@ export async function executeAutomationTool(name, args = {}) {
         };
       }
 
+      case 'automation_list_channels': {
+        const used = store.outbox.sentSinceByChannel(startOfLocalDay());
+        return {
+          channels: auto.channels.describeAll().map((c) => ({
+            id: c.id,
+            label: c.label,
+            mode: c.mode,
+            configured: c.configured,
+            missing: c.missing,
+            sentToday: used[c.id] || 0,
+            dailyCap: c.limits?.dailyCap,
+            recipientKind: c.recipientKind,
+            subscribers: c.id === 'telegram' ? store.subscribers.counts('telegram') : undefined,
+          })),
+          note: 'Kanal berstatus dry-run hanya mensimulasikan pengiriman. WhatsApp memakai Cloud API resmi (wajib template untuk memulai percakapan).',
+        };
+      }
+
       case 'automation_list_jobs':
         return { jobs: store.jobs.list().map((j) => compactJob(scheduler, j)) };
 
       case 'automation_create_job': {
         const payload = {};
+        // Delivery targets: explicit list wins, else a single channel + recipients.
+        const delivery = Array.isArray(args.targets) && args.targets.length
+          ? { targets: args.targets }
+          : { channel: args.channel || 'email', recipients: args.recipients || undefined };
+
         if (args.type === 'email') {
           payload.subject = args.subject;
           payload.bodyText = args.body;
-          payload.recipients = args.recipients;
+          Object.assign(payload, delivery);
         } else if (args.type === 'ai_email') {
           payload.brief = args.brief;
-          payload.recipients = args.recipients;
           payload.tone = args.tone;
           payload.autoSend = args.auto_send === true;
+          Object.assign(payload, delivery);
         } else if (args.type === 'ai_task') {
           payload.prompt = args.prompt;
-          payload.recipients = args.recipients || undefined;
           payload.subject = args.subject;
           payload.autoSend = args.auto_send === true;
+          if (delivery.targets || delivery.recipients || args.channel) Object.assign(payload, delivery);
         }
         const job = scheduler.createJob(
           {
@@ -197,7 +264,9 @@ export async function executeAutomationTool(name, args = {}) {
         const { campaign, report } = engine.create({
           name: args.name, subject: args.subject, bodyText: args.body,
           recipients: args.recipients, replyTo: args.reply_to, createdBy: 'agent',
+          channel: args.channel || 'email',
         });
+        const channelAdapter = automation_channelOf(auto, campaign.channel);
         const preview = engine.preview(campaign.id, 2);
         return {
           success: true,
@@ -208,10 +277,12 @@ export async function executeAutomationTool(name, args = {}) {
           duplicates: report.duplicates.length,
           suppressed: report.suppressed.length,
           recipientsWithMissingVariables: report.recipientsWithMissingCount,
-          mode: mailer.mode,
+          channel: campaign.channel,
+          mode: channelAdapter.mode,
+          warnings: report.warnings,
           preview,
           message:
-            `Draf dibuat untuk ${report.valid} penerima (mode ${mailer.mode === 'live' ? 'KIRIM NYATA' : 'SIMULASI — SMTP belum dikonfigurasi'}). ` +
+            `Draf ${channelAdapter.label} dibuat untuk ${report.valid} penerima (mode ${channelAdapter.mode === 'live' ? 'KIRIM NYATA' : 'SIMULASI — kanal belum dikonfigurasi'}). ` +
             `BELUM terkirim. Minta user me-review lalu menyetujui di halaman Otomasi.`,
         };
       }

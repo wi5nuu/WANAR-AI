@@ -87,6 +87,7 @@ const toolExecutors = {
   screen_capture: executeDesktopTool,
   // Automation (scheduling + email) — proposals only; sending is gated
   automation_status: executeAutomationTool,
+  automation_list_channels: executeAutomationTool,
   automation_list_jobs: executeAutomationTool,
   automation_create_job: executeAutomationTool,
   automation_draft_email: executeAutomationTool,

@@ -33,7 +33,8 @@ import crypto from 'node:crypto';
 import multer from 'multer';
 import { previewSchedule, ScheduleError, DEFAULT_TIMEZONE } from './cron.js';
 import { parseRecipients, isValidEmail } from './recipients.js';
-import { generateEmail, generateCode, generateText, ComposeError } from './ai-compose.js';
+import { CHANNEL_KINDS, FIXED_DESTINATION, isChannelId } from './channels/meta.js';
+import { generateEmail, generateMessage, generatePackage, generateCode, generateText, ComposeError } from './ai-compose.js';
 import { CampaignError, startOfLocalDay } from './campaigns.js';
 import { JobError, JOB_TYPES } from './scheduler.js';
 import { MailError } from './mailer.js';
@@ -130,7 +131,8 @@ export function createAutomationRouter({ automation, rateLimiters = {}, actorOf 
   router.get('/overview', wrap((req, res) => {
     const jobs = store.jobs.list();
     const campaigns = store.campaigns.list(200);
-    const sentToday = store.outbox.sentSince(startOfLocalDay());
+    const channelUsage = store.outbox.sentSinceByChannel(startOfLocalDay());
+    const sentToday = channelUsage.email || 0;
     const mail = mailer.describe();
     res.json({
       success: true,
@@ -138,6 +140,10 @@ export function createAutomationRouter({ automation, rateLimiters = {}, actorOf 
       timezone: DEFAULT_TIMEZONE,
       jobTypes: JOB_TYPES,
       attachmentLimits: automation.attachments?.limits || null,
+      channels: automation.channels
+        ? automation.channels.describeAll().map((c) => ({ ...c, sentToday: channelUsage[c.id] || 0 }))
+        : [],
+      telegramInbox: automation.inbox ? automation.inbox.status() : null,
       usage: { sentToday, dailyCap: mail.dailyCap, remaining: Math.max(0, mail.dailyCap - sentToday) },
       counts: {
         jobsActive: jobs.filter((j) => j.status === 'active').length,
@@ -198,9 +204,13 @@ export function createAutomationRouter({ automation, rateLimiters = {}, actorOf 
     const text = req.body?.text;
     if (typeof text !== 'string') throw new CampaignError('Field "text" wajib berupa string');
     if (text.length > 2_000_000) throw new CampaignError('Daftar terlalu besar', 'too_many');
-    const max = mailer.cfg.maxRecipients;
-    const parsed = parseRecipients(text, { max: max + 1 });
-    const suppressed = store.suppressions.filter(parsed.recipients.map((r) => r.email));
+    const channel = isChannelId(req.body?.channel) ? req.body.channel : 'email';
+    const adapter = automation.channels?.get(channel);
+    const max = adapter ? adapter.limits.maxRecipients : mailer.cfg.maxRecipients;
+    const parsed = parseRecipients(text, { kind: CHANNEL_KINDS[channel], max: max + 1 });
+    const keyOf = (a) => (channel === 'email' ? a : `${channel}:${a}`);
+    const supKeys = store.suppressions.filter(parsed.recipients.map((r) => keyOf(r.email)));
+    const suppressed = parsed.recipients.filter((r) => supKeys.has(keyOf(r.email))).map((r) => r.email);
     res.json({
       success: true,
       valid: parsed.recipients.length,
@@ -210,7 +220,9 @@ export function createAutomationRouter({ automation, rateLimiters = {}, actorOf 
       invalidCount: parsed.invalid.length,
       duplicates: parsed.duplicates.slice(0, 50),
       duplicateCount: parsed.duplicates.length,
-      suppressed: [...suppressed],
+      suppressed,
+      channel,
+      fixedDestination: FIXED_DESTINATION.has(channel),
       sample: parsed.recipients.slice(0, 5),
       columns: [...new Set(parsed.recipients.flatMap((r) => Object.keys(r.vars)))],
     });
@@ -281,6 +293,8 @@ export function createAutomationRouter({ automation, rateLimiters = {}, actorOf 
       recipients: b.recipients, fromName: b.fromName, replyTo: b.replyTo,
       throttleMs: Number.isFinite(b.throttleMs) ? Math.max(0, b.throttleMs) : undefined,
       attachmentIds: Array.isArray(b.attachmentIds) ? b.attachmentIds : undefined,
+      channel: isChannelId(b.channel) ? b.channel : 'email',
+      useSubscribers: b.useSubscribers === true,
       createdBy: actorOf(req),
     });
     res.status(201).json({
@@ -331,6 +345,89 @@ export function createAutomationRouter({ automation, rateLimiters = {}, actorOf 
     if (!c) throw new CampaignError('Kampanye tidak ditemukan', 'not_found');
     if (c.status === 'running') throw new CampaignError('Hentikan kampanye yang sedang berjalan dulu', 'bad_state');
     res.json({ success: store.campaigns.remove(req.params.id) });
+  }));
+
+  // ----------------------------------------------------------- channels
+
+  router.get('/channels', wrap((req, res) => {
+    const used = store.outbox.sentSinceByChannel(startOfLocalDay());
+    res.json({
+      success: true,
+      channels: automation.channels.describeAll().map((c) => ({
+        ...c,
+        sentToday: used[c.id] || 0,
+        subscribers: c.id === 'telegram' ? store.subscribers.counts('telegram') : undefined,
+      })),
+      telegramInbox: automation.inbox ? automation.inbox.status() : null,
+    });
+  }));
+
+  router.post('/channels/:id/test', strict, wrap(async (req, res) => {
+    const id = req.params.id;
+    if (!isChannelId(id)) throw new CampaignError('Kanal tidak dikenal', 'not_found');
+    const adapter = automation.channels.get(id);
+    const fixed = adapter.capabilities.fixedDestination;
+
+    let to = 'default';
+    if (!fixed) {
+      to = adapter.normalizeAddress(req.body?.to);
+      if (!to) throw new CampaignError(`Tujuan tes tidak valid untuk ${adapter.label}`);
+    }
+    if (adapter.mode !== 'live') {
+      return res.json({
+        success: false, mode: 'dry-run',
+        error: `${adapter.label} belum dikonfigurasi — pesan tidak dikirim (mode simulasi).`,
+        missing: adapter.describe().missing,
+      });
+    }
+    const verified = await adapter.verify();
+    if (!verified.ok) return res.json({ success: false, mode: 'live', error: verified.error, kind: verified.kind });
+    const r = await engine.testChannel(id, { to });
+    res.json({ success: true, mode: 'live', messageId: r.messageId, verified: verified.detail });
+  }));
+
+  router.get('/subscribers/:channel', wrap((req, res) => {
+    const ch = req.params.channel;
+    if (!isChannelId(ch)) throw new CampaignError('Kanal tidak dikenal', 'not_found');
+    res.json({
+      success: true,
+      counts: store.subscribers.counts(ch),
+      subscribers: store.subscribers.list(ch),
+    });
+  }));
+
+  router.post('/subscribers/:channel', strict, wrap((req, res) => {
+    const ch = req.params.channel;
+    if (!isChannelId(ch) || FIXED_DESTINATION.has(ch)) throw new CampaignError('Kanal ini tidak memiliki daftar pelanggan');
+    const address = automation.channels.get(ch).normalizeAddress(req.body?.address);
+    if (!address) throw new CampaignError('Alamat tidak valid');
+    const sub = store.subscribers.upsert({ channel: ch, address, name: String(req.body?.name || '').slice(0, 120) });
+    res.status(201).json({ success: true, subscriber: sub });
+  }));
+
+  router.delete('/subscribers/:channel/:address', strict, wrap((req, res) => {
+    res.json({ success: store.subscribers.remove(req.params.channel, req.params.address) });
+  }));
+
+  // One brief -> a ready template for every channel + a campaign name.
+  router.post('/compose/package', chat, wrap(async (req, res) => {
+    const b = req.body || {};
+    const out = await generatePackage(automation.scheduler.aiManager, {
+      brief: b.brief, tone: b.tone, language: b.language, audience: b.audience,
+      signature: b.signature, personalize: b.personalize !== false,
+      provider: b.provider, model: b.model,
+    });
+    res.json({ success: true, ...out });
+  }));
+
+  router.post('/compose/message', chat, wrap(async (req, res) => {
+    const b = req.body || {};
+    const out = await generateMessage(automation.scheduler.aiManager, {
+      brief: b.brief, channel: isChannelId(b.channel) ? b.channel : 'telegram', tone: b.tone,
+      language: b.language, audience: b.audience, personalize: b.personalize !== false,
+      provider: b.provider, model: b.model,
+    });
+    res.json({ success: true, ...out });
   }));
 
   // -------------------------------------------------------- attachments
