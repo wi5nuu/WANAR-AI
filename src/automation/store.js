@@ -40,6 +40,16 @@ export const OutboxStatus = Object.freeze({
 });
 
 const id = (prefix) => `${prefix}_${crypto.randomBytes(6).toString('hex')}`;
+
+/**
+ * Suppression keys. Email keeps the bare address (backwards compatible);
+ * every other channel is namespaced so a Telegram id can never collide with,
+ * or be mistaken for, an email address.
+ */
+export function suppressionKey(channel, address) {
+  const a = String(address).toLowerCase();
+  return !channel || channel === 'email' ? a : `${channel}:${a}`;
+}
 const parse = (s, fallback) => {
   if (s == null || s === '') return fallback;
   try {
@@ -100,6 +110,7 @@ export function createStore(db) {
       status TEXT NOT NULL DEFAULT 'draft',
       status_reason TEXT,
       mode TEXT,
+      channel TEXT NOT NULL DEFAULT 'email',
       throttle_ms INTEGER NOT NULL DEFAULT 1000,
       total INTEGER NOT NULL DEFAULT 0,
       source_job_id TEXT,
@@ -140,6 +151,17 @@ export function createStore(db) {
       created_at INTEGER NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS channel_subscribers (
+      channel TEXT NOT NULL,
+      address TEXT NOT NULL,
+      name TEXT,
+      username TEXT,
+      active INTEGER NOT NULL DEFAULT 1,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (channel, address)
+    );
+
     CREATE TABLE IF NOT EXISTS email_suppressions (
       email TEXT PRIMARY KEY,
       reason TEXT NOT NULL DEFAULT 'manual',
@@ -149,6 +171,9 @@ export function createStore(db) {
 
   // Additive migration: databases created before attachments existed.
   const campaignCols = db.prepare('PRAGMA table_info(email_campaigns)').all().map((c) => c.name);
+  if (!campaignCols.includes('channel')) {
+    db.exec("ALTER TABLE email_campaigns ADD COLUMN channel TEXT NOT NULL DEFAULT 'email'");
+  }
   if (!campaignCols.includes('attachment_ids')) {
     db.exec("ALTER TABLE email_campaigns ADD COLUMN attachment_ids TEXT NOT NULL DEFAULT '[]'");
   }
@@ -250,16 +275,17 @@ export function createStore(db) {
   // ----------------------------------------------------------- campaigns
 
   const campaigns = {
-    create({ name, subject, bodyText, bodyHtml, fromName, replyTo, throttleMs, sourceJobId, createdBy, attachmentIds }) {
+    create({ name, subject, bodyText, bodyHtml, fromName, replyTo, throttleMs, sourceJobId, createdBy, attachmentIds, channel }) {
       const cid = id('cmp');
       db.prepare(`
         INSERT INTO email_campaigns
-          (id, name, subject, body_text, body_html, from_name, reply_to, throttle_ms, source_job_id, created_by, created_at, attachment_ids)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          (id, name, subject, body_text, body_html, from_name, reply_to, throttle_ms, source_job_id, created_by, created_at, attachment_ids, channel)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         cid, name, subject, bodyText, bodyHtml || null, fromName || null, replyTo || null,
         throttleMs ?? 1000, sourceJobId || null, createdBy || 'user', now(),
-        JSON.stringify(Array.isArray(attachmentIds) ? attachmentIds : [])
+        JSON.stringify(Array.isArray(attachmentIds) ? attachmentIds : []),
+        channel || 'email'
       );
       return campaigns.get(cid);
     },
@@ -375,10 +401,19 @@ export function createStore(db) {
         WHERE status = 'sending'
       `).run().changes;
     },
-    sentSince(sinceMs) {
+    /** Live messages sent since `sinceMs` on one channel (default email). */
+    sentSince(sinceMs, channel = 'email') {
       return db.prepare(
-        "SELECT COUNT(*) AS n FROM email_outbox WHERE status = 'sent' AND sent_at >= ? AND campaign_id IN (SELECT id FROM email_campaigns WHERE mode = 'live')"
-      ).get(sinceMs).n;
+        "SELECT COUNT(*) AS n FROM email_outbox WHERE status = 'sent' AND sent_at >= ? AND campaign_id IN (SELECT id FROM email_campaigns WHERE mode = 'live' AND channel = ?)"
+      ).get(sinceMs, channel).n;
+    },
+    /** Sent today per channel, for the dashboard. */
+    sentSinceByChannel(sinceMs) {
+      const out = {};
+      for (const r of db.prepare(
+        "SELECT c.channel AS channel, COUNT(*) AS n FROM email_outbox o JOIN email_campaigns c ON c.id = o.campaign_id WHERE o.status = 'sent' AND o.sent_at >= ? AND c.mode = 'live' GROUP BY c.channel"
+      ).all(sinceMs)) out[r.channel] = r.n;
+      return out;
     },
   };
 
@@ -423,7 +458,43 @@ export function createStore(db) {
     remove: (aid) => db.prepare('DELETE FROM email_attachments WHERE id = ?').run(aid).changes > 0,
   };
 
-  return { jobs, runs, campaigns, outbox, suppressions, attachments, _db: db };
+  // --------------------------------------------------------- subscribers
+
+  const subscribers = {
+    /** Insert or refresh; re-subscribing reactivates. */
+    upsert({ channel, address, name, username }) {
+      const t = now();
+      db.prepare(`
+        INSERT INTO channel_subscribers (channel, address, name, username, active, created_at, updated_at)
+        VALUES (?, ?, ?, ?, 1, ?, ?)
+        ON CONFLICT(channel, address) DO UPDATE SET
+          name = COALESCE(excluded.name, name), username = COALESCE(excluded.username, username),
+          active = 1, updated_at = excluded.updated_at
+      `).run(channel, String(address), name || null, username || null, t, t);
+      return subscribers.get(channel, address);
+    },
+    get: (channel, address) =>
+      db.prepare('SELECT * FROM channel_subscribers WHERE channel = ? AND address = ?').get(channel, String(address)) || null,
+    setActive(channel, address, active) {
+      return db.prepare('UPDATE channel_subscribers SET active = ?, updated_at = ? WHERE channel = ? AND address = ?')
+        .run(active ? 1 : 0, now(), channel, String(address)).changes > 0;
+    },
+    list(channel, { activeOnly = false } = {}) {
+      return db.prepare(
+        `SELECT * FROM channel_subscribers WHERE channel = ? ${activeOnly ? 'AND active = 1' : ''} ORDER BY created_at ASC`
+      ).all(channel);
+    },
+    remove: (channel, address) =>
+      db.prepare('DELETE FROM channel_subscribers WHERE channel = ? AND address = ?').run(channel, String(address)).changes > 0,
+    counts(channel) {
+      const r = db.prepare(
+        'SELECT COUNT(*) AS total, COALESCE(SUM(active), 0) AS active FROM channel_subscribers WHERE channel = ?'
+      ).get(channel);
+      return { total: r.total, active: r.active };
+    },
+  };
+
+  return { jobs, runs, campaigns, outbox, suppressions, attachments, subscribers, _db: db };
 }
 
 let defaultStore = null;

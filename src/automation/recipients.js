@@ -71,6 +71,81 @@ const EMAIL_HEADERS = new Set(['email', 'e-mail', 'mail', 'alamat email', 'email
 const NAME_HEADERS = new Set(['nama', 'name', 'full name', 'fullname', 'nama lengkap']);
 
 /**
+ * Normalises a phone number to digits-only international form (what the
+ * WhatsApp Cloud API expects). A leading 0 is read as the default country code
+ * (Indonesia, 62), so "0812-3456-7890" becomes "6281234567890".
+ */
+export function normalizePhone(raw, countryCode) {
+  const cc = String(countryCode || process.env.WHATSAPP_DEFAULT_COUNTRY_CODE || '62').replace(/\D/g, '') || '62';
+  let d = String(raw || '').replace(/[\s().-]/g, '');
+  if (d.startsWith('+')) d = d.slice(1);
+  else if (d.startsWith('00')) d = d.slice(2);
+  else if (d.startsWith('0')) d = cc + d.slice(1);
+  return /^\d{8,15}$/.test(d) ? d : null;
+}
+
+/** Telegram chat id: numeric (negative for groups) or @channelusername. */
+export function normalizeChatId(raw) {
+  const v = String(raw || '').trim();
+  if (/^-?\d{5,20}$/.test(v)) return v;
+  if (/^@[A-Za-z][A-Za-z0-9_]{4,31}$/.test(v)) return v.toLowerCase();
+  return null;
+}
+
+/** Webhook-style channels have one configured destination. */
+export function normalizeDestination(raw) {
+  const v = String(raw ?? '').trim().toLowerCase();
+  return v === '' || v === 'default' || v === 'semua' || v === 'all' ? 'default' : null;
+}
+
+const KINDS = {
+  email: {
+    label: 'email',
+    headers: EMAIL_HEADERS,
+    normalize: (v) => {
+      const e = String(v).trim().toLowerCase();
+      return isValidEmail(e) ? e : null;
+    },
+    looksLike: (c) => c.includes('@'),
+  },
+  phone: {
+    label: 'nomor telepon',
+    headers: new Set(['telepon', 'telephone', 'phone', 'hp', 'no hp', 'no. hp', 'nomor', 'nomor hp', 'whatsapp', 'wa', 'no wa', 'mobile']),
+    normalize: (v) => normalizePhone(v),
+    looksLike: (c) => /^\+?[\d\s().-]{6,}$/.test(c),
+  },
+  chat_id: {
+    label: 'chat ID Telegram',
+    headers: new Set(['chat_id', 'chatid', 'chat id', 'telegram', 'telegram_id', 'user_id', 'id']),
+    normalize: normalizeChatId,
+    looksLike: (c) => /^-?\d{5,}$|^@\w+$/.test(c),
+  },
+  destination: {
+    label: 'tujuan',
+    headers: new Set(['tujuan', 'destination', 'target']),
+    normalize: normalizeDestination,
+    looksLike: () => true,
+  },
+};
+
+export const RECIPIENT_KINDS = Object.freeze(Object.keys(KINDS));
+
+/**
+ * Pulls the "@subscribers" shortcut (meaning: every active subscriber of the
+ * channel, resolved at send time) out of a pasted list.
+ */
+export function extractSubscribersToken(input) {
+  if (Array.isArray(input)) {
+    const rest = input.filter((x) => String(x).trim().toLowerCase() !== '@subscribers');
+    return { input: rest, useSubscribers: rest.length !== input.length };
+  }
+  const text = String(input || '');
+  const re = /^[ \t]*@subscribers[ \t]*$/gim;
+  const useSubscribers = re.test(text);
+  return { input: useSubscribers ? text.replace(/^[ \t]*@subscribers[ \t]*\r?\n?/gim, '') : text, useSubscribers };
+}
+
+/**
  * @param {string|Array<string|object>} input  raw text, or already-structured list
  * @param {{max?: number}} [options]
  * @returns {{recipients: Array<{email:string,name:string,vars:object}>,
@@ -79,6 +154,7 @@ const NAME_HEADERS = new Set(['nama', 'name', 'full name', 'fullname', 'nama len
  */
 export function parseRecipients(input, options = {}) {
   const max = options.max ?? 5000;
+  const kind = KINDS[options.kind || 'email'] || KINDS.email;
   const rows = []; // { line, email, name, vars }
   const invalid = [];
 
@@ -90,8 +166,9 @@ export function parseRecipients(input, options = {}) {
           ? { line: i + 1, email: m[2].trim(), name: cleanName(m[1]), vars: {} }
           : { line: i + 1, email: item.trim(), name: '', vars: {} });
       } else if (item && typeof item === 'object') {
-        const { email, name, ...rest } = item;
-        rows.push({ line: i + 1, email: String(email || '').trim(), name: cleanName(name), vars: rest });
+        const { email, address, phone, chat_id: chatId, chatId: chatId2, name, ...rest } = item;
+        const addr = email ?? address ?? phone ?? chatId ?? chatId2 ?? '';
+        rows.push({ line: i + 1, email: String(addr).trim(), name: cleanName(name), vars: rest });
       }
     });
   } else {
@@ -104,7 +181,7 @@ export function parseRecipients(input, options = {}) {
     if (lines.length) {
       const delimiter = detectDelimiter(lines.slice(0, 5).map((l) => l.text).join('\n'));
       const first = splitCsvLine(lines[0].text, delimiter);
-      const headerIdx = first.findIndex((c) => EMAIL_HEADERS.has(c.toLowerCase()));
+      const headerIdx = first.findIndex((c) => kind.headers.has(c.toLowerCase()));
       const hasHeader = headerIdx !== -1;
 
       if (hasHeader) {
@@ -126,14 +203,14 @@ export function parseRecipients(input, options = {}) {
       } else {
         for (const l of lines) {
           // "Nama <mail@x.com>" | "mail@x.com" | "Nama, mail@x.com" | "mail@x.com, Nama"
-          const angle = /^(.*?)<([^>]+)>\s*$/.exec(l.text.trim());
+          const angle = options.kind && options.kind !== 'email' ? null : /^(.*?)<([^>]+)>\s*$/.exec(l.text.trim());
           if (angle) {
             rows.push({ line: l.line, email: angle[2].trim(), name: cleanName(angle[1]), vars: {} });
             continue;
           }
           const cells = splitCsvLine(l.text, delimiter);
-          const emailCell = cells.find((c) => c.includes('@')) ?? cells[0];
-          const nameCell = cells.find((c) => c && c !== emailCell && !c.includes('@')) ?? '';
+          const emailCell = cells.find((c) => kind.looksLike(c)) ?? cells[0];
+          const nameCell = cells.find((c) => c && c !== emailCell && !kind.looksLike(c)) ?? '';
           rows.push({ line: l.line, email: emailCell.trim(), name: cleanName(nameCell), vars: {} });
         }
       }
@@ -145,12 +222,12 @@ export function parseRecipients(input, options = {}) {
   const recipients = [];
 
   for (const r of rows) {
-    const email = r.email.toLowerCase();
-    if (!isValidEmail(email)) {
+    const email = /[\r\n]/.test(r.email) ? null : kind.normalize(r.email);
+    if (!email) {
       invalid.push({
         line: r.line,
         value: r.email.slice(0, 80),
-        reason: /[\r\n]/.test(r.email) ? 'Mengandung karakter terlarang' : 'Format email tidak valid',
+        reason: /[\r\n]/.test(r.email) ? 'Mengandung karakter terlarang' : `Format ${kind.label} tidak valid`,
       });
       continue;
     }

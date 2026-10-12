@@ -27,6 +27,7 @@ export const ErrorKind = Object.freeze({
   TRANSIENT: 'transient', // retry later (timeouts, 4xx)
   PERMANENT: 'permanent', // this recipient will never work (unknown user)
   AUTH: 'auth',           // credentials rejected — nothing will work
+  CONFIG: 'config',       // channel misconfigured (bad template, revoked webhook...)
   QUOTA: 'quota',         // provider daily/rate quota — stop for now
   INVALID: 'invalid',     // we refused to build the message
 });
@@ -39,6 +40,7 @@ export class MailError extends Error {
     this.code = extra.code;
     this.responseCode = extra.responseCode;
     this.hardBounce = Boolean(extra.hardBounce);
+    this.retryAfterMs = Number.isFinite(extra.retryAfterMs) ? extra.retryAfterMs : undefined;
   }
 }
 

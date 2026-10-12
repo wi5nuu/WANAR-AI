@@ -26,8 +26,9 @@ import { JobStatus } from './store.js';
 import {
   parseSchedule, nextRun, previewSchedule, describe, ScheduleError, DEFAULT_TIMEZONE,
 } from './cron.js';
-import { generateEmail, generateText, generateCode } from './ai-compose.js';
-import { parseRecipients } from './recipients.js';
+import { generateEmail, generateMessage, generateText, generateCode } from './ai-compose.js';
+import { parseRecipients, extractSubscribersToken } from './recipients.js';
+import { CHANNEL_KINDS, FIXED_DESTINATION, isChannelId, CHANNEL_IDS } from './channels/meta.js';
 
 export const JOB_TYPES = Object.freeze(['email', 'ai_email', 'ai_task']);
 
@@ -47,39 +48,87 @@ const withTimeout = (promise, ms, label) => {
   return Promise.race([promise, t]).finally(() => clearTimeout(timer));
 };
 
+/**
+ * Resolves the delivery targets of a payload. Supports the legacy single-channel
+ * shape ({channel?, recipients}) and the multi-channel shape ({targets: [...]}).
+ */
+export function targetsOf(p) {
+  if (Array.isArray(p.targets) && p.targets.length) return p.targets;
+  if (p.recipients || p.channel) return [{ channel: p.channel || 'email', recipients: p.recipients, useSubscribers: p.useSubscribers }];
+  return [];
+}
+
 /** Validates + normalises a job payload. Throws JobError with a clear message. */
-export function validatePayload(type, payload, { maxRecipients = 1000 } = {}) {
+export function validatePayload(type, payload, { maxRecipients = 1000, maxFor } = {}) {
   const p = payload && typeof payload === 'object' ? { ...payload } : {};
-  const needRecipients = () => {
-    const parsed = parseRecipients(p.recipients, { max: maxRecipients + 1 });
-    if (!parsed.recipients.length) throw new JobError('Daftar penerima kosong atau tidak valid');
-    if (parsed.recipients.length > maxRecipients) {
-      throw new JobError(`Maksimal ${maxRecipients} penerima per eksekusi`);
+  const limitFor = (channel) => (typeof maxFor === 'function' ? maxFor(channel) : maxRecipients);
+
+  const cleanTargets = ({ required }) => {
+    const raw = targetsOf(p);
+    if (!raw.length) {
+      if (required) throw new JobError('Pilih minimal satu kanal tujuan beserta penerimanya');
+      return [];
     }
-    // Store the cleaned list so the job never re-parses hostile input.
-    p.recipients = parsed.recipients.map((r) => ({ email: r.email, name: r.name, ...r.vars }));
+    if (raw.length > CHANNEL_IDS.length) throw new JobError('Terlalu banyak target');
+
+    const seen = new Set();
+    return raw.map((t) => {
+      const channel = String(t?.channel || 'email');
+      if (!isChannelId(channel)) throw new JobError(`Kanal tidak dikenal: ${channel}. Pilih: ${CHANNEL_IDS.join(', ')}`);
+      if (seen.has(channel)) throw new JobError(`Kanal ${channel} dipilih lebih dari sekali`);
+      seen.add(channel);
+
+      // Webhook-style channels have one fixed destination configured in .env.
+      if (FIXED_DESTINATION.has(channel)) return { channel, recipients: [{ email: 'default' }] };
+
+      let input = t.recipients;
+      let useSubscribers = t.useSubscribers === true;
+      if (channel === 'telegram') {
+        const x = extractSubscribersToken(input);
+        useSubscribers = useSubscribers || x.useSubscribers;
+        input = x.input;
+      }
+      const empty = !String(Array.isArray(input) ? input.join('') : input ?? '').trim();
+      if (empty && !useSubscribers) throw new JobError(`Penerima untuk ${channel} kosong`);
+
+      let recipients = [];
+      if (!empty) {
+        const max = limitFor(channel);
+        const parsed = parseRecipients(input, { kind: CHANNEL_KINDS[channel], max: max + 1 });
+        if (!parsed.recipients.length) throw new JobError(`Daftar penerima ${channel} kosong atau tidak valid`);
+        if (parsed.recipients.length > max) throw new JobError(`Maksimal ${max} penerima ${channel} per eksekusi`);
+        // Store the cleaned list so the job never re-parses hostile input.
+        recipients = parsed.recipients.map((r) => ({ email: r.email, name: r.name, ...r.vars }));
+      }
+      return { channel, recipients, ...(useSubscribers ? { useSubscribers: true } : {}) };
+    });
   };
+
   const str = (k, max = 5000) => (p[k] == null ? '' : String(p[k]).slice(0, max));
   const attachmentIds = Array.isArray(p.attachmentIds)
     ? [...new Set(p.attachmentIds.map(String))].slice(0, 20)
     : [];
 
   switch (type) {
-    case 'email':
-      if (!str('subject').trim()) throw new JobError('Subjek wajib diisi');
-      if (!str('bodyText', 20000).trim() && !str('bodyHtml', 40000).trim()) throw new JobError('Isi email wajib diisi');
-      needRecipients();
+    case 'email': {
+      const targets = cleanTargets({ required: true });
+      const hasEmail = targets.some((t) => t.channel === 'email');
+      if (hasEmail && !str('subject').trim()) throw new JobError('Subjek wajib diisi untuk email');
+      if (!str('bodyText', 20000).trim() && !(hasEmail && str('bodyHtml', 40000).trim())) {
+        throw new JobError('Isi pesan wajib diisi');
+      }
       return {
-        recipients: p.recipients, subject: str('subject', 300), bodyText: str('bodyText', 20000),
+        targets, subject: str('subject', 300), bodyText: str('bodyText', 20000),
         bodyHtml: str('bodyHtml', 40000) || undefined, fromName: str('fromName', 120) || undefined,
         replyTo: str('replyTo', 254) || undefined, attachmentIds,
       };
+    }
 
-    case 'ai_email':
-      if (!str('brief').trim()) throw new JobError('Brief email wajib diisi');
-      needRecipients();
+    case 'ai_email': {
+      if (!str('brief').trim()) throw new JobError('Brief pesan wajib diisi');
+      const targets = cleanTargets({ required: true });
       return {
-        brief: str('brief', 4000), recipients: p.recipients, tone: str('tone', 100) || undefined,
+        brief: str('brief', 4000), targets, tone: str('tone', 100) || undefined,
         language: str('language', 60) || undefined, audience: str('audience', 200) || undefined,
         signature: str('signature', 500) || undefined, personalize: p.personalize !== false,
         autoSend: p.autoSend === true, fromName: str('fromName', 120) || undefined,
@@ -87,18 +136,15 @@ export function validatePayload(type, payload, { maxRecipients = 1000 } = {}) {
         provider: str('provider', 40) || undefined, model: str('model', 100) || undefined,
         attachmentIds,
       };
+    }
 
     case 'ai_task': {
       if (!str('prompt').trim()) throw new JobError('Prompt wajib diisi');
       const kind = p.kind === 'code' ? 'code' : 'text';
-      let emailTo;
-      if (p.recipients) {
-        needRecipients();
-        emailTo = p.recipients;
-      }
+      const targets = cleanTargets({ required: false });
       return {
         prompt: str('prompt', 6000), kind, language: str('language', 40) || undefined,
-        recipients: emailTo, subject: str('subject', 300) || undefined,
+        targets, subject: str('subject', 300) || undefined,
         autoSend: p.autoSend === true,
         provider: str('provider', 40) || undefined, model: str('model', 100) || undefined,
         attachmentIds,
@@ -175,7 +221,7 @@ export class AutomationScheduler extends EventEmitter {
       throw new JobError(e instanceof ScheduleError ? e.message : `Jadwal tidak valid: ${e.message}`);
     }
 
-    const payload = validatePayload(input.type, input.payload, { maxRecipients: this.engine.cfg.maxRecipients });
+    const payload = validatePayload(input.type, input.payload, this._validationOptions());
     this._assertAttachments(payload);
 
     const status = activate ? JobStatus.ACTIVE : JobStatus.PENDING_APPROVAL;
@@ -211,7 +257,7 @@ export class AutomationScheduler extends EventEmitter {
       }
     }
     if (patch.payload !== undefined) {
-      fields.payload = validatePayload(job.type, patch.payload, { maxRecipients: this.engine.cfg.maxRecipients });
+      fields.payload = validatePayload(job.type, patch.payload, this._validationOptions());
       this._assertAttachments(fields.payload);
     }
     if (patch.maxRuns !== undefined) fields.max_runs = patch.maxRuns || null;
@@ -247,6 +293,14 @@ export class AutomationScheduler extends EventEmitter {
     const ok = this.store.jobs.remove(id);
     this._emit('job_deleted', id);
     return ok;
+  }
+
+  _validationOptions() {
+    const channels = this.engine.channels;
+    return {
+      maxRecipients: this.engine.cfg.maxRecipients,
+      maxFor: (id) => (channels?.has(id) ? channels.get(id).limits.maxRecipients : this.engine.cfg.maxRecipients),
+    };
   }
 
   _assertAttachments(payload) {
@@ -376,43 +430,93 @@ export class AutomationScheduler extends EventEmitter {
     const p = job.payload || {};
     const stamp = new Date().toLocaleDateString('id-ID', { timeZone: job.timezone });
     const approvedBy = job.approved_by || 'scheduler';
+    const targets = targetsOf(p);
+    const multi = targets.length > 1;
+    const channels = this.engine.channels;
+
+    /** Create (and, when allowed, start) one campaign per channel target. */
+    const deliver = ({ subjectFor, bodyFor, htmlFor, autoSend, awaiting }) => {
+      const results = [];
+      const errors = [];
+      for (const t of targets) {
+        try {
+          const caps = channels.get(t.channel).capabilities;
+          const input = {
+            createdBy: 'scheduler', sourceJobId: job.id,
+            name: `${job.name} — ${stamp}${multi ? ` [${t.channel}]` : ''}`,
+            channel: t.channel, recipients: t.recipients, useSubscribers: t.useSubscribers,
+            subject: subjectFor(t.channel), bodyText: bodyFor(t.channel),
+            bodyHtml: htmlFor ? htmlFor(t.channel) : undefined,
+            fromName: p.fromName, replyTo: p.replyTo,
+            attachmentIds: caps.attachments ? p.attachmentIds : [],
+          };
+          if (autoSend) {
+            const { campaign, report } = this.engine.quickSend({ ...input, approvedBy });
+            results.push({ channel: t.channel, campaignId: campaign.id, recipients: report.valid, mode: campaign.mode, started: true });
+          } else {
+            const { campaign, report } = this.engine.create(input);
+            results.push({ channel: t.channel, campaignId: campaign.id, recipients: report.valid, started: false });
+            if (awaiting) this.emit('review_needed', { jobId: job.id, campaignId: campaign.id });
+          }
+        } catch (e) {
+          errors.push({ channel: t.channel, error: e.message });
+        }
+      }
+      if (!results.length && errors.length) {
+        throw new Error(errors.map((e) => `${e.channel}: ${e.error}`).join('; '));
+      }
+      return { results, errors };
+    };
+
+    const summary = ({ results, errors }, verb) => {
+      const lines = results.map(
+        (r) => `• ${channels.get(r.channel).label}: ${r.recipients} penerima — ${verb(r)} (${r.campaignId}${r.mode ? `, ${r.mode}` : ''})`
+      );
+      for (const e of errors) lines.push(`• ${channels.get(e.channel).label}: GAGAL — ${e.error}`);
+      return lines.join('\n');
+    };
 
     if (job.type === 'email') {
-      const { campaign, report } = this.engine.quickSend({
-        approvedBy, createdBy: 'scheduler', sourceJobId: job.id,
-        name: `${job.name} — ${stamp}`,
-        subject: p.subject, bodyText: p.bodyText, bodyHtml: p.bodyHtml,
-        recipients: p.recipients, fromName: p.fromName, replyTo: p.replyTo,
-        attachmentIds: p.attachmentIds,
+      const out = deliver({
+        subjectFor: () => p.subject, bodyFor: () => p.bodyText,
+        htmlFor: (ch) => (ch === 'email' ? p.bodyHtml : undefined),
+        autoSend: true,
       });
       return {
-        output: `Kampanye ${campaign.id} dimulai untuk ${report.valid} penerima (${campaign.mode}).`,
-        meta: { campaignId: campaign.id, recipients: report.valid, mode: campaign.mode },
+        output: `Pesan dikirim ke ${out.results.length} kanal.\n${summary(out, () => 'dimulai')}`,
+        meta: { channels: out.results, errors: out.errors, partial: out.errors.length > 0 },
       };
     }
 
     if (job.type === 'ai_email') {
-      const draft = await generateEmail(this.aiManager, {
+      // Email wants subject + formal body; chat apps want a short plain message.
+      const wantsEmail = targets.some((t) => t.channel === 'email');
+      const wantsChat = targets.some((t) => t.channel !== 'email');
+      const base = {
         brief: p.brief, tone: p.tone, language: p.language, audience: p.audience,
         signature: p.signature, personalize: p.personalize, provider: p.provider, model: p.model,
-      });
-      const input = {
-        createdBy: 'scheduler', sourceJobId: job.id, name: `${job.name} — ${stamp}`,
-        subject: draft.subject, bodyText: draft.body, recipients: p.recipients,
-        fromName: p.fromName, replyTo: p.replyTo, attachmentIds: p.attachmentIds,
       };
-      if (p.autoSend) {
-        const { campaign, report } = this.engine.quickSend({ ...input, approvedBy });
-        return {
-          output: `Subjek: ${draft.subject}\n\n${draft.body}\n\n→ Terkirim otomatis ke ${report.valid} penerima (kampanye ${campaign.id}).`,
-          meta: { campaignId: campaign.id, autoSend: true, model: draft.model },
-        };
-      }
-      const { campaign, report } = this.engine.create(input);
-      this.emit('review_needed', { jobId: job.id, campaignId: campaign.id });
+      const emailDraft = wantsEmail ? await generateEmail(this.aiManager, base) : null;
+      const chatDraft = wantsChat
+        ? await generateMessage(this.aiManager, { ...base, channel: targets.find((t) => t.channel !== 'email').channel })
+        : null;
+      const pick = (ch) => (ch === 'email' ? emailDraft : chatDraft);
+
+      const out = deliver({
+        subjectFor: (ch) => (ch === 'email' ? emailDraft.subject : chatDraft.subject || ''),
+        bodyFor: (ch) => pick(ch).body,
+        autoSend: p.autoSend === true,
+        awaiting: true,
+      });
+      const shown = [emailDraft && `[Email] ${emailDraft.subject}\n${emailDraft.body}`, chatDraft && `[Chat]\n${chatDraft.body}`]
+        .filter(Boolean).join('\n\n');
       return {
-        output: `Subjek: ${draft.subject}\n\n${draft.body}\n\n→ Draf ${campaign.id} menunggu review Anda (${report.valid} penerima).`,
-        meta: { campaignId: campaign.id, autoSend: false, awaitingReview: true, model: draft.model },
+        output: `${shown}\n\n${summary(out, (r) => (r.started ? 'terkirim otomatis' : 'draf menunggu review'))}`,
+        meta: {
+          channels: out.results, errors: out.errors, partial: out.errors.length > 0,
+          autoSend: p.autoSend === true, awaitingReview: p.autoSend !== true,
+          model: (emailDraft || chatDraft).model,
+        },
       };
     }
 
@@ -422,21 +526,17 @@ export class AutomationScheduler extends EventEmitter {
         : await generateText(this.aiManager, { prompt: p.prompt, provider: p.provider, model: p.model });
       const meta = { model: out.model, kind: p.kind };
 
-      if (p.recipients?.length) {
-        const input = {
-          createdBy: 'scheduler', sourceJobId: job.id, name: `${job.name} — ${stamp}`,
-          subject: p.subject || `${job.name} — ${stamp}`, bodyText: out.text, recipients: p.recipients,
-          attachmentIds: p.attachmentIds,
-        };
-        if (p.autoSend) {
-          const { campaign } = this.engine.quickSend({ ...input, approvedBy });
-          meta.campaignId = campaign.id;
-        } else {
-          const { campaign } = this.engine.create(input);
-          meta.campaignId = campaign.id;
-          meta.awaitingReview = true;
-          this.emit('review_needed', { jobId: job.id, campaignId: campaign.id });
-        }
+      if (targets.length) {
+        const sent = deliver({
+          subjectFor: () => p.subject || `${job.name} — ${stamp}`,
+          bodyFor: () => out.text,
+          autoSend: p.autoSend === true,
+          awaiting: true,
+        });
+        meta.channels = sent.results;
+        meta.errors = sent.errors;
+        meta.awaitingReview = p.autoSend !== true;
+        return { output: `${out.text}\n\n${summary(sent, (r) => (r.started ? 'terkirim otomatis' : 'draf menunggu review'))}`, meta };
       }
       return { output: out.text, meta };
     }

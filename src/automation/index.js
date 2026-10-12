@@ -17,10 +17,12 @@ import { createStore } from './store.js';
 import { Mailer } from './mailer.js';
 import { CampaignEngine } from './campaigns.js';
 import { createAttachmentService } from './attachments.js';
+import { createChannels } from './channels/index.js';
+import { TelegramInbox } from './telegram-inbox.js';
 import { AutomationScheduler } from './scheduler.js';
 
 export function createAutomation({
-  db, aiManager, env = process.env, transport, engineOptions = {}, schedulerOptions = {}, attachmentsDir,
+  db, aiManager, env = process.env, transport, engineOptions = {}, schedulerOptions = {}, attachmentsDir, fetchImpl,
 }) {
   if (!db) throw new Error('createAutomation: `db` is required');
   const store = createStore(db);
@@ -29,9 +31,11 @@ export function createAutomation({
     store,
     ...(attachmentsDir ? { dir: attachmentsDir } : {}),
   });
-  const engine = new CampaignEngine({ store, mailer, attachments, ...engineOptions });
+  const channels = createChannels({ env, mailer, fetchImpl });
+  const engine = new CampaignEngine({ store, mailer, channels, attachments, ...engineOptions });
   // How long after a missed slot a job may still be run (laptop was off/asleep).
   const catchUpHours = parseFloat(env.AUTOMATION_CATCHUP_HOURS || '6');
+  const inbox = new TelegramInbox({ channel: channels.get('telegram'), store, env });
   const scheduler = new AutomationScheduler({
     store,
     engine,
@@ -46,9 +50,11 @@ export function createAutomation({
   engine.on('campaign', (e) => events.emit('event', { channel: 'campaign', ...e }));
   engine.on('alert', (e) => events.emit('event', { channel: 'alert', ...e }));
   scheduler.on('job', (e) => events.emit('event', { channel: 'job', ...e }));
+  inbox.on('subscribed', (e) => events.emit('event', { channel: 'subscriber', type: 'subscribed', ...e }));
+  inbox.on('unsubscribed', (e) => events.emit('event', { channel: 'subscriber', type: 'unsubscribed', ...e }));
   scheduler.on('review_needed', (e) => events.emit('event', { channel: 'review', ...e }));
 
-  return { store, mailer, engine, scheduler, events, attachments };
+  return { store, mailer, engine, scheduler, events, attachments, channels, inbox };
 }
 
 export * from './store.js';
@@ -60,3 +66,4 @@ export { JOB_TYPES, JobError } from './scheduler.js';
 export { CampaignError } from './campaigns.js';
 export { AttachmentError, sanitizeFilename } from './attachments.js';
 export { MailError, ErrorKind } from './mailer.js';
+export { CHANNEL_IDS, CHANNEL_KINDS, createChannels } from './channels/index.js';

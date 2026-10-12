@@ -20,8 +20,10 @@
  */
 
 import { EventEmitter } from 'node:events';
-import { CampaignStatus, OutboxStatus } from './store.js';
-import { parseRecipients } from './recipients.js';
+import { CampaignStatus, OutboxStatus, suppressionKey } from './store.js';
+import { parseRecipients, extractSubscribersToken } from './recipients.js';
+import { CHANNEL_KINDS } from './channels/meta.js';
+import { createChannels } from './channels/index.js';
 import { render, builtinVars, textToHtml, extractVars } from './templates.js';
 import { ErrorKind, MailError } from './mailer.js';
 import { zonedParts, zonedToUtc, DEFAULT_TIMEZONE } from './cron.js';
@@ -46,10 +48,12 @@ export class CampaignEngine extends EventEmitter {
   /**
    * @param {{store: object, mailer: object, backoffBaseMs?: number}} deps
    */
-  constructor({ store, mailer, attachments = null, backoffBaseMs = 4000 }) {
+  constructor({ store, mailer, channels = null, attachments = null, backoffBaseMs = 4000 }) {
     super();
     this.store = store;
     this.mailer = mailer;
+    // Every outbound medium is a channel adapter; email is just the default one.
+    this.channels = channels || createChannels({ env: process.env, mailer });
     this.attachments = attachments;
     this.backoffBaseMs = backoffBaseMs;
     this.workers = new Map(); // campaignId -> Promise
@@ -80,32 +84,68 @@ export class CampaignEngine extends EventEmitter {
    */
   create({
     name, subject, bodyText, bodyHtml, recipients, fromName, replyTo,
-    throttleMs, sourceJobId, createdBy, attachmentIds,
+    throttleMs, sourceJobId, createdBy, attachmentIds, channel = 'email', useSubscribers = false,
   }) {
+    const channelId = String(channel || 'email');
+    if (!this.channels.has(channelId)) throw new CampaignError(`Kanal tidak dikenal: ${channelId}`);
+    const adapter = this.channels.get(channelId);
+    const caps = adapter.capabilities;
+    const isEmail = channelId === 'email';
+
     const subj = String(subject || '').replace(/[\r\n]+/g, ' ').trim();
     const text = String(bodyText || '').trim();
-    if (!subj) throw new CampaignError('Subjek wajib diisi');
-    if (!text && !String(bodyHtml || '').trim()) throw new CampaignError('Isi email wajib diisi');
+    if (caps.subject === 'required' && !subj) throw new CampaignError('Subjek wajib diisi');
+    if (!text && !(caps.html && String(bodyHtml || '').trim())) {
+      throw new CampaignError(isEmail ? 'Isi email wajib diisi' : 'Isi pesan wajib diisi');
+    }
+    if (attachmentIds?.length && !caps.attachments) {
+      throw new CampaignError(`${adapter.label} tidak mendukung lampiran pada konfigurasi saat ini`);
+    }
 
     // Fail fast (and before anything is persisted) if an attachment is unusable.
     const attachmentList = this.attachments
       ? this.attachments.assertAvailable(attachmentIds)
       : [];
 
-    const max = this.cfg.maxRecipients;
-    const parsed = parseRecipients(recipients, { max: max + 1 });
+    const max = adapter.limits.maxRecipients;
+    const kind = CHANNEL_KINDS[channelId];
+
+    // "@subscribers" = everyone who opted in to this channel (resolved now).
+    let wantsSubscribers = Boolean(useSubscribers);
+    let input = recipients;
+    if (adapter.supportsSubscribers) {
+      const t = extractSubscribersToken(recipients);
+      if (t.useSubscribers) wantsSubscribers = true;
+      input = t.input;
+    }
+    // Fixed-destination channels (Slack, webhook...) have exactly one recipient.
+    if (caps.fixedDestination && !String(Array.isArray(input) ? input.join('') : input || '').trim()) input = 'default';
+
+    const parsed = parseRecipients(input, { kind, max: max + 1 });
+    if (wantsSubscribers) {
+      const have = new Set(parsed.recipients.map((r) => r.email));
+      for (const sub of this.store.subscribers.list(channelId, { activeOnly: true })) {
+        if (!have.has(sub.address)) {
+          parsed.recipients.push({ email: sub.address, name: sub.name || '', vars: {} });
+          have.add(sub.address);
+        }
+      }
+    }
+
     if (parsed.recipients.length === 0) {
       throw new CampaignError(
         parsed.invalid.length
-          ? `Tidak ada alamat email valid (${parsed.invalid.length} baris ditolak)`
-          : 'Daftar penerima kosong'
+          ? `Tidak ada alamat tujuan valid (${parsed.invalid.length} baris ditolak)`
+          : (wantsSubscribers ? 'Belum ada pelanggan aktif di kanal ini' : 'Daftar penerima kosong')
       );
     }
     if (parsed.recipients.length > max) {
-      throw new CampaignError(`Maksimal ${max} penerima per kampanye (EMAIL_MAX_RECIPIENTS)`, 'too_many');
+      throw new CampaignError(`Maksimal ${max} penerima per kampanye${isEmail ? ' (EMAIL_MAX_RECIPIENTS)' : ''}`, 'too_many');
     }
 
-    const suppressed = this.store.suppressions.filter(parsed.recipients.map((r) => r.email));
+    const keyOf = (addr) => suppressionKey(channelId, addr);
+    const supKeys = this.store.suppressions.filter(parsed.recipients.map((r) => keyOf(r.email)));
+    const suppressed = new Set(parsed.recipients.filter((r) => supKeys.has(keyOf(r.email))).map((r) => r.email));
     const used = [...new Set([...extractVars(subj), ...extractVars(text), ...extractVars(bodyHtml || '')])];
 
     const campaign = this.store.campaigns.create({
@@ -115,10 +155,11 @@ export class CampaignEngine extends EventEmitter {
       bodyHtml: bodyHtml || null,
       fromName,
       replyTo,
-      throttleMs: throttleMs ?? this.cfg.throttleMs,
+      throttleMs: throttleMs ?? adapter.limits.throttleMs,
       sourceJobId,
       createdBy,
       attachmentIds: attachmentList,
+      channel: channelId,
     });
 
     this.store.outbox.addMany(
@@ -143,7 +184,22 @@ export class CampaignEngine extends EventEmitter {
       if (miss.size) missingFor.push({ email: r.email, missing: [...miss] });
     }
 
+    // Channel-specific heads-ups the operator should see before approving.
+    const warnings = [];
+    if (text.length > caps.maxTextLength) {
+      warnings.push(
+        channelId === 'whatsapp'
+          ? `Pesan ${text.length} karakter akan DIPOTONG menjadi ${caps.maxTextLength} (batas parameter template WhatsApp).`
+          : `Pesan ${text.length} karakter akan dipecah menjadi beberapa pesan (batas ${caps.maxTextLength}).`
+      );
+    }
+    if (channelId === 'whatsapp' && adapter.mode === 'live' && !String(adapter.describe().sendMode).startsWith('template')) {
+      warnings.push('Tanpa WHATSAPP_TEMPLATE_NAME, pesan hanya terkirim ke pelanggan yang membalas dalam 24 jam terakhir.');
+    }
+
     const report = {
+      channel: channelId,
+      warnings,
       totalLines: parsed.total,
       valid: parsed.recipients.length,
       invalid: parsed.invalid,
@@ -170,9 +226,13 @@ export class CampaignEngine extends EventEmitter {
     const vars = this._varsFor(row);
     const subject = render(campaign.subject, vars);
     const text = render(campaign.body_text, vars);
-    const html = campaign.body_html
-      ? render(campaign.body_html, vars, { html: true })
-      : { text: textToHtml(text.text), missing: [] };
+    const isEmail = (campaign.channel || 'email') === 'email';
+    let html = { text: '', missing: [] };
+    if (isEmail) {
+      html = campaign.body_html
+        ? render(campaign.body_html, vars, { html: true })
+        : { text: textToHtml(text.text), missing: [] };
+    }
     const missing = [...new Set([...subject.missing, ...text.missing, ...html.missing])];
     return { subject: subject.text, text: text.text, html: html.text, missing };
   }
@@ -203,7 +263,7 @@ export class CampaignEngine extends EventEmitter {
     this.store.campaigns.update(campaignId, {
       status: CampaignStatus.RUNNING,
       status_reason: null,
-      mode: fresh ? this.mailer.mode : (c.mode || this.mailer.mode),
+      mode: fresh ? this.channels.get(c.channel || 'email').mode : (c.mode || this.channels.get(c.channel || 'email').mode),
       approved_by: fresh ? approvedBy : c.approved_by || approvedBy,
       approved_at: fresh ? Date.now() : c.approved_at || Date.now(),
       started_at: c.started_at || Date.now(),
@@ -291,11 +351,13 @@ export class CampaignEngine extends EventEmitter {
     for (;;) {
       const c = this.store.campaigns.get(campaignId);
       if (!c || c.status !== CampaignStatus.RUNNING) return;
+      const channelId = c.channel || 'email';
+      const adapter = this.channels.get(channelId);
 
-      // Daily cap — only live mail counts against the provider's limit.
+      // Daily cap — only live traffic counts against the provider's limit.
       if (c.mode === 'live') {
-        const sentToday = this.store.outbox.sentSince(startOfLocalDay());
-        if (sentToday >= this.cfg.dailyCap) {
+        const sentToday = this.store.outbox.sentSince(startOfLocalDay(), channelId);
+        if (sentToday >= adapter.limits.dailyCap) {
           this.pause(campaignId, 'daily_cap');
           return;
         }
@@ -311,7 +373,8 @@ export class CampaignEngine extends EventEmitter {
       }
 
       // Re-check suppression at send time (it may have changed since creation).
-      if (this.store.suppressions.has(row.email)) {
+      const supKey = suppressionKey(channelId, row.email);
+      if (this.store.suppressions.has(supKey)) {
         this.store.outbox.mark(row.id, { status: OutboxStatus.SKIPPED, error: 'Ada di daftar suppress' });
         this._emit(campaignId, 'progress');
         continue;
@@ -343,7 +406,7 @@ export class CampaignEngine extends EventEmitter {
       this.store.outbox.mark(row.id, { status: OutboxStatus.SENDING, attempts: row.attempts + 1 });
 
       try {
-        const res = await this.mailer.send({
+        const res = await adapter.send({
           to: row.email,
           subject: rendered.subject,
           text: rendered.text,
@@ -352,6 +415,8 @@ export class CampaignEngine extends EventEmitter {
           fromName: c.from_name,
           mode: c.mode || undefined,
           attachments,
+          recipient: { name: row.name, vars: row.vars },
+          campaign: { id: c.id, name: c.name },
         });
         this.store.outbox.mark(row.id, {
           status: OutboxStatus.SENT, messageId: res.messageId, attempts: row.attempts + 1,
@@ -360,31 +425,41 @@ export class CampaignEngine extends EventEmitter {
       } catch (err) {
         const e = err instanceof MailError ? err : new MailError(err.message, ErrorKind.TRANSIENT);
 
-        if (e.kind === ErrorKind.AUTH || e.kind === ErrorKind.QUOTA) {
+        const stopsCampaign = [ErrorKind.AUTH, ErrorKind.QUOTA, ErrorKind.CONFIG].includes(e.kind);
+        if (stopsCampaign) {
           // Not this recipient's fault: put it back and stop the whole campaign.
+          const reason = e.kind; // 'auth' | 'quota' | 'config'
           this.store.outbox.mark(row.id, { status: OutboxStatus.QUEUED, error: e.message, attempts: row.attempts });
-          this.pause(campaignId, e.kind === ErrorKind.AUTH ? 'auth' : 'quota');
-          this.store.campaigns.update(campaignId, { status_reason: e.kind === ErrorKind.AUTH ? 'auth' : 'quota' });
-          this.emit('alert', { campaignId, kind: e.kind, message: e.message });
+          this.pause(campaignId, reason);
+          this.store.campaigns.update(campaignId, { status_reason: reason });
+          this.emit('alert', { campaignId, kind: e.kind, messageChannel: channelId, message: e.message });
           return;
         }
 
-        if (e.kind === ErrorKind.TRANSIENT && row.attempts + 1 < this.cfg.maxAttempts) {
+        if (e.kind === ErrorKind.TRANSIENT && row.attempts + 1 < adapter.limits.maxAttempts) {
           this.store.outbox.mark(row.id, {
             status: OutboxStatus.QUEUED, error: e.message, attempts: row.attempts + 1,
           });
-          await sleep(this.backoffBaseMs * 2 ** row.attempts);
+          // Honour the provider's own "retry after" (Telegram flood control...).
+          const wait = Number.isFinite(e.retryAfterMs)
+            ? Math.min(e.retryAfterMs, 120_000)
+            : this.backoffBaseMs * 2 ** row.attempts;
+          await sleep(wait);
           continue;
         }
 
         this.store.outbox.mark(row.id, {
           status: OutboxStatus.FAILED, error: e.message, attempts: row.attempts + 1,
         });
-        if (e.hardBounce) this.store.suppressions.add(row.email, 'bounce');
+        if (e.hardBounce) {
+          this.store.suppressions.add(supKey, 'bounce');
+          // Someone who blocked the bot / left the channel is no longer a subscriber.
+          this.store.subscribers.setActive(channelId, row.email, false);
+        }
         this._emit(campaignId, 'progress');
       }
 
-      const gap = c.throttle_ms ?? this.cfg.throttleMs;
+      const gap = c.throttle_ms ?? adapter.limits.throttleMs;
       if (gap > 0) await sleep(gap);
     }
   }
@@ -398,6 +473,7 @@ export class CampaignEngine extends EventEmitter {
       status: c.status,
       reason: c.status_reason,
       mode: c.mode,
+      messageChannel: c.channel || 'email',
       stats: c.stats,
     });
   }
@@ -411,13 +487,22 @@ export class CampaignEngine extends EventEmitter {
     return { campaign: started, report };
   }
 
-  /** One-off test mail straight through the transport (SMTP "test" button). */
-  async sendTest({ to, fromName }) {
-    return this.mailer.send({
-      to,
+  /** One-off test message straight through a channel (the "Tes" buttons). */
+  async testChannel(channelId, { to, fromName } = {}) {
+    const adapter = this.channels.get(channelId);
+    const address = adapter.capabilities.fixedDestination ? 'default' : to;
+    const stamp = new Date().toLocaleString('id-ID', { timeZone: DEFAULT_TIMEZONE });
+    return adapter.send({
+      to: address,
       fromName,
-      subject: 'Tes koneksi Wanar AI Automation',
-      text: `Ini email uji dari Wanar AI.\nDikirim: ${new Date().toLocaleString('id-ID')}\n\nJika Anda menerima email ini, konfigurasi SMTP sudah benar.`,
+      subject: 'Tes koneksi Wanar AI',
+      text: `Ini pesan uji dari Wanar AI.\nDikirim: ${stamp}\n\nJika Anda menerima pesan ini, kanal ${adapter.label} sudah terhubung.`,
+      mode: adapter.mode,
     });
+  }
+
+  /** Backwards-compatible email test. */
+  async sendTest({ to, fromName }) {
+    return this.testChannel('email', { to, fromName });
   }
 }
