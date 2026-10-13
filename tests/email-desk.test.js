@@ -475,3 +475,13 @@ describe('Email massal, follow-up & anti prompt-injection', async () => {
     expect(o.recent.find((m) => m.direction === 'in')).toMatchObject({ counterpart: 'budi@klien.com' });
   });
 });
+
+describe('overview ignores conversations with yourself', () => {
+  it('a self-test thread is never "waiting on you"', async () => {
+    const w = build();
+    await w.desk.draft({ to: 'wisnu@wanar.id', subject: 'Tes', body: 'x' });
+    await w.desk.sendDraft(1);
+    await w.desk.handleInbound({ messageId: '<r@x>', inReplyTo: '<out1@wanar.id>', references: [], from: { address: 'wisnu@wanar.id' }, subject: 'Re: Tes', text: 'ok', headers: {} });
+    expect(w.desk.overview().awaitingYou).toEqual([]);
+  });
+});

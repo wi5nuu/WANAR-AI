@@ -634,8 +634,9 @@ export class EmailDesk {
       dailyCap: this.limits.dailySend,
       drafts: singles,
       batches: [...batches.values()],
-      awaitingYou: threads.filter((t) => t.status === 'open' && t.last?.direction === 'in'),
-      awaitingThem: threads.filter((t) => t.status === 'open' && t.last?.direction === 'out' && now - t.last.at > DAY_MS),
+      // conversations with your own address are tests/notes, never "waiting"
+      awaitingYou: threads.filter((t) => t.status === 'open' && t.counterpart !== this.ownAddress && t.last?.direction === 'in'),
+      awaitingThem: threads.filter((t) => t.status === 'open' && t.counterpart !== this.ownAddress && t.last?.direction === 'out' && now - t.last.at > DAY_MS),
       followUps: threads.filter((t) => t.followUpAt).sort((a, b) => a.followUpAt - b.followUpAt),
       threads,
       recent: this.store.messages.recent(20).map((m) => ({
