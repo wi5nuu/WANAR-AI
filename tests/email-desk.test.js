@@ -307,3 +307,27 @@ describe('Email to self (smoke test)', () => {
     expect(w.sent).toHaveLength(1);
   });
 });
+
+describe('Brevo network failures', async () => {
+  const { BrevoTransport } = await import('../src/automation/brevo.js');
+  const msg = { from: 'a@b.co', to: 'c@d.co', subject: 's', text: 't' };
+
+  it('retries once when the connection never opened, and reports the cause', async () => {
+    let n = 0;
+    const fetchImpl = async () => {
+      n++;
+      if (n === 1) throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ENETUNREACH' } });
+      return { ok: true, status: 201, json: async () => ({ messageId: '<m@x>' }) };
+    };
+    const r = await new BrevoTransport({ apiKey: 'k', fetchImpl }).sendMail(msg);
+    expect(r.messageId).toBe('<m@x>');
+    expect(n).toBe(2);
+  });
+
+  it('never retries when the request may have been delivered (no duplicate emails)', async () => {
+    let n = 0;
+    const fetchImpl = async () => { n++; throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNRESET' } }); };
+    await expect(new BrevoTransport({ apiKey: 'k', fetchImpl }).sendMail(msg)).rejects.toThrow(/Tidak bisa menghubungi Brevo \(ECONNRESET\)/);
+    expect(n).toBe(1);
+  });
+});

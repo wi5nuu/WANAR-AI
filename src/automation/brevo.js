@@ -41,6 +41,8 @@ const addr = (v) => {
   return v.address ? { email: v.address, ...(v.name ? { name: v.name } : {}) } : null;
 };
 
+const CONNECT_PHASE = new Set(['ECONNREFUSED', 'ENOTFOUND', 'ENETUNREACH', 'EHOSTUNREACH', 'EAI_AGAIN', 'UND_ERR_CONNECT_TIMEOUT']);
+
 export class BrevoTransport {
   constructor({ apiKey, fetchImpl = globalThis.fetch, timeoutMs = 20_000 }) {
     this.apiKey = apiKey;
@@ -48,7 +50,18 @@ export class BrevoTransport {
     this.timeoutMs = timeoutMs;
   }
 
-  async _call(path, { method = 'GET', body } = {}) {
+  /** One retry for transient network failures (never for HTTP errors). */
+  async _call(path, opts = {}) {
+    try {
+      return await this._once(path, opts);
+    } catch (e) {
+      if (e.responseCode || !e.beforeSend) throw e;
+      await new Promise((r) => setTimeout(r, 1200));
+      return this._once(path, opts);
+    }
+  }
+
+  async _once(path, { method = 'GET', body } = {}) {
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), this.timeoutMs);
     try {
@@ -62,6 +75,14 @@ export class BrevoTransport {
       try { data = await res.json(); } catch { /* empty body */ }
       if (!res.ok) throw httpError(res.status, data);
       return data;
+    } catch (e) {
+      if (e.responseCode) throw e;
+      const why = e.name === 'AbortError' ? 'timeout' : (e.cause?.code || e.cause?.message || e.code || e.message);
+      const err = new Error(`Tidak bisa menghubungi Brevo (${why})`);
+      // Only connection-phase failures are safe to retry: the request never left.
+      err.beforeSend = CONNECT_PHASE.has(String(e.cause?.code || e.code || ''));
+      err.code = 'ECONNECTION';
+      throw err;
     } finally {
       clearTimeout(timer);
     }
