@@ -51,6 +51,11 @@ export function stripQuoted(text) {
   // "Pada Sel, 13 Okt 2026 pukul 14.54 Nama <\nalamat> menulis:" — attribution may wrap over 2 lines.
   const wrapped = /(^|\n)[ \t]*(?:On|Pada)\s[^\n]{4,200}\n?[^\n]{0,160}?(?:wrote|menulis):[ \t]*(?=\n|$)/i.exec(src);
   if (wrapped) src = src.slice(0, wrapped.index);
+  else {
+    // Same attribution flattened onto one line (older stored rows): needs an <address> to be safe.
+    const flat = /\s(?:On|Pada)\s[^<\n]{4,160}<\s*[^>\s]+@[^>\s]+\s*>\s*(?:wrote|menulis):/i.exec(src);
+    if (flat) src = src.slice(0, flat.index);
+  }
   const lines = src.split('\n');
   const out = [];
   for (const l of lines) {
@@ -225,7 +230,7 @@ export class EmailDesk {
     const d = pending[0];
     const shown = pending.slice(0, 15).map((x) => `  • ${x.to_name ? `${x.to_name} <${x.to_addr}>` : x.to_addr}`);
     return [
-      `📝 Draf email massal #${d.seq}–#${pending.at(-1).seq} (${pending.length} penerima, dikirim satu per satu)`,
+      `Draf email massal #${d.seq}–#${pending.at(-1).seq} (${pending.length} penerima, dikirim satu per satu)`,
       'Ke:',
       ...shown,
       pending.length > 15 ? `  … dan ${pending.length - 15} lainnya` : '',
@@ -234,7 +239,7 @@ export class EmailDesk {
       clip(d.body, 1200),
       '',
       `Saat dibalas: ${MODE_LABEL[d.auto_mode] || MODE_LABEL.notify}${d.follow_up_days ? ` · ingatkan follow-up bila ${d.follow_up_days} hari tidak dibalas` : ''}`,
-      this.live ? '' : '⚠️ Email belum dikonfigurasi di server — pengiriman akan disimulasikan.',
+      this.live ? '' : 'Catatan: email belum dikonfigurasi di server — pengiriman akan disimulasikan.',
       'Ketik "kirim" untuk mengirim ke semua, atau "batal" untuk membatalkan semua.',
     ].filter((x) => x !== '').join('\n');
   }
@@ -272,14 +277,14 @@ export class EmailDesk {
   previewText(d) {
     if (d.batch) return this.batchPreviewText(d.batch);
     return [
-      `📝 Draf email #${d.seq}${d.origin === 'autoreply' ? ' (balasan disiapkan AI)' : ''}`,
+      `Draf email #${d.seq}${d.origin === 'autoreply' ? ' (balasan disiapkan AI)' : ''}`,
       `Ke: ${d.to_addr}`,
       `Subjek: ${d.subject}`,
       '',
       clip(d.body, 1500),
       '',
       `Saat dibalas: ${MODE_LABEL[d.auto_mode] || MODE_LABEL.notify}${d.follow_up_days ? ` · ingatkan follow-up bila ${d.follow_up_days} hari tidak dibalas` : ''}`,
-      this.live ? '' : '⚠️ SMTP belum diatur di server — email akan disimulasikan, tidak benar-benar terkirim.',
+      this.live ? '' : 'Catatan: email belum dikonfigurasi di server — akan disimulasikan, tidak benar-benar terkirim.',
       `Ketik "kirim" untuk mengirim, "batal" untuk membatalkan, atau minta ubah isinya. (/kirim ${d.seq} · /tolak ${d.seq})`,
     ].filter((x) => x !== '').join('\n');
   }
@@ -436,7 +441,7 @@ export class EmailDesk {
    */
   async _respond(thread, mail, fresh) {
     const who = mail.from?.name ? `${mail.from.name} <${mail.from.address}>` : mail.from?.address;
-    const head = `📩 Balasan email dari ${who}\nSubjek: ${clip(mail.subject || thread.subject, 150)}\n\n${clip(fresh, 1200) || '(isi kosong)'}`;
+    const head = `Balasan email dari ${who}\nSubjek: ${clip(mail.subject || thread.subject, 150)}\n\n${clip(fresh, 1200) || '(isi kosong)'}`;
     const chat = thread.chat_id;
 
     if (thread.auto_mode === 'notify' || thread.counterpart === this.ownAddress) {
@@ -453,7 +458,7 @@ export class EmailDesk {
       return { matched: true, action: 'notified' };
     }
     if (plan.escalate) {
-      await this._tell(chat, `${head}\n\n🙋 Perlu keputusanmu: ${clip(plan.reason || 'AI tidak yakin menjawab ini sendiri', 300)}`);
+      await this._tell(chat, `${head}\n\nPerlu keputusanmu: ${clip(plan.reason || 'AI tidak yakin menjawab ini sendiri', 300)}`);
       return { matched: true, action: 'escalated' };
     }
 
@@ -461,7 +466,7 @@ export class EmailDesk {
     if (thread.auto_mode === 'auto' && !blocker) {
       try {
         const r = await this.sendDraft(d, { auto: true });
-        await this._tell(chat, `${head}\n\n↩️ Sudah saya balas otomatis${r.dryRun ? ' (SIMULASI — SMTP belum diatur)' : ''}:\n\n${clip(d.body, 1000)}`);
+        await this._tell(chat, `${head}\n\nSudah saya balas otomatis${r.dryRun ? ' (SIMULASI — SMTP belum diatur)' : ''}:\n\n${clip(d.body, 1000)}`);
         return { matched: true, action: 'auto_replied' };
       } catch (e) {
         await this._tell(chat, `${head}\n\n✗ Balasan otomatis gagal: ${clip(e.message, 200)}\n\n${this.previewText(this.store.drafts.get(d.id) || d)}`);
@@ -538,6 +543,17 @@ export class EmailDesk {
     return parsed || { escalate: true, reason: 'AI tidak memberi balasan yang bisa dipakai' };
   }
 
+  /** Message text without quoted history (also repairs rows stored before quote-stripping improved). */
+  cleanBody(m) {
+    const body = String(m?.body || '');
+    return m?.direction === 'in' ? (stripQuoted(body) || body) : body;
+  }
+
+  /** Messages of a conversation, ready for display. */
+  threadMessages(threadId, limit = 50) {
+    return this.store.messages.ofThread(threadId, limit).map((m) => ({ ...m, body: this.cleanBody(m) }));
+  }
+
   // -------------------------------------------------------------- follow-ups
 
   setFollowUp(ref, days) {
@@ -567,7 +583,7 @@ export class EmailDesk {
           tail = `\n\n${this.previewText(d)}`;
         }
       } catch { /* notify without a draft */ }
-      await this._tell(t.chat_id, `⏳ ${t.counterpart} belum membalas "${clip(t.subject, 80)}" sejak ${days} hari lalu.${tail || '\nMau saya tuliskan follow-up? Tulis mis. "follow up ke ' + t.counterpart + '".'}`);
+      await this._tell(t.chat_id, `Follow-up: ${t.counterpart} belum membalas "${clip(t.subject, 80)}" sejak ${days} hari lalu.${tail || '\nMau saya tuliskan follow-up? Tulis mis. "follow up ke ' + t.counterpart + '".'}`);
       this._emit('followup', { thread: t.id });
       n++;
     }
@@ -612,7 +628,8 @@ export class EmailDesk {
       return {
         id: t.id, counterpart: t.counterpart, subject: t.subject, status: t.status, autoMode: t.auto_mode,
         autoCount: t.auto_count, followUpAt: t.follow_up_at, updatedAt: t.updated_at,
-        last: last ? { direction: last.direction, at: last.at, snippet: clip(last.body, 160), auto: Boolean(last.auto) } : null,
+        isSelf: t.counterpart === this.ownAddress,
+        last: last ? { direction: last.direction, at: last.at, snippet: clip(this.cleanBody(last), 160), auto: Boolean(last.auto) } : null,
       };
     });
     const pending = this.pendingDrafts();
@@ -641,7 +658,7 @@ export class EmailDesk {
       threads,
       recent: this.store.messages.recent(20).map((m) => ({
         id: m.id, threadId: m.thread_id, direction: m.direction, counterpart: m.counterpart, subject: m.subject || m.thread_subject,
-        at: m.at, auto: Boolean(m.auto), snippet: clip(m.body, 140),
+        at: m.at, auto: Boolean(m.auto), snippet: clip(this.cleanBody(m), 140),
       })),
     };
   }

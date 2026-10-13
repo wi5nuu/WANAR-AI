@@ -56,7 +56,7 @@ export class ImapWatcher {
     if (!this.cfg.configured || !this.stopped) return false;
     this.stopped = false;
     this._connect();
-    this._poll = setInterval(() => { this.check().catch(() => {}); }, this.cfg.pollMs);
+    this._poll = setInterval(() => { this.check('poll').catch(() => {}); }, this.cfg.pollMs);
     this._poll.unref?.();
     return true;
   }
@@ -79,7 +79,7 @@ export class ImapWatcher {
         host: this.cfg.host, port: this.cfg.port, secure: this.cfg.secure,
         auth: { user: this.cfg.user, pass: this.cfg.pass }, logger: false,
       });
-      c.on('exists', () => { this.check().catch(() => {}); });
+      c.on('exists', () => { this.check('push').catch(() => {}); });
       c.on('close', () => this._scheduleReconnect('koneksi tertutup'));
       c.on('error', (e) => { this.status.lastError = e.message; });
       await c.connect();
@@ -108,7 +108,7 @@ export class ImapWatcher {
   }
 
   /** Fetches and processes mail newer than the cursor. Safe to call often. */
-  async check() {
+  async check(via = 'manual') {
     const c = this.client;
     if (!c || this.busy) return 0;
     this.busy = true;
@@ -144,6 +144,7 @@ export class ImapWatcher {
       }
       this.status.processed += n;
       this.status.lastCheck = Date.now();
+      if (n) { this.status.lastVia = via; this.status.lastMailAt = Date.now(); }
     } catch (e) {
       this.status.lastError = e.message;
     } finally {

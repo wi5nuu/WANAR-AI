@@ -10,7 +10,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { openStream, getAutomationToken } from '../lib/stream.js';
 import DashboardLayout from './DashboardLayout';
-import { IconRadar, IconMail, IconBell, IconServer, IconClock, IconSend, IconTrash, IconRefresh, IconPlus } from './icons';
 import './automation.css';
 import './worklog.css';
 import './command-center.css';
@@ -147,9 +146,9 @@ export default function CommandCenter() {
           </div>
           <div className="au-row">
             <span className={`au-live ${live ? 'on' : ''}`}><i className="au-dot" /> {live ? 'Realtime aktif' : 'Menyambungkan…'}</span>
-            <button className="au-btn sm" onClick={load} title="Muat ulang"><IconRefresh size={15} /> Muat ulang</button>
+            <button className="au-btn sm" onClick={load} title="Muat ulang">Muat ulang</button>
             <button className="au-btn sm primary" disabled={busy === 'brief'} onClick={() => act('brief', () => api('/briefing/send', { method: 'POST' }), 'Briefing dikirim ke Telegram')}>
-              <IconSend size={15} /> Briefing ke Telegram
+              Briefing ke Telegram
             </button>
           </div>
         </div>
@@ -188,7 +187,7 @@ export default function CommandCenter() {
             <div className="au-grid cols-2 cc-gap">
               {/* Action queue */}
               <div className="au-card">
-                <h3><span className="au-row cc-h"><IconMail size={18} /> Perlu tindakan</span><small>{draftCount + (email?.awaitingYou.length || 0)} item</small></h3>
+                <h3><span className="cc-title">Perlu tindakan</span><small>{draftCount + (email?.awaitingYou.length || 0)} item</small></h3>
                 {!email ? <div className="au-muted">Email Desk belum aktif.</div> : (
                   <div className="au-list">
                     {email.batches.map((b) => (
@@ -198,8 +197,8 @@ export default function CommandCenter() {
                           <div className="m">{b.recipients.join(', ')}{b.count > b.recipients.length ? ', …' : ''}</div>
                         </div>
                         <div className="au-actions">
-                          <button className="au-btn sm primary" disabled={!!busy} onClick={() => act(`s${b.firstSeq}`, () => api(`/email/drafts/${b.firstSeq}/send`, { method: 'POST' }), (r) => `Terkirim ${r.batch.sent}/${r.batch.total}`)}><IconSend size={14} /> Kirim semua</button>
-                          <button className="au-btn sm danger" disabled={!!busy} onClick={() => act(`c${b.firstSeq}`, () => api(`/email/drafts/${b.firstSeq}/cancel`, { method: 'POST' }), 'Dibatalkan')}><IconTrash size={14} /></button>
+                          <button className="au-btn sm primary" disabled={!!busy} onClick={() => act(`s${b.firstSeq}`, () => api(`/email/drafts/${b.firstSeq}/send`, { method: 'POST' }), (r) => `Terkirim ${r.batch.sent}/${r.batch.total}`)}>Kirim semua</button>
+                          <button className="au-btn sm danger" disabled={!!busy} onClick={() => act(`c${b.firstSeq}`, () => api(`/email/drafts/${b.firstSeq}/cancel`, { method: 'POST' }), 'Dibatalkan')}>Batal</button>
                         </div>
                       </div>
                     ))}
@@ -211,8 +210,8 @@ export default function CommandCenter() {
                           <div className="cc-snippet">{d.snippet}</div>
                         </div>
                         <div className="au-actions">
-                          <button className="au-btn sm primary" disabled={!!busy} onClick={() => act(`s${d.id}`, () => api(`/email/drafts/${d.id}/send`, { method: 'POST' }), (r) => (r.dryRun ? 'Disimulasikan (email belum dikonfigurasi)' : 'Terkirim'))}><IconSend size={14} /> Kirim</button>
-                          <button className="au-btn sm danger" disabled={!!busy} onClick={() => act(`c${d.id}`, () => api(`/email/drafts/${d.id}/cancel`, { method: 'POST' }), 'Draf dibatalkan')}><IconTrash size={14} /></button>
+                          <button className="au-btn sm primary" disabled={!!busy} onClick={() => act(`s${d.id}`, () => api(`/email/drafts/${d.id}/send`, { method: 'POST' }), (r) => (r.dryRun ? 'Disimulasikan (email belum dikonfigurasi)' : 'Terkirim'))}>Kirim</button>
+                          <button className="au-btn sm danger" disabled={!!busy} onClick={() => act(`c${d.id}`, () => api(`/email/drafts/${d.id}/cancel`, { method: 'POST' }), 'Draf dibatalkan')}>Batal</button>
                         </div>
                       </div>
                     ))}
@@ -228,7 +227,7 @@ export default function CommandCenter() {
                         </div>
                       </div>
                     ))}
-                    {!draftCount && !email.awaitingYou.length && <div className="au-empty"><b>Semua beres ✨</b>Tidak ada draf atau email yang menunggu kamu.</div>}
+                    {!draftCount && !email.awaitingYou.length && <div className="au-empty"><b>Semua beres</b>Tidak ada draf atau email yang menunggu kamu.</div>}
                   </div>
                 )}
               </div>
@@ -238,7 +237,7 @@ export default function CommandCenter() {
 
               {/* Conversations */}
               <div className="au-card">
-                <h3><span className="au-row cc-h"><IconMail size={18} /> Percakapan email</span><small>{email?.threads.length || 0}</small></h3>
+                <h3><span className="cc-title">Percakapan email</span><small>{email?.threads.length || 0}</small></h3>
                 {!email?.threads.length ? <div className="au-muted">Belum ada percakapan. Dari Telegram: "email ke nama@domain.com …".</div> : (
                   <div className="cc-scroll">
                     {email.threads.map((t) => (
@@ -250,7 +249,8 @@ export default function CommandCenter() {
                             {t.followUpAt ? ` · follow-up ${whenOf(t.followUpAt)}` : ''}
                           </div>
                         </div>
-                        {t.last?.direction === 'in' && <span className="au-chip warn">balas</span>}
+                        {t.isSelf && <span className="au-chip">tes / diri sendiri</span>}
+                        {!t.isSelf && t.last?.direction === 'in' && <span className="au-chip warn">balas</span>}
                         {t.autoMode === 'auto' && <span className="au-chip brand">auto {t.autoCount}/3</span>}
                         <button className="au-btn sm" onClick={() => setThread(t)}>Detail</button>
                       </div>
@@ -261,14 +261,14 @@ export default function CommandCenter() {
 
               {/* Activity */}
               <div className="au-card">
-                <h3><span className="au-row cc-h"><IconClock size={18} /> Aktivitas email terbaru</span></h3>
+                <h3><span className="cc-title">Aktivitas email terbaru</span></h3>
                 {!email?.recent.length ? <div className="au-muted">Belum ada aktivitas.</div> : (
                   <div className="cc-timeline">
                     {email.recent.map((m) => (
                       <div key={m.id} className={`cc-ev ${m.direction}`}>
                         <i />
                         <div>
-                          <div className="cc-ellipsis"><b>{m.direction === 'in' ? `↙ ${m.counterpart}` : `↗ ke ${m.counterpart}`}</b>{m.auto ? ' · otomatis' : ''}</div>
+                          <div className="cc-ellipsis"><b>{m.direction === 'in' ? `Dari ${m.counterpart}` : `Ke ${m.counterpart}`}</b>{m.auto ? ' · otomatis' : ''}</div>
                           <div className="au-tiny">{whenOf(m.at)} · {m.subject}</div>
                           <div className="cc-snippet">{m.snippet}</div>
                         </div>
@@ -283,7 +283,7 @@ export default function CommandCenter() {
 
               {/* Week */}
               <div className="au-card">
-                <h3><span className="au-row cc-h"><IconClock size={18} /> 7 hari terakhir</span><small>{fmtMin(work.week.summary.workedMin)} · bersih {rp(work.week.summary.net)}</small></h3>
+                <h3><span className="cc-title">7 hari terakhir</span><small>{fmtMin(work.week.summary.workedMin)} · bersih {rp(work.week.summary.net)}</small></h3>
                 <WeekBars days={work.week.days} targetMin={work.today.targetMin} />
                 <div className="au-tiny cc-sched">Jadwal {work.schedule.workStart}–{work.schedule.workEnd}{work.schedule.breakStart ? `, istirahat ${work.schedule.breakStart}–${work.schedule.breakEnd}` : ''}{work.schedule.autoStart ? ' · mulai otomatis' : ''}</div>
               </div>
@@ -291,7 +291,7 @@ export default function CommandCenter() {
 
             {data.briefing && (
               <div className="au-card cc-gap">
-                <h3><span className="au-row cc-h"><IconRadar size={18} /> Briefing hari ini</span><small>otomatis tiap pagi hari kerja · /brief di Telegram</small></h3>
+                <h3><span className="cc-title">Briefing hari ini</span><small>otomatis tiap pagi hari kerja · /brief di Telegram</small></h3>
                 <pre className="cc-brief">{data.briefing}</pre>
               </div>
             )}
@@ -322,12 +322,12 @@ function RemindersCard({ reminders, today, busy, act }) {
 
   return (
     <div className="au-card">
-      <h3><span className="au-row cc-h"><IconBell size={18} /> Pengingat</span><small>{reminders.length} aktif</small></h3>
+      <h3><span className="cc-title">Pengingat</span><small>{reminders.length} aktif</small></h3>
       <form className="cc-remform" onSubmit={add}>
         <input className="au-input" type="date" value={date || ''} onChange={(e) => setDate(e.target.value)} aria-label="Tanggal" />
         <input className="au-input" type="time" value={time} onChange={(e) => setTime(e.target.value)} required aria-label="Jam" />
         <input className="au-input grow" placeholder="Mis. meeting dengan Pak Andi" value={text} onChange={(e) => setText(e.target.value)} required maxLength={300} aria-label="Isi pengingat" />
-        <button className="au-btn sm primary" disabled={busy === 'rem'}><IconPlus size={14} /> Tambah</button>
+        <button className="au-btn sm primary" disabled={busy === 'rem'}>Tambah</button>
       </form>
       {!reminders.length ? <div className="au-muted">Tidak ada pengingat. Di Telegram cukup tulis: "ingatkan meeting jam 2 siang".</div> : (
         <div className="cc-scroll">
@@ -335,7 +335,7 @@ function RemindersCard({ reminders, today, busy, act }) {
             <div key={r.id} className="wl-row">
               <span className={`au-chip ${dateOf(r.at) === today ? 'brand' : ''}`}>{dateOf(r.at) === today ? timeOf(r.at) : whenOf(r.at)}</span>
               <div className="grow cc-ellipsis">{r.text}</div>
-              <button className="au-btn sm danger" title="Batalkan" disabled={!!busy} onClick={() => act(`r${r.id}`, () => api(`/reminders/${r.id}`, { method: 'DELETE' }), 'Pengingat dibatalkan')}><IconTrash size={14} /></button>
+              <button className="au-btn sm danger" title="Batalkan" disabled={!!busy} onClick={() => act(`r${r.id}`, () => api(`/reminders/${r.id}`, { method: 'DELETE' }), 'Pengingat dibatalkan')}>Batal</button>
             </div>
           ))}
         </div>
@@ -353,11 +353,11 @@ function HealthCard({ data }) {
   const rows = [
     ['Telegram bot', tg?.running ? 'ok' : tg?.enabled ? 'warn' : 'err', tg?.running ? `aktif · ${tg.aiChat?.enabled ? 'asisten AI siap' : 'AI nonaktif'}` : tg?.enabled ? 'belum berjalan' : (system.backgroundJobs ? 'tidak dikonfigurasi' : 'dijalankan server lain')],
     ['Kirim email', mail?.mode === 'live' ? 'ok' : 'warn', mail ? (mail.mode === 'live' ? `${mail.provider === 'brevo-api' ? 'Brevo API' : 'SMTP'} · ${mail.from}` : `simulasi — kurang: ${(mail.missing || []).join(', ') || '-'}`) : '—'],
-    ['Pantau balasan', inbox?.state === 'watching' ? 'ok' : inbox?.configured ? 'warn' : 'err', inbox ? (inbox.state === 'watching' ? `realtime (IMAP IDLE) · ${inbox.user}` : inbox.configured ? `${inbox.state}${inbox.lastError ? ` — ${inbox.lastError}` : ''}` : 'IMAP belum diatur') : '—'],
+    ['Pantau balasan', inbox?.state === 'watching' ? 'ok' : inbox?.configured ? 'warn' : 'err', inbox ? (inbox.state === 'watching' ? `realtime (IMAP IDLE) · ${inbox.user}${inbox.lastMailAt ? ` · email terakhir ${ago(inbox.lastMailAt)} via ${inbox.lastVia === 'push' ? 'push' : 'pemeriksaan berkala'}` : ''}` : inbox.configured ? `${inbox.state}${inbox.lastError ? ` — ${inbox.lastError}` : ''}` : 'IMAP belum diatur') : '—'],
   ];
   return (
     <div className="au-card">
-      <h3><span className="au-row cc-h"><IconServer size={18} /> Kesehatan sistem</span><small>aktif {uptime(system.uptimeSec)}</small></h3>
+      <h3><span className="cc-title">Kesehatan sistem</span><small>aktif {uptime(system.uptimeSec)}</small></h3>
       {rows.map(([k, s, v]) => (
         <div key={k} className="wl-row">
           <span className={`au-dot-s ${s === 'ok' ? 'on' : ''} cc-${s}`} />

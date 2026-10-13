@@ -40,7 +40,7 @@ describe('Pusat Kendali API', () => {
     expect(r.body.email.batches[0]).toMatchObject({ count: 2 });
     expect(r.body.channels.mail).toEqual({ mode: 'live', provider: 'brevo-api', configured: true, from: 'wisnu@wanar.id', dailyCap: 450, missing: [] });
     expect(r.body.system.rssMb).toBeGreaterThan(0);
-    expect(r.body.briefing).toMatch(/☀️ Briefing/);
+    expect(r.body.briefing).toMatch(/^Briefing — /);
     expect(JSON.stringify(r.body)).not.toMatch(/xkeysib|IMAP_PASS|pass"/i);
   });
 
@@ -80,14 +80,14 @@ describe('Briefing', () => {
     t += 6 * 60_000;
     expect(await b.tick()).toBe(true);
     expect(await b.tick()).toBe(false); // only once
-    expect(x.told.at(-1)).toMatch(/☀️ Briefing — Selasa, 13 Oktober 2026[\s\S]*Jam kerja 08:00–17:00/);
+    expect(x.told.at(-1)).toMatch(/^Briefing — Selasa, 13 Oktober 2026\nJam kerja 08:00–17:00/);
   });
 
   it('"agenda hari ini" in Telegram returns the briefing without calling the model', async () => {
     const x = setup();
     const ai = { chatStream() { throw new Error('model must not be called'); } };
     const respond = makeAssistantResponder({ aiManager: ai, worklog: x.worklog.service, briefing: x.briefing });
-    expect(await respond({ text: 'agenda hari ini?' })).toMatch(/☀️ Briefing/);
-    expect(await respond({ text: 'Briefing' })).toMatch(/☀️ Briefing/);
+    expect(await respond({ text: 'agenda hari ini?' })).toMatch(/^Briefing — /);
+    expect(await respond({ text: 'Briefing' })).toMatch(/^Briefing — /);
   });
 });

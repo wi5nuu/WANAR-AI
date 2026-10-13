@@ -485,3 +485,27 @@ describe('overview ignores conversations with yourself', () => {
     expect(w.desk.overview().awaitingYou).toEqual([]);
   });
 });
+
+describe('legacy rows and displayed conversations', () => {
+  it('cleans quoted history on read, including a flattened attribution', async () => {
+    const w = build();
+    await w.desk.draft({ to: 'budi@klien.com', subject: 'Invoice', body: 'Halo' });
+    await w.desk.sendDraft(1);
+    const t = w.desk.threads()[0];
+    // simulate rows stored before quote-stripping existed
+    w.store.messages.add({ threadId: t.id, direction: 'in', messageId: '<legacy@x>', from: 'budi@klien.com', body: 'baik\n\nPada Sel, 13 Okt 2026 pukul 14.54 Wisnu <\nwisnu@x.brevosend.com> menulis:\n\nIni email tes' });
+    const o = w.desk.overview();
+    expect(o.threads[0].last.snippet).toBe('baik');
+    expect(o.recent.find((m) => m.direction === 'in').snippet).toBe('baik');
+    expect(w.desk.threadMessages(t.id).at(-1).body).toBe('baik');
+    expect(stripQuoted('baik Pada Sel, 13 Okt 2026 pukul 14.54 Wisnu < wisnu@x.brevosend.com> menulis: isi lama')).toBe('baik');
+    expect(stripQuoted('Pada hari Senin kita meeting jam 9 menulis: ok')).toContain('menulis: ok'); // not an attribution
+  });
+
+  it('flags conversations with yourself so the UI never shows "balas"', async () => {
+    const w = build();
+    await w.desk.draft({ to: 'wisnu@wanar.id', subject: 'Tes', body: 'x' });
+    await w.desk.sendDraft(1);
+    expect(w.desk.overview().threads[0].isSelf).toBe(true);
+  });
+});

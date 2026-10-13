@@ -534,7 +534,7 @@ export class WorklogService extends EventEmitter {
       if (!chatId) continue;
       const when = localTime(r.at);
       try {
-        await this.notify(chatId, `⏰ Pengingat (${when}): ${r.text}${late > 5 * 60_000 ? `\n(terlambat ${formatMinutes(late / 60_000)} — server sempat tidak aktif)` : ''}`);
+        await this.notify(chatId, `Pengingat (${when}): ${r.text}${late > 5 * 60_000 ? `\n(terlambat ${formatMinutes(late / 60_000)} — server sempat tidak aktif)` : ''}`);
         sent++;
       } catch (e) {
         console.warn('[WORKLOG] gagal kirim pengingat:', e.message);

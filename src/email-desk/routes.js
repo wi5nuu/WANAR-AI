@@ -32,7 +32,7 @@ export function createEmailDeskRouter({ emailDesk, env = process.env, rateLimite
   router.get('/threads/:id', wrap(async (req) => {
     const t = desk.store.threads.get(req.params.id);
     if (!t) throw new EmailDeskError('Percakapan tidak ditemukan', 'not_found');
-    return { thread: t, messages: desk.store.messages.ofThread(t.id, 100) };
+    return { thread: t, messages: desk.threadMessages(t.id, 100) };
   }));
   router.post('/drafts', express.json({ limit: '64kb' }), wrap(async (req) => {
     const b = req.body || {};

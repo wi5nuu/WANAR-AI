@@ -107,7 +107,7 @@ export function createCommandCenterRouter({ worklog, emailDesk = null, automatio
   router.get('/email/threads/:id', wrap(async (req) => {
     const t = desk.store.threads.get(req.params.id);
     if (!t) throw Object.assign(new Error('Percakapan tidak ditemukan'), { code: 'not_found' });
-    return { thread: t, messages: desk.store.messages.ofThread(t.id, 50) };
+    return { thread: t, messages: desk.threadMessages(t.id, 50) };
   }));
   router.post('/email/check', wrap(async () => ({ processed: watcher ? await watcher.check() : 0 })));
 

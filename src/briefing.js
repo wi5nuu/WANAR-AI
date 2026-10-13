@@ -40,16 +40,16 @@ export function createBriefing({ worklog, desk = null, notify = null, defaultCha
   function build(at = now()) {
     const today = localDate(at);
     const s = worklog.getSettings();
-    const lines = [`☀️ Briefing — ${formatDateId(today)}`];
+    const lines = [`Briefing — ${formatDateId(today)}`];
 
     const workday = (s.workdays || []).includes(weekday(today));
     lines.push(workday
-      ? `⏰ Jam kerja ${s.workStart}–${s.workEnd}${s.breakStart && s.breakEnd ? ` · istirahat ${s.breakStart}–${s.breakEnd}` : ''}${s.autoStart ? ' · mulai otomatis' : ''}`
-      : '🌴 Hari ini bukan hari kerja.');
+      ? `Jam kerja ${s.workStart}–${s.workEnd}${s.breakStart && s.breakEnd ? ` · istirahat ${s.breakStart}–${s.breakEnd}` : ''}${s.autoStart ? ' · mulai otomatis' : ''}`
+      : 'Hari ini bukan hari kerja.');
 
     // reminders today
     const rem = worklog.listReminders(100).filter((r) => localDate(r.at) === today);
-    lines.push('', rem.length ? `📌 Pengingat hari ini (${rem.length}):` : '📌 Tidak ada pengingat hari ini.');
+    lines.push('', rem.length ? `Pengingat hari ini (${rem.length}):` : 'Pengingat hari ini: tidak ada.');
     for (const r of rem.slice(0, 10)) lines.push(`  • ${localTime(r.at)} — ${clip(r.text, 90)}`);
 
     // email
@@ -68,19 +68,19 @@ export function createBriefing({ worklog, desk = null, notify = null, defaultCha
       }
       const dueToday = o.followUps.filter((t) => localDate(t.followUpAt) <= today);
       if (dueToday.length) parts.push(`  • Follow-up jatuh tempo: ${dueToday.map((t) => t.counterpart).slice(0, 5).join(', ')}`);
-      lines.push('', parts.length ? '📧 Email:' : '📧 Email: tidak ada yang perlu ditindaklanjuti.', ...parts);
+      lines.push('', parts.length ? 'Email:' : 'Email: tidak ada yang perlu ditindaklanjuti.', ...parts);
     }
 
     // yesterday
     const y = worklog.day(addDays(today, -1), { light: true });
     if (y.workedMin > 0 || y.tasks.total || y.money.income || y.money.expense) {
-      lines.push('', `📊 Kemarin: kerja ${formatMinutes(y.workedMin)}${y.achievement ? ` (${Math.round(y.achievement * 100)}%)` : ''} · tugas ${y.tasks.done}/${y.tasks.total} · bersih ${formatRupiah(y.money.net)}`);
+      lines.push('', `Kemarin: kerja ${formatMinutes(y.workedMin)}${y.achievement ? ` (${Math.round(y.achievement * 100)}%)` : ''} · tugas ${y.tasks.done}/${y.tasks.total} · bersih ${formatRupiah(y.money.net)}`);
     }
 
     // open tasks (today + carried over from yesterday)
     const open = [...(worklog.day(today).taskList || []), ...(worklog.day(addDays(today, -1)).taskList || [])].filter((t) => !t.done);
     if (open.length) {
-      lines.push('', `✅ Tugas terbuka (${open.length}):`);
+      lines.push('', `Tugas terbuka (${open.length}):`);
       for (const t of open.slice(0, 8)) lines.push(`  • ${clip(t.title, 90)}`);
     }
 
