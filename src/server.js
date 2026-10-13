@@ -2771,12 +2771,22 @@ async function startServer() {
   } catch { /* non-fatal */ }
 
   // Penjadwal otomasi (email terjadwal, job AI). Hanya saat server benar-benar jalan.
+  //
+  // WANAR_BACKGROUND_JOBS=false turns this instance into a "client" (web UI
+  // only). Exactly ONE instance may own the Telegram bot and the schedulers:
+  // two pollers fight over updates (HTTP 409) and two schedulers send every
+  // automated message twice.
+  const backgroundJobs = String(process.env.WANAR_BACKGROUND_JOBS || 'true').toLowerCase() !== 'false';
   try {
-    automation.scheduler.start();
-    if (automation.inbox.start()) console.log('Telegram   : inbox aktif (pelanggan mendaftar lewat /start)');
-    worklog.service.start();
-    console.log('Worklog    : jurnal kerja aktif (laporan Telegram terjadwal)');
-    console.log('Automation : scheduler aktif (mode email: ' + automation.mailer.mode + ')');
+    if (!backgroundJobs) {
+      console.log('Background : NONAKTIF (WANAR_BACKGROUND_JOBS=false) — Telegram, penjadwal & laporan dijalankan instance lain');
+    } else {
+      automation.scheduler.start();
+      if (automation.inbox.start()) console.log('Telegram   : inbox aktif (pelanggan mendaftar lewat /start)');
+      worklog.service.start();
+      console.log('Worklog    : jurnal kerja aktif (laporan Telegram terjadwal)');
+      console.log('Automation : scheduler aktif (mode email: ' + automation.mailer.mode + ')');
+    }
   } catch (e) {
     console.log('Automation : gagal start (' + e.message + ')');
   }
