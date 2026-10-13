@@ -110,7 +110,6 @@ export class EmailDesk {
   async draft({ to, subject = '', body = '', brief = '', chatId = null, autoMode = 'notify', autoInstructions = null, threadId = null, origin = 'owner' }) {
     const addr = String(to || '').trim().toLowerCase();
     if (!isValidEmail(addr)) throw new EmailDeskError(`Alamat email tidak valid: ${clip(to, 60) || '(kosong)'}`);
-    if (addr === this.ownAddress) throw new EmailDeskError('Tujuan sama dengan alamat pengirim sendiri');
     if (!AUTO_MODES.includes(autoMode)) autoMode = 'notify';
     if (this.store.drafts.pending(100).length >= this.limits.pendingDrafts) {
       throw new EmailDeskError('Terlalu banyak draf menunggu — kirim atau batalkan dulu (/email)');
@@ -268,7 +267,13 @@ export class EmailDesk {
       if (m) return this.store.threads.get(m.thread_id);
     }
     const from = String(mail.from?.address || '').toLowerCase();
-    const open = from ? this.store.threads.openWith(from) : [];
+    let open = from ? this.store.threads.openWith(from) : [];
+    if (from && from === this.ownAddress) {
+      // Mail to ourselves: our own sent copy lands in the inbox too. Only a real
+      // reply (has In-Reply-To and the same subject) counts, never the copy.
+      const norm = (x) => String(x || '').replace(/^s*((re|balas|fwd?)s*:s*)+/i, '').trim().toLowerCase();
+      open = mail.inReplyTo ? open.filter((t) => norm(t.subject) === norm(mail.subject)) : [];
+    }
     return open[0] || null;
   }
 
@@ -294,7 +299,7 @@ export class EmailDesk {
     const head = `📩 Balasan email dari ${who}\nSubjek: ${clip(mail.subject || thread.subject, 150)}\n\n${clip(fresh, 1200) || '(isi kosong)'}`;
     const chat = thread.chat_id;
 
-    if (thread.auto_mode === 'notify') {
+    if (thread.auto_mode === 'notify' || thread.counterpart === this.ownAddress) {
       await this._tell(chat, `${head}\n\nBalas lewat sini: tulis mis. "balas ke ${thread.counterpart}: ..."`);
       return { matched: true, action: 'notified' };
     }

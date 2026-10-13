@@ -291,3 +291,19 @@ describe('Brevo API transport', async () => {
     await expect(m.send({ to: 'b@c.co', subject: 's', text: 't' })).rejects.toMatchObject({ kind: 'auth' });
   });
 });
+
+describe('Email to self (smoke test)', () => {
+  it('allows sending to the own address; ignores the sent copy, notifies on a real reply, never auto-replies', async () => {
+    const w = build({ ai: aiReturning({ body: 'jangan dipakai' }) });
+    const d = await w.desk.draft({ to: 'wisnu@wanar.id', subject: 'Tes Wanar AI', body: 'tes', chatId: OWNER, autoMode: 'auto' });
+    await w.desk.sendDraft(d);
+
+    const copy = { messageId: '<copy@x>', inReplyTo: null, references: [], from: { address: 'wisnu@wanar.id' }, subject: 'Tes Wanar AI', text: 'tes', headers: {} };
+    expect(await w.desk.handleInbound(copy)).toEqual({ matched: false });
+
+    const re = { messageId: '<re@x>', inReplyTo: '<copy@x>', references: ['<copy@x>'], from: { address: 'wisnu@wanar.id' }, subject: 'Re: Tes Wanar AI', text: 'balasan dari HP', headers: {} };
+    expect((await w.desk.handleInbound(re)).action).toBe('notified');
+    expect(w.told.at(-1).t).toMatch(/balasan dari HP/);
+    expect(w.sent).toHaveLength(1);
+  });
+});
