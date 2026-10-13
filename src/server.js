@@ -53,8 +53,8 @@ import { initAutomation } from './automation/runtime.js';
 import { createAutomationRouter } from './automation/routes.js';
 import { initWorklog } from './worklog/index.js';
 import { createWorklogRouter } from './worklog/routes.js';
-import { makeChatResponder } from './automation/telegram-inbox.js';
 import { createOwnerContext, createTelegramTranscript } from './memory/owner-context.js';
+import { makeAssistantResponder } from './worklog/assistant.js';
 
 const coordinator = new DistributedCoordinator();
 
@@ -75,8 +75,11 @@ const worklog = initWorklog({ db: sqliteDb, aiManager, automation });
 // chats (web + Telegram), and its own conversations become chat sessions too.
 const ownerContext = createOwnerContext({ db: sqliteDb, automation, worklog });
 const telegramTranscript = createTelegramTranscript({ db: sqliteDb });
-automation.inbox.responder = makeChatResponder({
+// The owner's plain messages go to an assistant that can also ACT (reminders,
+// journal, schedule) through a validated whitelist — one model call per message.
+automation.inbox.responder = makeAssistantResponder({
   aiManager,
+  worklog: worklog.service,
   context: ({ text, chatId }) => ownerContext({ text, excludeSessionId: chatId ? telegramTranscript.sessionId(chatId) : null }),
 });
 automation.inbox.onExchange = (e) => telegramTranscript.record(e);
@@ -1025,8 +1028,8 @@ app.post('/api/chat', rateLimiters.chat, asyncHandler(async (req, res) => {
     });
   }
 
-  const provider = req.body.provider || config.defaultProvider;
-  const model = req.body.model;
+  let provider = req.body.provider || config.defaultProvider;
+  let model = req.body.model;
   const messages = req.body.messages.map(m => ({ role: m.role, content: sanitize(m.content) }));
   const sessionId = req.body.session_id;
 
@@ -1069,6 +1072,31 @@ app.post('/api/chat', rateLimiters.chat, asyncHandler(async (req, res) => {
     }
   }
 
+  // Failover (hemat): when the chosen provider fails (quota, key, outage),
+  // walk the shared failover chain — skipping providers already known dead —
+  // for at most 5 attempts. Follow-up tool calls then use the provider that worked.
+  if (!result?.success && aiManager.providers[provider]) {
+    aiManager._handleFailover({ provider, model }, result?.error || 'error');
+    let tries = 0;
+    for (const cand of aiManager.failover.buildChain(provider, model)) {
+      if (tries >= 5) break;
+      if (cand.provider === provider && cand.model === model) continue;
+      if (aiManager.failover.shouldSkip(cand.provider, cand.model)) continue;
+      const inst = aiManager.providers[cand.provider];
+      if (!inst?.chat || (typeof inst.isAvailable === 'function' && !inst.isAvailable())) continue;
+      tries++;
+      const alt = await inst.chat(truncatedMessages, { model: cand.model, tools, systemPrompt: WANAR_SYSTEM_PROMPT_WEB + tokenContext });
+      if (alt?.success) {
+        aiManager.failover.markSuccess(cand.provider, cand.model);
+        result = alt;
+        provider = cand.provider;
+        model = cand.model;
+        break;
+      }
+      aiManager._handleFailover(cand, alt?.error || 'error');
+    }
+  }
+
   if (result && result.success) {
     let finalContent = result.content || '';
     let totalUsage = result.usage || { total_tokens: 0 };
@@ -1106,6 +1134,7 @@ app.post('/api/chat', rateLimiters.chat, asyncHandler(async (req, res) => {
           if (provider === 'nvidia') return aiManager.nvidiaProvider.chat(msgs, { model, tools, top_p: req.body.top_p ?? 1, seed: req.body.seed });
           if (provider === 'vector') return aiManager.vectorProvider.chat(msgs, { model, tools });
           if (provider === 'openrouter') return aiManager.openrouterProvider.chat(msgs, { model, tools });
+          if (aiManager.providers[provider]?.chat) return aiManager.providers[provider].chat(msgs, { model, tools, systemPrompt: WANAR_SYSTEM_PROMPT_WEB + tokenContext });
           const cp = providerRegistry.createDynamicProvider(provider);
           if (cp) return cp.chat(msgs, { model, tools, ...req.body });
           return null;

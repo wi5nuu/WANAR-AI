@@ -120,6 +120,18 @@ export function createWorklogStore(db) {
       collected_at INTEGER NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS wl_reminders (
+      id TEXT PRIMARY KEY,
+      at INTEGER NOT NULL,
+      text TEXT NOT NULL,
+      chat_id TEXT,
+      source TEXT NOT NULL DEFAULT 'telegram',
+      created_at INTEGER NOT NULL,
+      sent_at INTEGER,
+      cancelled_at INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_wl_rem_due ON wl_reminders(sent_at, cancelled_at, at);
+
     CREATE TABLE IF NOT EXISTS wl_meta (
       key TEXT PRIMARY KEY,
       value TEXT,
@@ -245,6 +257,20 @@ export function createWorklogStore(db) {
       .run(key, String(value), now()),
   };
 
+  const reminders = {
+    add({ at, text, chatId = null, source = 'telegram' }) {
+      const rid = id('rem');
+      db.prepare('INSERT INTO wl_reminders (id, at, text, chat_id, source, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+        .run(rid, at, text, chatId, source, now());
+      return reminders.get(rid);
+    },
+    get: (rid) => db.prepare('SELECT * FROM wl_reminders WHERE id = ?').get(rid) || null,
+    upcoming: (limit = 20) => db.prepare('SELECT * FROM wl_reminders WHERE sent_at IS NULL AND cancelled_at IS NULL ORDER BY at ASC LIMIT ?').all(limit),
+    due: (atMs) => db.prepare('SELECT * FROM wl_reminders WHERE sent_at IS NULL AND cancelled_at IS NULL AND at <= ? ORDER BY at ASC').all(atMs),
+    markSent: (rid) => db.prepare('UPDATE wl_reminders SET sent_at = ? WHERE id = ? AND sent_at IS NULL').run(now(), rid).changes > 0,
+    cancel: (rid) => db.prepare('UPDATE wl_reminders SET cancelled_at = ? WHERE id = ? AND sent_at IS NULL AND cancelled_at IS NULL').run(now(), rid).changes > 0,
+  };
+
   /** Dates that have any data, newest first. */
   function datesWithData(limit = 60) {
     return db.prepare(`
@@ -255,5 +281,5 @@ export function createWorklogStore(db) {
     `).all(limit).map((r) => r.date);
   }
 
-  return { settings, segments, tasks, finance, reports, activity, meta, datesWithData, _db: db };
+  return { settings, segments, tasks, finance, reports, activity, meta, reminders, datesWithData, _db: db };
 }

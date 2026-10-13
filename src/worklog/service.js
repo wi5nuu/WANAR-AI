@@ -487,6 +487,62 @@ export class WorklogService extends EventEmitter {
     return r;
   }
 
+  // ------------------------------------------------------------ reminders
+
+  /**
+   * Schedules a Telegram reminder. `at` = epoch ms, or "YYYY-MM-DD HH:MM" in
+   * the journal timezone. Must be in the future and within a year.
+   */
+  addReminder({ at, text, chatId = null, source = 'telegram' }) {
+    let ms = at;
+    if (typeof at === 'string') {
+      const m = /^(\d{4}-\d{2}-\d{2})[ T](\d{1,2}[:.]\d{2})$/.exec(at.trim());
+      if (!m || !isDate(m[1])) throw new WorklogError('Waktu pengingat tidak valid (YYYY-MM-DD HH:MM)');
+      ms = atTime(m[1], m[2].replace('.', ':'));
+    }
+    if (!Number.isFinite(ms)) throw new WorklogError('Waktu pengingat tidak valid');
+    const now = this.now();
+    if (ms < now - 60_000) throw new WorklogError('Waktu pengingat sudah lewat');
+    if (ms > now + 366 * 86_400_000) throw new WorklogError('Pengingat maksimal satu tahun ke depan');
+    const t = String(text || '').replace(/\s+/g, ' ').trim();
+    if (!t) throw new WorklogError('Isi pengingat kosong');
+    if (this.store.reminders.upcoming(500).length >= 200) throw new WorklogError('Terlalu banyak pengingat aktif (maks 200)');
+    const r = this.store.reminders.add({ at: Math.max(ms, now), text: t.slice(0, 300), chatId: chatId || this._chatId(), source });
+    this._changed(localDate(r.at), 'reminder');
+    return r;
+  }
+
+  listReminders(limit = 20) {
+    return this.store.reminders.upcoming(limit);
+  }
+
+  cancelReminder(rid) {
+    if (!this.store.reminders.cancel(rid)) throw new WorklogError('Pengingat tidak ditemukan atau sudah terkirim', 'not_found');
+    this._changed(this.today(), 'reminder');
+    return true;
+  }
+
+  /** Sends reminders that are due. Late ones (server was down) are sent with a note, up to 6 hours. */
+  async deliverReminders() {
+    if (!this.notify) return 0;
+    let sent = 0;
+    for (const r of this.store.reminders.due(this.now())) {
+      if (!this.store.reminders.markSent(r.id)) continue; // mark first: never send twice
+      const late = this.now() - r.at;
+      if (late > 6 * 3_600_000) continue; // far too late to be useful
+      const chatId = r.chat_id || this._chatId();
+      if (!chatId) continue;
+      const when = localTime(r.at);
+      try {
+        await this.notify(chatId, `⏰ Pengingat (${when}): ${r.text}${late > 5 * 60_000 ? `\n(terlambat ${formatMinutes(late / 60_000)} — server sempat tidak aktif)` : ''}`);
+        sent++;
+      } catch (e) {
+        console.warn('[WORKLOG] gagal kirim pengingat:', e.message);
+      }
+    }
+    return sent;
+  }
+
   // ------------------------------------------------------ text -> entries
 
   /**
@@ -762,6 +818,7 @@ export class WorklogService extends EventEmitter {
     this._ticking = true;
     try {
       this.applySchedule();
+      await this.deliverReminders();
       const s = this.getSettings();
       const now = this.now();
       const date = localDate(now);
@@ -807,7 +864,7 @@ export class WorklogService extends EventEmitter {
 
   start() {
     if (this._timer) return;
-    this._timer = setInterval(() => { this.tick().catch(() => {}); }, 60_000);
+    this._timer = setInterval(() => { this.tick().catch(() => {}); }, 30_000);
     this._timer.unref?.();
   }
 

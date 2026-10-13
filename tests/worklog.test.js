@@ -773,3 +773,175 @@ describe('/jadwal from Telegram and a fully hands-free workday', () => {
     expect(w.svc.day(sat).workedMin).toBe(0);
   });
 });
+
+// ================================================= reminders + assistant
+
+describe('reminders', () => {
+  it('validates time and text, and lists upcoming ones', () => {
+    const w = build({ start: T('09:00') });
+    expect(() => w.svc.addReminder({ at: `${D} 08:00`, text: 'x' })).toThrow(/sudah lewat/);
+    expect(() => w.svc.addReminder({ at: 'besok', text: 'x' })).toThrow(/tidak valid/);
+    expect(() => w.svc.addReminder({ at: `${D} 12:00`, text: '  ' })).toThrow(/kosong/);
+    w.svc.addReminder({ at: `${D} 12:00`, text: 'Meeting Pak Andi' });
+    w.svc.addReminder({ at: `${D} 11:45`, text: '15 menit lagi meeting' });
+    expect(w.svc.listReminders().map((r) => r.text)).toEqual(['15 menit lagi meeting', 'Meeting Pak Andi']);
+  });
+
+  it('delivers each reminder exactly once, on time, via the tick', async () => {
+    const sent = [];
+    const w = build({ start: T('09:00'), env: { TELEGRAM_AI_CHAT_IDS: '1811580954' } });
+    w.svc.notify = async (c, t) => { sent.push({ c, t }); };
+    w.svc.addReminder({ at: `${D} 12:00`, text: 'Meeting Pak Andi' });
+
+    w.set(T('11:59')); await w.svc.deliverReminders();
+    expect(sent).toHaveLength(0);
+    w.set(T('12:00')); await w.svc.deliverReminders();
+    w.set(T('12:01')); await w.svc.deliverReminders();
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ c: '1811580954' });
+    expect(sent[0].t).toMatch(/Pengingat \(12:00\): Meeting Pak Andi/);
+  });
+
+  it('notes lateness after downtime, and drops reminders more than 6 hours late', async () => {
+    const sent = [];
+    const w = build({ start: T('09:00'), env: { TELEGRAM_AI_CHAT_IDS: '1811580954' } });
+    w.svc.notify = async (c, t) => { sent.push(t); };
+    w.svc.addReminder({ at: `${D} 10:00`, text: 'telat sedikit' });
+    w.svc.addReminder({ at: `${D} 09:30`, text: 'sangat telat' });
+    w.set(T('16:00'));
+    await w.svc.deliverReminders();
+    expect(sent).toEqual([expect.stringMatching(/telat sedikit[\s\S]*terlambat/)]);
+  });
+
+  it('cancelled reminders never fire', async () => {
+    const sent = [];
+    const w = build({ start: T('09:00'), env: { TELEGRAM_AI_CHAT_IDS: '1811580954' } });
+    w.svc.notify = async (c, t) => { sent.push(t); };
+    const r = w.svc.addReminder({ at: `${D} 12:00`, text: 'x' });
+    w.svc.cancelReminder(r.id);
+    w.set(T('12:05')); await w.svc.deliverReminders();
+    expect(sent).toHaveLength(0);
+    expect(() => w.svc.cancelReminder(r.id)).toThrow(/tidak ditemukan/);
+  });
+});
+
+describe('Telegram assistant: plain language -> validated actions', async () => {
+  const { parsePlan, executeActions, makeAssistantResponder } = await import('../src/worklog/assistant.js');
+
+  it('parses a plan, keeps only whitelisted actions, and falls back to plain text', () => {
+    const p = parsePlan('```json\n{"reply":"Siap","actions":[{"type":"reminder","at":"2026-10-12 11:45","text":"a"},{"type":"shell","cmd":"rm -rf /"}]}\n```');
+    expect(p.reply).toBe('Siap');
+    expect(p.actions).toEqual([{ type: 'reminder', at: '2026-10-12 11:45', text: 'a' }]);
+    expect(parsePlan('halo juga')).toEqual({ reply: 'halo juga', actions: [] });
+  });
+
+  it('caps the number of actions per message', () => {
+    const many = Array.from({ length: 30 }, (_, i) => ({ type: 'task', title: `t${i}` }));
+    expect(parsePlan(JSON.stringify({ reply: '', actions: many })).actions).toHaveLength(8);
+  });
+
+  it('executes actions and reports real outcomes, including failures', () => {
+    const w = build({ start: T('09:00') });
+    const lines = executeActions(w.svc, [
+      { type: 'reminder', at: `${D} 11:45`, text: '15 menit lagi meeting Pak Andi' },
+      { type: 'reminder', at: `${D} 07:00`, text: 'sudah lewat' },
+      { type: 'task', title: 'Meeting dengan Pak Andi jam 12:00' },
+      { type: 'finance', kind: 'expense', amount: '35rb', note: 'makan siang' },
+      { type: 'clock', action: 'start' },
+      { type: 'finance', kind: 'aneh', amount: 1 },
+    ], { chatId: '1811580954' });
+    expect(lines[0]).toMatch(/^✓ Pengingat: .*11\.45 — 15 menit lagi meeting Pak Andi/);
+    expect(lines[1]).toMatch(/^✗ Waktu pengingat sudah lewat/);
+    expect(lines[2]).toBe('✓ Tugas dicatat: Meeting dengan Pak Andi jam 12:00');
+    expect(lines[3]).toBe('✓ Pengeluaran Rp35.000 · makan siang');
+    expect(lines[4]).toMatch(/^✓ Mulai bekerja/);
+    expect(lines[5]).toMatch(/^✗ Jenis uang tidak jelas/);
+    expect(w.svc.listReminders()).toHaveLength(1);
+    expect(w.svc.day(D).money.expense).toBe(35000);
+  });
+
+  it('cancels a reminder by keyword', () => {
+    const w = build({ start: T('09:00') });
+    w.svc.addReminder({ at: `${D} 12:00`, text: 'Meeting Pak Andi' });
+    const lines = executeActions(w.svc, [{ type: 'cancel_reminder', match: 'andi' }]);
+    expect(lines[0]).toMatch(/dibatalkan: Meeting Pak Andi/);
+    expect(w.svc.listReminders()).toHaveLength(0);
+  });
+
+  it('end to end: the model plan becomes saved reminders + task + a code-written confirmation', async () => {
+    const w = build({ start: T('09:00') });
+    const plan = {
+      reply: 'Oke Wisnu, sudah saya atur.',
+      actions: [
+        { type: 'task', title: 'Meeting dengan Pak Andi' },
+        { type: 'reminder', at: `${D} 11:45`, text: '15 menit lagi: meeting dengan Pak Andi' },
+        { type: 'reminder', at: `${D} 12:00`, text: 'Meeting dengan Pak Andi sekarang' },
+      ],
+    };
+    let prompt = '';
+    const ai = { async *chatStream(_m, o) { prompt = o.systemPrompt; yield { type: 'content', content: JSON.stringify(plan) }; yield { type: 'done' }; } };
+    const respond = makeAssistantResponder({ aiManager: ai, worklog: w.svc });
+    const reply = await respond({ text: 'saya ada meeting jam 12 dengan Pak Andi, tolong catat dan ingatkan', chatId: '1811580954' });
+
+    expect(prompt).toMatch(/SEKARANG: .*pukul/);
+    expect(prompt).toMatch(/15 menit sebelum/);
+    expect(reply).toMatch(/^Oke Wisnu, sudah saya atur\./);
+    expect(reply).toMatch(/✓ Tugas dicatat: Meeting dengan Pak Andi/);
+    expect((reply.match(/✓ Pengingat/g) || []).length).toBe(2);
+    expect(w.svc.listReminders()).toHaveLength(2);
+    expect(w.svc.day(D).taskList[0].title).toBe('Meeting dengan Pak Andi');
+  });
+
+  it('a plain question changes nothing', async () => {
+    const w = build({ start: T('09:00') });
+    const ai = { async *chatStream() { yield { type: 'content', content: '{"reply":"Hari ini kamu belum mulai kerja.","actions":[]}' }; yield { type: 'done' }; } };
+    const reply = await makeAssistantResponder({ aiManager: ai, worklog: w.svc })({ text: 'saya sudah kerja berapa jam?' });
+    expect(reply).toBe('Hari ini kamu belum mulai kerja.');
+    expect(w.svc.listReminders()).toHaveLength(0);
+  });
+
+  it('/pengingat and /batal manage reminders from Telegram', async () => {
+    const w = build({ start: T('09:00') });
+    w.svc.addReminder({ at: `${D} 12:00`, text: 'Meeting Pak Andi' });
+    const replies = [];
+    const inbox = new TelegramInbox({
+      channel: { mode: 'live', reply: async (c, h) => replies.push(h), sendAction: async () => {} },
+      store: { subscribers: { upsert() {}, setActive() {}, counts: () => ({}) }, suppressions: { add() {}, remove() {} } },
+      env: { TELEGRAM_AI_CHAT_IDS: '1811580954' },
+    });
+    inbox.registerCommands(worklogTelegramCommands(w.svc));
+    const m = (text) => ({ update_id: 1, message: { text, chat: { id: 1811580954, type: 'private' }, from: { first_name: 'Wisnu' } } });
+    await inbox.handleUpdate(m('/pengingat'));
+    expect(replies.at(-1)).toMatch(/1\. .*Meeting Pak Andi/);
+    await inbox.handleUpdate(m('/batal 1'));
+    expect(replies.at(-1)).toMatch(/dibatalkan/);
+    expect(w.svc.listReminders()).toHaveLength(0);
+  });
+});
+
+describe('assistant without model cooperation', async () => {
+  const { fallbackPlan, makeAssistantResponder } = await import('../src/worklog/assistant.js');
+
+  it('fallbackPlan turns a meeting into task + two reminders, honouring the lead time', () => {
+    const p = fallbackPlan('besok jam 2 siang ada call klien, ingatkan 30 menit sebelumnya', T('09:00'));
+    expect(p.actions.map((a) => a.type)).toEqual(['task', 'reminder', 'reminder']);
+    expect(p.actions[1].at).toMatch(/13:30$/);
+    expect(p.actions[2].at).toMatch(/14:00$/);
+  });
+
+  it('acts even when the model returns prose or an empty action list', async () => {
+    const w = build({ start: T('09:00') });
+    const ai = { async *chatStream() { yield { type: 'content', content: 'Baik, saya catat ya!' }; yield { type: 'done' }; } };
+    const reply = await makeAssistantResponder({ aiManager: ai, worklog: w.svc })({ text: 'saya ada meeting jam 12 dengan Pak Andi, ingatkan', chatId: '1811580954' });
+    expect(reply).toMatch(/✓ Pengingat/);
+    expect(w.svc.listReminders()).toHaveLength(2);
+  });
+
+  it('answers reminder listing from the database without calling the model', async () => {
+    const w = build({ start: T('09:00') });
+    w.svc.addReminder({ at: `${D} 12:00`, text: 'Meeting Pak Andi' });
+    const ai = { chatStream() { throw new Error('model must not be called'); } };
+    const reply = await makeAssistantResponder({ aiManager: ai, worklog: w.svc })({ text: 'apa saja pengingat saya?' });
+    expect(reply).toMatch(/1\. .*Meeting Pak Andi/);
+  });
+});

@@ -18,6 +18,10 @@
 import { formatMinutes, formatRupiah } from './time.js';
 import { parseAmount } from './parse.js';
 
+const formatWhen = (ms) => new Date(ms).toLocaleString('id-ID', {
+  timeZone: process.env.WORKLOG_TZ || 'Asia/Jakarta', weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
+});
+
 const expose = (message) => Object.assign(new Error(message), { expose: true });
 
 function savedLine(saved) {
@@ -151,6 +155,24 @@ export function worklogTelegramCommands(worklog) {
         }
         const s = worklog.updateSettings(patch);
         return `Jadwal disimpan di server — berlaku walau laptop mati.\n\n${show(s)}`;
+      }),
+    },
+    pengingat: {
+      description: 'daftar pengingat aktif (batalkan: /batal <nomor>)',
+      run: guard(async () => {
+        const list = worklog.listReminders(20);
+        if (!list.length) return 'Tidak ada pengingat aktif. Cukup tulis biasa, mis. "ingatkan saya meeting jam 12".';
+        return ['Pengingat aktif:', ...list.map((r, i) => `${i + 1}. ${formatWhen(r.at)} — ${r.text}`), '', 'Batalkan: /batal <nomor>'].join('\n');
+      }),
+    },
+    batal: {
+      description: 'batalkan pengingat: /batal 1',
+      run: guard(async ({ arg }) => {
+        const n = parseInt(arg, 10);
+        const list = worklog.listReminders(20);
+        if (!n || n < 1 || n > list.length) return 'Nomor tidak valid. Lihat daftar dengan /pengingat';
+        worklog.cancelReminder(list[n - 1].id);
+        return `Pengingat dibatalkan: ${list[n - 1].text}`;
       }),
     },
     hariini: {
