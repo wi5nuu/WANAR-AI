@@ -108,6 +108,51 @@ export function worklogTelegramCommands(worklog) {
         return `${type === 'income' ? 'Pemasukan' : 'Pengeluaran'} ${formatRupiah(amount)} dicatat. Hari ini: +${formatRupiah(x.money.income)} / -${formatRupiah(x.money.expense)}.`;
       }),
     },
+    jadwal: {
+      description: 'lihat/ubah jadwal: /jadwal 08:00-17:00 istirahat 12:00-13:00 senin-jumat · /jadwal otomatis on|off',
+      run: guard(async ({ arg }) => {
+        const DAY = { minggu: 0, senin: 1, selasa: 2, rabu: 3, kamis: 4, jumat: 5, "jum'at": 5, sabtu: 6 };
+        const NAME = ['Min', 'Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab'];
+        const show = (s) => [
+          `Jadwal kerja: ${s.workStart}–${s.workEnd} (${s.workdays.map((d) => NAME[d]).join(', ')})`,
+          `Istirahat: ${s.breakStart && s.breakEnd ? `${s.breakStart}–${s.breakEnd}` : 'tidak diatur'}`,
+          `Target: ${s.targetHours} jam${s.targetHoursAuto ? ' (dari jadwal)' : ''}`,
+          `Mulai otomatis: ${s.autoStart ? 'ON' : 'OFF'} · Ikuti jadwal: ${s.followSchedule ? 'ON' : 'OFF'} · Berhenti otomatis: ${s.autoStop ? 'ON' : 'OFF'}`,
+        ].join('\n');
+
+        const text = String(arg || '').trim().toLowerCase();
+        if (!text) return `${show(worklog.getSettings())}\n\nUbah: /jadwal 08:00-17:00 istirahat 12:00-13:00 senin-jumat`;
+
+        const patch = {};
+        const toggle = /^(otomatis|auto)\s+(on|off|nyala|mati)$/.exec(text);
+        if (toggle) {
+          const on = ['on', 'nyala'].includes(toggle[2]);
+          patch.autoStart = on;
+          if (on) patch.followSchedule = true;
+        } else {
+          const hm = (h, m) => `${String(Number(h)).padStart(2, '0')}:${m || '00'}`;
+          const ranges = [...text.matchAll(/(\d{1,2})(?:[:.](\d{2}))?\s*(?:-|–|sampai|s\.?d\.?)\s*(\d{1,2})(?:[:.](\d{2}))?/g)];
+          if (!ranges.length) return 'Format: /jadwal 08:00-17:00 istirahat 12:00-13:00 senin-jumat';
+          patch.workStart = hm(ranges[0][1], ranges[0][2]);
+          patch.workEnd = hm(ranges[0][3], ranges[0][4]);
+          if (ranges[1]) {
+            patch.breakStart = hm(ranges[1][1], ranges[1][2]);
+            patch.breakEnd = hm(ranges[1][3], ranges[1][4]);
+          }
+          const days = /(minggu|senin|selasa|rabu|kamis|jum'?at|sabtu)\s*(?:-|–|sampai|s\.?d\.?)\s*(minggu|senin|selasa|rabu|kamis|jum'?at|sabtu)/.exec(text);
+          if (days) {
+            const a = DAY[days[1]];
+            const b = DAY[days[2]];
+            const list = [];
+            for (let d = a; ; d = (d + 1) % 7) { list.push(d); if (d === b || list.length > 7) break; }
+            patch.workdays = list;
+          }
+          patch.targetHours = null; // keep the target in sync with the new schedule
+        }
+        const s = worklog.updateSettings(patch);
+        return `Jadwal disimpan di server — berlaku walau laptop mati.\n\n${show(s)}`;
+      }),
+    },
     hariini: {
       description: 'ringkasan hari ini',
       run: guard(async () => {

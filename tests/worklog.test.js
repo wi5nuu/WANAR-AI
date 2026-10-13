@@ -715,3 +715,61 @@ describe('reset a day', () => {
     await request(a).post('/api/worklog/days/bukan-tanggal/reset').send({}).expect(400);
   });
 });
+
+// ============================================== /jadwal + hands-free days
+
+describe('/jadwal from Telegram and a fully hands-free workday', () => {
+  const OWNER = '1811580954';
+  const msg = (text) => ({ update_id: 1, message: { text, chat: { id: Number(OWNER), type: 'private' }, from: { first_name: 'Wisnu' } } });
+  const mkInbox = (w, replies) => {
+    const inbox = new TelegramInbox({
+      channel: { mode: 'live', reply: async (c, h) => replies.push(h), sendAction: async () => {} },
+      store: { subscribers: { upsert() {}, setActive() {}, counts: () => ({}) }, suppressions: { add() {}, remove() {} } },
+      env: { TELEGRAM_AI_CHAT_IDS: OWNER },
+    });
+    inbox.registerCommands(worklogTelegramCommands(w.svc));
+    return inbox;
+  };
+
+  it('sets the schedule, break, weekdays and derives the target', async () => {
+    const w = build({ start: T('07:00') });
+    const replies = [];
+    const inbox = mkInbox(w, replies);
+    await inbox.handleUpdate(msg('/jadwal 08:00-17:00 istirahat 12:00-13:00 senin-jumat'));
+    const s = w.svc.getSettings();
+    expect(s).toMatchObject({ workStart: '08:00', workEnd: '17:00', breakStart: '12:00', breakEnd: '13:00', workdays: [1, 2, 3, 4, 5], targetHours: 8 });
+    expect(replies.at(-1)).toMatch(/berlaku walau laptop mati/);
+
+    await inbox.handleUpdate(msg('/jadwal 9-18 13-14 senin-sabtu'));
+    expect(w.svc.getSettings()).toMatchObject({ workStart: '09:00', workEnd: '18:00', breakStart: '13:00', breakEnd: '14:00', workdays: [1, 2, 3, 4, 5, 6] });
+
+    await inbox.handleUpdate(msg('/jadwal otomatis on'));
+    expect(w.svc.getSettings()).toMatchObject({ autoStart: true, followSchedule: true });
+
+    await inbox.handleUpdate(msg('/jadwal 17-08'));
+    expect(replies.at(-1)).toMatch(/setelah jam mulai/);
+  });
+
+  it('a whole day runs by itself: nobody opens the app, only the server tick runs', async () => {
+    const w = build({ start: T('07:00') });
+    w.svc.updateSettings({ workStart: '08:00', workEnd: '17:00', breakStart: '12:00', breakEnd: '13:00', workdays: [1, 2, 3, 4, 5], autoStart: true });
+    for (const hm of ['07:59', '08:00', '09:30', '12:00', '12:30', '13:00', '16:59', '17:00', '18:00']) {
+      w.set(T(hm));
+      await w.svc.tick(); // what the server does every minute
+    }
+    const d = w.svc.day(D);
+    expect(d.workedMin).toBe(480);
+    expect(d.breakMin).toBe(60);
+    expect(d.segments.map((s) => s.source)).toEqual(['auto', 'auto', 'auto']);
+    expect(w.svc.status().state).toBe('done');
+  });
+
+  it('weekends stay untouched', async () => {
+    const sat = '2026-10-17';
+    const w = build({ start: T('07:00', sat) });
+    w.svc.updateSettings({ workStart: '08:00', workEnd: '17:00', breakStart: '12:00', breakEnd: '13:00', workdays: [1, 2, 3, 4, 5], autoStart: true });
+    w.set(T('10:00', sat));
+    await w.svc.tick();
+    expect(w.svc.day(sat).workedMin).toBe(0);
+  });
+});
