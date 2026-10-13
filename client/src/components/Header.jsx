@@ -5,15 +5,30 @@
 
 import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import {
+  IconWorklog, IconBolt, IconChart, IconVoice, IconSparkles, IconBriefcase,
+  IconUser, IconShield, IconFlask, IconSettings, IconDots,
+} from './icons';
 
+// Grouped so the most-used tools sit on top; every entry has an icon from the
+// shared set so the menu matches the page sidebar.
 const APPS_MENU = [
-  { path: '/dashboard', label: 'Analytics', desc: 'Statistik pemakaian' },
-  { path: '/voice', label: 'Voice Talk', desc: 'Ngobrol suara dengan AI' },
-  { path: '/generator', label: 'Project Generator', desc: 'Generate project dengan AI' },
-  { path: '/job-agent', label: 'Job Agent', desc: 'Scan & apply lowongan' },
-  { path: '/profile', label: 'Profil', desc: 'Data diri & lamaran' },
-  { path: '/security', label: 'Security Testing', desc: 'Uji keamanan web' },
-  { path: '/settings', label: 'Settings', desc: 'Pengaturan' },
+  { group: 'Kerja', items: [
+    { path: '/worklog', label: 'Jurnal Kerja', desc: 'Jam kerja, tugas, keuangan, laporan', Icon: IconWorklog },
+    { path: '/automation', label: 'Otomasi', desc: 'Jadwal & kirim pesan multi-kanal', Icon: IconBolt },
+    { path: '/dashboard', label: 'Analytics', desc: 'Statistik pemakaian AI', Icon: IconChart },
+  ] },
+  { group: 'AI', items: [
+    { path: '/voice', label: 'Voice Talk', desc: 'Ngobrol suara dengan AI', Icon: IconVoice },
+    { path: '/generator', label: 'Project Generator', desc: 'Generate project dengan AI', Icon: IconSparkles },
+    { path: '/prompt-lab', label: 'Rule Lab', desc: 'Uji rule set / system prompt', Icon: IconFlask },
+    { path: '/job-agent', label: 'Job Agent', desc: 'Scan & apply lowongan', Icon: IconBriefcase },
+  ] },
+  { group: 'Akun & keamanan', items: [
+    { path: '/profile', label: 'Profil', desc: 'Data diri & lamaran', Icon: IconUser },
+    { path: '/security', label: 'Security Testing', desc: 'Uji keamanan web', Icon: IconShield },
+    { path: '/settings', label: 'Settings', desc: 'Pengaturan', Icon: IconSettings },
+  ] },
 ];
 
 export default function Header({
@@ -130,24 +145,29 @@ export default function Header({
             aria-expanded={appsOpen}
             aria-haspopup="menu"
           >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
-              <circle cx="5" cy="12" r="1.8"/>
-              <circle cx="12" cy="12" r="1.8"/>
-              <circle cx="19" cy="12" r="1.8"/>
-            </svg>
+            <IconDots size={20} />
           </button>
           {appsOpen && (
             <div className="header-apps-menu" role="menu">
-              {APPS_MENU.map(item => (
-                <button
-                  key={item.path}
-                  className="header-apps-item"
-                  role="menuitem"
-                  onClick={() => { setAppsOpen(false); navigate(item.path); }}
-                >
-                  <span className="header-apps-item-label">{item.label}</span>
-                  <span className="header-apps-item-desc">{item.desc}</span>
-                </button>
+              {APPS_MENU.map((g) => (
+                <div key={g.group} className="header-apps-group" role="group" aria-label={g.group}>
+                  <div className="header-apps-group-label">{g.group}</div>
+                  {g.items.map(({ path, label, desc, Icon }, i) => (
+                    <button
+                      key={path}
+                      className="header-apps-item"
+                      role="menuitem"
+                      style={{ animationDelay: `${i * 25}ms` }}
+                      onClick={() => { setAppsOpen(false); navigate(path); }}
+                    >
+                      <span className="header-apps-item-icon"><Icon size={18} /></span>
+                      <span className="header-apps-item-text">
+                        <span className="header-apps-item-label">{label}</span>
+                        <span className="header-apps-item-desc">{desc}</span>
+                      </span>
+                    </button>
+                  ))}
+                </div>
               ))}
             </div>
           )}
