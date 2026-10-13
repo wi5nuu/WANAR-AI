@@ -22,6 +22,7 @@
 
 import nodemailer from 'nodemailer';
 import { cleanName, isValidEmail } from './recipients.js';
+import { BrevoTransport } from './brevo.js';
 
 export const ErrorKind = Object.freeze({
   TRANSIENT: 'transient', // retry later (timeouts, 4xx)
@@ -69,6 +70,7 @@ export function readMailConfig(env = process.env) {
   const user = (env.SMTP_USER || '').trim();
   const pass = env.SMTP_PASS || '';
   const port = parseInt(env.SMTP_PORT || '587', 10);
+  const brevoKey = String(env.BREVO_API_KEY || '').trim();
   const secure = String(env.SMTP_SECURE || (port === 465 ? 'true' : 'false')).toLowerCase() === 'true';
 
   let fromAddress = (env.MAIL_FROM || user || '').trim();
@@ -82,7 +84,9 @@ export function readMailConfig(env = process.env) {
   return {
     host, port, secure, user, hasPassword: Boolean(pass), pass,
     fromAddress, fromName: cleanName(fromName),
-    configured: Boolean(host && user && pass && isValidEmail(fromAddress)),
+    brevoKey,
+    provider: brevoKey ? 'brevo-api' : 'smtp',
+    configured: Boolean((brevoKey || (host && user && pass)) && isValidEmail(fromAddress)),
     forceDryRun: String(env.EMAIL_DRY_RUN || '').toLowerCase() === 'true',
     unsubscribeMailto: (env.EMAIL_UNSUBSCRIBE_MAILTO || '').trim(),
     dailyCap: Math.max(1, parseInt(env.EMAIL_DAILY_CAP || '450', 10) || 450),
@@ -116,6 +120,7 @@ export class Mailer {
     return {
       mode: this.mode,
       configured: c.configured,
+      provider: c.provider,
       host: c.host || null,
       port: c.port,
       secure: c.secure,
@@ -129,9 +134,9 @@ export class Mailer {
       throttleMs: c.throttleMs,
       maxAttempts: c.maxAttempts,
       missing: [
-        !c.host && 'SMTP_HOST',
-        !c.user && 'SMTP_USER',
-        !c.hasPassword && 'SMTP_PASS',
+        !c.brevoKey && !c.host && 'SMTP_HOST',
+        !c.brevoKey && !c.user && 'SMTP_USER',
+        !c.brevoKey && !c.hasPassword && 'SMTP_PASS',
         !isValidEmail(c.fromAddress) && 'MAIL_FROM',
       ].filter(Boolean),
     };
@@ -140,6 +145,7 @@ export class Mailer {
   _transport(mode) {
     if (this._injected) return this._injected;
     if (mode === 'live') {
+      if (!this._live && this.cfg.brevoKey) this._live = new BrevoTransport({ apiKey: this.cfg.brevoKey });
       if (!this._live) {
         this._live = nodemailer.createTransport({
           host: this.cfg.host,

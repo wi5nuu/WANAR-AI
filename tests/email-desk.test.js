@@ -263,3 +263,31 @@ describe('stripQuoted', () => {
     expect(stripQuoted('Baik\n> kutipan\nterima kasih')).toBe('Baik\nterima kasih');
   });
 });
+
+describe('Brevo API transport', async () => {
+  const { BrevoTransport } = await import('../src/automation/brevo.js');
+  const { Mailer, readMailConfig } = await import('../src/automation/mailer.js');
+
+  it('is live with only BREVO_API_KEY + MAIL_FROM and posts the right payload', async () => {
+    const calls = [];
+    const fetchImpl = async (url, init) => { calls.push({ url, init }); return { ok: true, status: 201, json: async () => ({ messageId: '<abc@smtp-relay.mailin.fr>' }) }; };
+    const t = new BrevoTransport({ apiKey: 'k-test', fetchImpl });
+    const cfg = readMailConfig({ BREVO_API_KEY: 'k-test', MAIL_FROM: 'Wisnu <wisnu@wanar.id>' });
+    expect(cfg).toMatchObject({ configured: true, provider: 'brevo-api', fromAddress: 'wisnu@wanar.id' });
+
+    const m = new Mailer({ BREVO_API_KEY: 'k-test', MAIL_FROM: 'Wisnu <wisnu@wanar.id>' }, { transport: t });
+    const r = await m.send({ to: 'budi@klien.com', subject: 'Halo', text: 'isi', headers: { 'In-Reply-To': '<x@y>' } });
+    expect(r).toMatchObject({ messageId: '<abc@smtp-relay.mailin.fr>', dryRun: false });
+    const body = JSON.parse(calls[0].init.body);
+    expect(calls[0].url).toBe('https://api.brevo.com/v3/smtp/email');
+    expect(calls[0].init.headers['api-key']).toBe('k-test');
+    expect(body).toMatchObject({ sender: { email: 'wisnu@wanar.id' }, to: [{ email: 'budi@klien.com' }], subject: 'Halo', textContent: 'isi' });
+    expect(body.headers['In-Reply-To']).toBe('<x@y>');
+  });
+
+  it('explains an unauthorised IP / unverified sender instead of failing opaquely', async () => {
+    const fetchImpl = async () => ({ ok: false, status: 401, json: async () => ({ message: 'We have detected you are using an unrecognised IP address 1.2.3.4' }) });
+    const m = new Mailer({ BREVO_API_KEY: 'k', MAIL_FROM: 'a@wanar.id' }, { transport: new BrevoTransport({ apiKey: 'k', fetchImpl }) });
+    await expect(m.send({ to: 'b@c.co', subject: 's', text: 't' })).rejects.toMatchObject({ kind: 'auth' });
+  });
+});
