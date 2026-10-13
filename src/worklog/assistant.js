@@ -22,7 +22,7 @@
 import { collectParsed } from '../automation/ai-compose.js';
 import { localDate, localTime, addDays, atTime, formatDateId, formatRupiah } from './time.js';
 import { parseAmount, parseQuick } from './parse.js';
-import { EMAIL_ACTION_TYPES, emailPromptLines, quickEmailReply, runEmailActions, emailFallback } from '../email-desk/assistant-actions.js';
+import { EMAIL_ACTION_TYPES, emailPromptLines, quickEmailReply, quickDelegate, runEmailActions, emailFallback } from '../email-desk/assistant-actions.js';
 
 const MAX_ACTIONS = 8;
 const ACTION_TYPES = ['reminder', 'cancel_reminder', 'task', 'finance', 'clock', 'schedule', 'report', ...EMAIL_ACTION_TYPES];
@@ -225,6 +225,8 @@ export function makeAssistantResponder({ aiManager, worklog, emailDesk = null, c
     if (emailDesk) {
       const quick = await quickEmailReply(emailDesk, text);
       if (quick) return quick;
+      const delegated = await quickDelegate(emailDesk, text);
+      if (delegated) return delegated;
     }
     const now = Date.now();
     const today = localDate(now);

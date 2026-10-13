@@ -47,7 +47,11 @@ const clip = (s, n) => {
 
 /** Removes quoted history ("On ... wrote:", "> ...") so we keep only the new text. */
 export function stripQuoted(text) {
-  const lines = String(text || '').replace(/\r/g, '').split('\n');
+  let src = String(text || '').replace(/\r/g, '');
+  // "Pada Sel, 13 Okt 2026 pukul 14.54 Nama <\nalamat> menulis:" — attribution may wrap over 2 lines.
+  const wrapped = /(^|\n)[ \t]*(?:On|Pada)\s[^\n]{4,200}\n?[^\n]{0,160}?(?:wrote|menulis):[ \t]*(?=\n|$)/i.exec(src);
+  if (wrapped) src = src.slice(0, wrapped.index);
+  const lines = src.split('\n');
   const out = [];
   for (const l of lines) {
     if (/^\s*>/.test(l)) continue;
@@ -295,12 +299,20 @@ export class EmailDesk {
     });
     this._emit('inbound', { thread: thread.id });
 
+    return this._respond(thread, mail, fresh);
+  }
+
+  /**
+   * Applies the conversation policy to an incoming message that is already
+   * stored: notify / draft for approval / reply automatically.
+   */
+  async _respond(thread, mail, fresh) {
     const who = mail.from?.name ? `${mail.from.name} <${mail.from.address}>` : mail.from?.address;
     const head = `📩 Balasan email dari ${who}\nSubjek: ${clip(mail.subject || thread.subject, 150)}\n\n${clip(fresh, 1200) || '(isi kosong)'}`;
     const chat = thread.chat_id;
 
     if (thread.auto_mode === 'notify' || thread.counterpart === this.ownAddress) {
-      await this._tell(chat, `${head}\n\nBalas lewat sini: tulis mis. "balas ke ${thread.counterpart}: ..."`);
+      await this._tell(chat, `${head}\n\nBalas lewat sini: tulis mis. "balas ke ${thread.counterpart}: ..." atau "kamu saja yang balas".`);
       return { matched: true, action: 'notified' };
     }
 
@@ -331,6 +343,41 @@ export class EmailDesk {
     const why = blocker ? `\n(Tidak dibalas otomatis: ${blocker}.)` : '';
     await this._tell(chat, `${head}${why}\n\n${this.previewText(d)}`);
     return { matched: true, action: 'drafted' };
+  }
+
+  /**
+   * The owner delegates: "kamu saja yang balas, saya lagi meeting". Switches the
+   * newest conversation that has an incoming message to automatic replies (with
+   * the owner's words as guidance) and answers that message right away.
+   * @returns {Promise<{ok:boolean, text:string}>}
+   */
+  async delegateReply(ref, ownerText) {
+    let thread = null;
+    if (ref) thread = this.findThread(ref);
+    else thread = this.store.threads.list(20).find((t) => this.store.messages.lastIn(t.id)) || null;
+    if (!thread) return { ok: false, text: 'Belum ada email masuk yang bisa saya balas.' };
+    if (thread.counterpart === this.ownAddress) {
+      return { ok: false, text: 'Percakapan ini dengan alamat emailmu sendiri (tes), jadi tidak saya balas otomatis. Untuk lawan bicara lain, saya akan menjawab sendiri sesuai arahanmu.' };
+    }
+    const last = this.store.messages.lastIn(thread.id);
+    if (!last) return { ok: false, text: `Belum ada balasan dari ${thread.counterpart} yang perlu dijawab.` };
+
+    const guidance = clip(ownerText, 600);
+    this.store.threads.setAuto(thread.id, { mode: 'auto', instructions: guidance });
+    const fresh = this.store.threads.get(thread.id);
+    const mail = {
+      messageId: last.message_id, from: { address: last.from_addr, name: '' }, subject: last.subject || thread.subject,
+      headers: {}, text: last.body,
+    };
+    const r = await this._respond(fresh, mail, last.body);
+    const text = {
+      auto_replied: `✓ Sudah saya balas ke ${thread.counterpart}. Balasan berikutnya dari dia juga saya jawab sendiri (maks ${this.limits.autoPerThread}x; kalau perlu keputusanmu, saya kabari).`,
+      escalated: 'Saya baca emailnya, tapi perlu keputusanmu (alasannya saya kirim di atas).',
+      drafted: 'Saya siapkan balasan, tapi tidak bisa mengirim otomatis (lihat alasannya di atas). Ketik "kirim" bila setuju.',
+      auto_failed: 'Pengiriman balasan gagal (lihat pesan di atas).',
+      notified: 'Saya tidak bisa menyiapkan balasan otomatis (lihat pesan di atas).',
+    }[r.action] || 'Selesai.';
+    return { ok: r.action === 'auto_replied', text };
   }
 
   /** AI reply for a conversation. Returns {body} or {escalate, reason}. */

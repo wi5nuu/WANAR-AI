@@ -339,3 +339,41 @@ describe('pasted secrets with invisible characters', async () => {
     expect(readImapConfig({ IMAP_HOST: 'h', IMAP_USER: 'u', IMAP_PASS: 'pass1234\u000f\r' }).pass).toBe('pass1234');
   });
 });
+
+describe('Owner delegation and quote stripping', async () => {
+  const { quickDelegate } = await import('../src/email-desk/assistant-actions.js');
+
+  it('strips a Gmail attribution that wraps over two lines', () => {
+    expect(stripQuoted('baik\n\nPada Sel, 13 Okt 2026 pukul 14.54 Wisnu <\nwisnu@x.brevosend.com> menulis:\n\nisi lama')).toBe('baik');
+  });
+
+  it('"kamu saja yang balas" turns on auto-reply for the newest conversation and answers now', async () => {
+    const w = build({ ai: aiReturning({ body: 'Terima kasih, Pak Budi. Akan kami tindak lanjuti.' }) });
+    await w.desk.draft({ to: 'budi@klien.com', subject: 'Status invoice', body: 'Halo', chatId: OWNER });
+    await w.desk.sendDraft(1);
+    await w.desk.handleInbound(reply()); // notify mode: owner just gets told
+
+    const out = await quickDelegate(w.desk, 'kamu saja yang balas saya lagi meeting');
+    expect(out).toMatch(/Sudah saya balas ke budi@klien.com/);
+    expect(w.sent).toHaveLength(2);
+    expect(w.sent.at(-1).headers['Auto-Submitted']).toBe('auto-replied');
+    expect(w.desk.threads()[0]).toMatchObject({ auto_mode: 'auto' });
+  });
+
+  it('explains instead of replying when the conversation is with yourself, or nothing was received', async () => {
+    const w = build();
+    expect(await quickDelegate(w.desk, 'kamu saja yang balas')).toBeNull(); // no threads at all
+    await w.desk.draft({ to: 'wisnu@wanar.id', subject: 'Tes', body: 'x' });
+    await w.desk.sendDraft(1);
+    const out = await quickDelegate(w.desk, 'kamu saja yang balas');
+    expect(out).toMatch(/Belum ada email masuk/);
+  });
+
+  it('does not hijack normal sentences', async () => {
+    const w = build();
+    await w.desk.draft({ to: 'a@b.co', subject: 's', body: 'b' });
+    await w.desk.sendDraft(1);
+    expect(await quickDelegate(w.desk, 'kamu bisa bantu hitung pengeluaran minggu ini?')).toBeNull();
+    expect(await quickDelegate(w.desk, 'jadwal besok apa?')).toBeNull();
+  });
+});

@@ -135,3 +135,23 @@ export function emailFallback(text) {
     : /(siapkan balasan|draf(t)? balasan)/i.test(src) ? 'approve' : 'notify';
   return [{ type: 'email', to: addr, brief: src, auto_reply: mode }];
 }
+
+const DELEGATE = /(?:\b(?:kamu|bot|ai|wanar|asisten)\b.{0,20}\b(?:saja|aja|dulu)?\s*(?:yang\s+)?balas|balas(?:kan)?\s+(?:saja\s+|aja\s+)?(?:otomatis|sendiri)|tolong\s+balas(?:kan)?\s+(?:email|surel|emailnya)|handle\s+(?:email|emailnya))/i;
+
+/**
+ * "kamu saja yang balas, saya lagi meeting": delegate the newest conversation
+ * to the assistant. Deterministic so it never depends on the model.
+ * @returns {Promise<string|null>}
+ */
+export async function quickDelegate(desk, text) {
+  const t = String(text || '').trim();
+  if (!DELEGATE.test(t) || t.length > 400) return null;
+  if (!desk.threads(20).length) return null;
+  const addr = EMAIL_RE.exec(t)?.[0] || null;
+  try {
+    const r = await desk.delegateReply(addr, t);
+    return r.text;
+  } catch (e) {
+    return `✗ ${e.message}`;
+  }
+}
