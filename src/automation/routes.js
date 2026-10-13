@@ -87,8 +87,30 @@ const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
  *     proxy (X-Forwarded-For present)                  -> needs AUTOMATION_TOKEN
  *   - no AUTOMATION_TOKEN configured                   -> remote access refused
  *
- * EventSource cannot set headers, so /events also accepts ?token=.
+ * EventSource cannot set headers, so streams use a short-lived signed
+ * ?ticket= (see issueStreamTicket). The permanent token is never accepted in
+ * a URL: URLs end up in proxy/CDN access logs.
  */
+const TICKET_TTL_MS = 10 * 60_000;
+
+/** Signed, expiring ticket for EventSource URLs (no server-side state). */
+export function issueStreamTicket(secret, now = Date.now(), ttlMs = TICKET_TTL_MS) {
+  const exp = now + ttlMs;
+  const sig = crypto.createHmac('sha256', String(secret)).update(`sse:${exp}`).digest('base64url');
+  return `${exp}.${sig}`;
+}
+
+export function verifyStreamTicket(secret, ticket, now = Date.now()) {
+  const m = /^(\d{10,16})\.([A-Za-z0-9_-]{20,})$/.exec(String(ticket || ''));
+  if (!m || !secret) return false;
+  const exp = Number(m[1]);
+  if (!(exp > now) || exp - now > TICKET_TTL_MS + 5_000) return false;
+  const want = crypto.createHmac('sha256', String(secret)).update(`sse:${exp}`).digest('base64url');
+  const a = Buffer.from(m[2]);
+  const b = Buffer.from(want);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
 export function createAccessGuard(env = process.env) {
   const secret = String(env.AUTOMATION_TOKEN || '');
   return (req, res, next) => {
@@ -102,7 +124,9 @@ export function createAccessGuard(env = process.env) {
         error: 'Otomasi hanya dapat diakses dari komputer server (localhost). Untuk akses jaringan, set AUTOMATION_TOKEN di .env.',
       });
     }
-    const given = String(req.headers['x-automation-token'] || req.query?.token || '');
+    // Tickets only open event streams (GET …/events), never data or actions.
+    if (req.method === 'GET' && /\/events$/.test(req.path) && req.query?.ticket && verifyStreamTicket(secret, req.query.ticket)) return next();
+    const given = String(req.headers['x-automation-token'] || '');
     const a = Buffer.from(given);
     const b = Buffer.from(secret);
     if (a.length === b.length && crypto.timingSafeEqual(a, b)) return next();
@@ -114,6 +138,13 @@ export function createAutomationRouter({ automation, rateLimiters = {}, actorOf 
   const { store, engine, scheduler, mailer, events } = automation;
   const router = express.Router();
   router.use(createAccessGuard(env));
+
+  // Ticket for EventSource streams (any guarded /events endpoint accepts it).
+  router.get('/stream-ticket', (req, res) => {
+    const secret = String(env.AUTOMATION_TOKEN || '');
+    res.set('Cache-Control', 'no-store');
+    res.json({ success: true, ticket: secret ? issueStreamTicket(secret) : null, ttlMs: TICKET_TTL_MS });
+  });
   const noop = (req, res, next) => next();
   const strict = rateLimiters.automation || rateLimiters.strict || noop;
   const chat = rateLimiters.chat || noop;

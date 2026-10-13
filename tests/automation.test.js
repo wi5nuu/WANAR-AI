@@ -842,7 +842,26 @@ describe('network access guard', async () => {
     await request(app).get('/api/automation/jobs').set(REMOTE).expect(401);
     await request(app).get('/api/automation/jobs').set({ ...REMOTE, 'X-Automation-Token': 'salah' }).expect(401);
     await request(app).get('/api/automation/jobs').set({ ...REMOTE, 'X-Automation-Token': 's3cret-token' }).expect(200);
-    await request(app).get('/api/automation/jobs?token=s3cret-token').set(REMOTE).expect(200);
+    // the permanent token is never accepted in a URL (it would land in access logs)
+    await request(app).get('/api/automation/jobs?token=s3cret-token').set(REMOTE).expect(401);
+  });
+
+  it('streams use short-lived signed tickets instead of the token', async () => {
+    const { issueStreamTicket, verifyStreamTicket } = await import('../src/automation/routes.js');
+    const app = make({ AUTOMATION_TOKEN: 's3cret-token' });
+    const r = await request(app).get('/api/automation/stream-ticket').set({ ...REMOTE, 'X-Automation-Token': 's3cret-token' }).expect(200);
+    expect(r.body.ticket).toMatch(/^\d+\.[\w-]+$/);
+    expect(r.headers['cache-control']).toMatch(/no-store/);
+    await request(app).get(`/api/automation/jobs?ticket=${encodeURIComponent(r.body.ticket)}`).set(REMOTE).expect(401); // data: never via ticket
+    await request(app).get('/api/automation/stream-ticket').set(REMOTE).expect(401); // ticket needs the token first
+
+    const now = Date.now();
+    expect(verifyStreamTicket('s3cret-token', issueStreamTicket('s3cret-token', now - 11 * 60_000))).toBe(false); // expired
+    expect(verifyStreamTicket('lain', issueStreamTicket('s3cret-token'))).toBe(false); // other secret
+    const t = issueStreamTicket('s3cret-token');
+    expect(verifyStreamTicket('s3cret-token', t.replace(/.$/, (c) => (c === 'A' ? 'B' : 'A')))).toBe(false); // forged
+    // tickets only open GET streams, never actions
+    await request(app).post(`/api/automation/suppressions?ticket=${encodeURIComponent(t)}`).set(REMOTE).send({ emails: ['a@x.com'] }).expect(401);
   });
 
   it('a configured token does not weaken localhost access', async () => {

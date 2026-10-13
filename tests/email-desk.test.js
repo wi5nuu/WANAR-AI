@@ -191,7 +191,7 @@ describe('Email Desk via the Telegram assistant', () => {
     const w = build();
     const plan = { reply: 'ok', actions: [{ type: 'email', to: 'a@b.co', subject: 's', body: 'b' }] };
     const respond = makeAssistantResponder({ aiManager: aiReturning(plan), worklog, emailDesk: w.desk });
-    expect(await respond({ text: 'email a@b.co langsung kirim ya', chatId: OWNER })).toMatch(/✓ Email terkirim ke a@b.co/);
+    expect(await respond({ text: 'email a@b.co langsung kirim ya', chatId: OWNER })).toMatch(/✓ Email #1 terkirim ke a@b.co/);
     expect(w.sent).toHaveLength(1);
   });
 
@@ -205,7 +205,7 @@ describe('Email Desk via the Telegram assistant', () => {
   it('emailFallback needs both an address and an email intent', () => {
     expect(emailFallback('halo apa kabar')).toEqual([]);
     expect(emailFallback('alamatnya budi@x.com ya')).toEqual([]);
-    expect(emailFallback('tolong email budi@x.com soal rapat')[0]).toMatchObject({ type: 'email', to: 'budi@x.com', auto_reply: 'notify' });
+    expect(emailFallback('tolong email budi@x.com soal rapat')[0]).toMatchObject({ type: 'email', to: ['budi@x.com'], auto_reply: 'notify' });
   });
 });
 
@@ -375,5 +375,103 @@ describe('Owner delegation and quote stripping', async () => {
     await w.desk.sendDraft(1);
     expect(await quickDelegate(w.desk, 'kamu bisa bantu hitung pengeluaran minggu ini?')).toBeNull();
     expect(await quickDelegate(w.desk, 'jadwal besok apa?')).toBeNull();
+  });
+});
+
+describe('Email massal, follow-up & anti prompt-injection', async () => {
+  const { runEmailActions, followUpDaysIn } = await import('../src/email-desk/assistant-actions.js');
+  const { parseRecipientList, personalize } = await import('../src/email-desk/service.js');
+  const fast = (w) => { w.desk.limits.throttleMs = 0; return w; };
+
+  it('parses recipient lists and personalises {{nama}}', () => {
+    expect(parseRecipientList('a@x.com, Budi <B@y.co>; c@z.id dan a@x.com, salah@')).toEqual([
+      { email: 'a@x.com', name: null }, { email: 'b@y.co', name: 'Budi' }, { email: 'c@z.id', name: null },
+    ]);
+    expect(personalize('Yth. {{nama|Bapak/Ibu}},', null)).toBe('Yth. Bapak/Ibu,');
+    expect(personalize('Halo {{nama}}', 'Budi')).toBe('Halo Budi');
+  });
+
+  it('one request to 10 people -> one preview, one "kirim", 10 separate conversations', async () => {
+    const w = fast(build());
+    const to = Array.from({ length: 10 }, (_, i) => `orang${i}@klien.com`);
+    const ownerText = `kirim undangan meeting Jumat ke ${to.join(', ')}`;
+    const lines = await runEmailActions(w.desk, [{ type: 'email', to, subject: 'Undangan', body: 'Yth. {{nama|Bapak/Ibu}}, ...' }], { chatId: OWNER, ownerText });
+    expect(lines[0]).toMatch(/Draf email massal #1–#10 \(10 penerima/);
+    expect(w.sent).toHaveLength(0);
+    expect(await quickEmailReply(w.desk, 'kirim')).toMatch(/terkirim: 10\/10 penerima/);
+    expect(w.sent.map((m) => m.to)).toEqual(to);
+    expect(w.sent[0].text).toBe('Yth. Bapak/Ibu, ...');
+    expect(w.desk.threads(50)).toHaveLength(10);
+  });
+
+  it('"batal" cancels the whole batch; caps protect the account', async () => {
+    const w = fast(build());
+    await w.desk.draftBatch({ recipients: 'a@x.com, b@x.com, c@x.com', subject: 's', body: 'b' });
+    expect(await quickEmailReply(w.desk, 'batal')).toMatch(/dibatalkan \(3 penerima\)/);
+    w.desk.limits.batchMax = 2;
+    await expect(w.desk.draftBatch({ recipients: 'a@x.com, b@x.com, c@x.com', subject: 's', body: 'b' })).rejects.toThrow(/Maksimal 2/);
+    w.desk.limits.dailySend = 1;
+    await w.desk.draftBatch({ recipients: 'a@x.com, b@x.com', subject: 's', body: 'b' });
+    expect(await quickEmailReply(w.desk, 'kirim')).toMatch(/1\/2 penerima[\s\S]*b@x.com \(.*harian/);
+  });
+
+  it('refuses recipients the owner never wrote (an injected address cannot be emailed)', async () => {
+    const w = build();
+    const lines = await runEmailActions(w.desk, [{ type: 'email', to: ['budi@klien.com', 'attacker@evil.com'], subject: 's', body: 'b' }], { ownerText: 'email budi@klien.com soal invoice' });
+    expect(lines[0]).toMatch(/Tidak saya pakai.*attacker@evil.com/);
+    expect(w.desk.pendingDrafts().map((d) => d.to_addr)).toEqual(['budi@klien.com']);
+  });
+
+  it('the model cannot send, cancel or enable auto-reply unless the owner asked', async () => {
+    const w = build();
+    await w.desk.draft({ to: 'budi@klien.com', subject: 's', body: 'b' });
+    const lines = await runEmailActions(w.desk, [{ type: 'email_send', draft: 1 }, { type: 'email_cancel', draft: 1 }], { ownerText: 'apa kabar email budi?' });
+    expect(lines).toEqual(['Draf belum dikirim — ketik "kirim" bila sudah sesuai.']);
+    expect(w.sent).toHaveLength(0);
+    expect(w.desk.pendingDrafts()).toHaveLength(1);
+
+    await w.desk.sendDraft(1);
+    const m = await runEmailActions(w.desk, [{ type: 'email_mode', to: 'budi@klien.com', mode: 'auto' }], { ownerText: 'ringkas email budi' });
+    expect(m[0]).toMatch(/hanya saya aktifkan bila kamu memintanya/);
+    expect(w.desk.threads()[0].auto_mode).toBe('notify');
+    const d = await runEmailActions(w.desk, [{ type: 'email', to: 'budi@klien.com', subject: 's', body: 'b', auto_reply: 'auto' }], { ownerText: 'email budi@klien.com lagi' });
+    expect(d[0]).toMatch(/Saat dibalas: kabari saja/); // downgraded
+  });
+
+  it('follow-up: reads "3 hari tidak dibalas", nudges with a drafted follow-up, cleared by a reply', async () => {
+    expect(followUpDaysIn('kalau 3 hari tidak dibalas ingatkan aku')).toBe(3);
+    expect(followUpDaysIn('follow up 2 hari ya')).toBe(2);
+    expect(followUpDaysIn('kalau belum dibalas dalam 5 hari')).toBe(5);
+    expect(followUpDaysIn('halo')).toBeNull();
+
+    let t = Date.now();
+    const w = build({ ai: aiReturning({ body: 'Mohon kabarnya, Pak.' }) });
+    w.desk.now = () => t;
+    await runEmailActions(w.desk, [{ type: 'email', to: 'budi@klien.com', subject: 'Invoice', body: 'Halo' }], { chatId: OWNER, ownerText: 'email budi@klien.com, kalau 3 hari tidak dibalas ingatkan' });
+    await w.desk.sendDraft(1);
+    expect(await w.desk.checkFollowUps()).toBe(0);
+    t += 3 * 86_400_000 + 1;
+    expect(await w.desk.checkFollowUps()).toBe(1);
+    expect(w.told.at(-1).t).toMatch(/belum membalas "Invoice" sejak 3 hari[\s\S]*Draf email #2[\s\S]*Mohon kabarnya/);
+    expect(await w.desk.checkFollowUps()).toBe(0); // only once
+
+    const w2 = build();
+    await w2.desk.draft({ to: 'budi@klien.com', subject: 'Invoice', body: 'Halo', followUpDays: 2 });
+    await w2.desk.sendDraft(1);
+    await w2.desk.handleInbound(reply());
+    expect(w2.desk.threads()[0].follow_up_at).toBeNull();
+  });
+
+  it('overview groups drafts/batches and lists who is waiting on whom', async () => {
+    const w = fast(build());
+    await w.desk.draft({ to: 'budi@klien.com', subject: 'Status invoice', body: 'Halo' });
+    await w.desk.sendDraft(1);
+    await w.desk.handleInbound(reply());
+    await w.desk.draftBatch({ recipients: 'a@x.com, b@x.com', subject: 'Undangan', body: 'b' });
+    const o = w.desk.overview();
+    expect(o.batches).toEqual([expect.objectContaining({ count: 2, subject: 'Undangan' })]);
+    expect(o.awaitingYou.map((t) => t.counterpart)).toEqual(['budi@klien.com']);
+    expect(o.sentToday).toBe(1);
+    expect(o.recent.find((m) => m.direction === 'in')).toMatchObject({ counterpart: 'budi@klien.com' });
   });
 });

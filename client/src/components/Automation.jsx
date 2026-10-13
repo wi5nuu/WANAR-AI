@@ -15,6 +15,7 @@
  */
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { openStream } from '../lib/stream.js';
 import DashboardLayout from './DashboardLayout';
 import './automation.css';
 
@@ -1738,13 +1739,6 @@ export default function Automation() {
 
   // Realtime stream
   useEffect(() => {
-    let es;
-    try {
-      const t = getToken();
-      es = new EventSource(`/api/automation/events${t ? `?token=${encodeURIComponent(t)}` : ''}`);
-    } catch { return undefined; }
-    es.onopen = () => setLive(true);
-    es.onerror = () => setLive(false);
 
     const push = (key, text) => {
       setFeed((f) => {
@@ -1775,8 +1769,11 @@ export default function Automation() {
       refreshSoon();
     };
 
-    ['campaign', 'job', 'review', 'alert'].forEach((n) => es.addEventListener(n, handle));
-    return () => es.close();
+    return openStream('/api/automation/events', {
+      onOpen: () => setLive(true),
+      onDown: () => setLive(false),
+      events: Object.fromEntries(['campaign', 'job', 'review', 'alert'].map((n) => [n, handle])),
+    });
   }, [notify, refreshSoon]);
 
   const pendingJobs = jobs.filter((j) => j.status === 'pending_approval').length;

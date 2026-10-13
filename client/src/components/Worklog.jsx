@@ -8,6 +8,7 @@
  */
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { openStream } from '../lib/stream.js';
 import DashboardLayout from './DashboardLayout';
 import './automation.css';
 import './worklog.css';
@@ -871,18 +872,17 @@ export default function Worklog() {
 
   // realtime: server changes (Telegram /mulai, agent tool, other tab) refresh the page
   useEffect(() => {
-    let es;
-    try {
-      const t = getToken();
-      es = new EventSource(`/api/worklog/events${t ? `?token=${encodeURIComponent(t)}` : ''}`);
-    } catch { return undefined; }
-    es.onopen = () => setLive(true);
-    es.onerror = () => setLive(false);
-    es.addEventListener('change', () => {
-      clearTimeout(timer.current);
-      timer.current = setTimeout(refresh, 300);
+    const close = openStream('/api/worklog/events', {
+      onOpen: () => setLive(true),
+      onDown: () => setLive(false),
+      events: {
+        change: () => {
+          clearTimeout(timer.current);
+          timer.current = setTimeout(refresh, 300);
+        },
+      },
     });
-    return () => { es.close(); clearTimeout(timer.current); };
+    return () => { close(); clearTimeout(timer.current); };
   }, [refresh]);
 
   // Refresh right when the schedule flips (break / resume / stop), so the

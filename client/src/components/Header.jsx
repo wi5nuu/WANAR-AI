@@ -7,13 +7,14 @@ import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   IconWorklog, IconBolt, IconChart, IconVoice, IconSparkles, IconBriefcase,
-  IconUser, IconShield, IconFlask, IconSettings, IconDots,
+  IconUser, IconShield, IconFlask, IconSettings, IconDots, IconRadar,
 } from './icons';
 
 // Grouped so the most-used tools sit on top; every entry has an icon from the
 // shared set so the menu matches the page sidebar.
 const APPS_MENU = [
   { group: 'Kerja', items: [
+    { path: '/command-center', label: 'Pusat Kendali', desc: 'Semua aktivitas agent, realtime', Icon: IconRadar },
     { path: '/worklog', label: 'Jurnal Kerja', desc: 'Jam kerja, tugas, keuangan, laporan', Icon: IconWorklog },
     { path: '/automation', label: 'Otomasi', desc: 'Jadwal & kirim pesan multi-kanal', Icon: IconBolt },
     { path: '/dashboard', label: 'Analytics', desc: 'Statistik pemakaian AI', Icon: IconChart },

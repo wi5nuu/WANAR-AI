@@ -68,6 +68,18 @@ export function createEmailDeskStore(db, { now = () => Date.now() } = {}) {
     CREATE TABLE IF NOT EXISTS ed_meta (key TEXT PRIMARY KEY, value TEXT);
   `);
 
+  // Additive migrations (safe on existing databases).
+  const addColumn = (table, col, type) => {
+    const cols = db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
+    if (!cols.includes(col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${type}`);
+  };
+  addColumn('ed_drafts', 'batch', 'TEXT');
+  addColumn('ed_drafts', 'to_name', 'TEXT');
+  addColumn('ed_drafts', 'follow_up_days', 'INTEGER');
+  addColumn('ed_threads', 'follow_up_at', 'INTEGER');
+  addColumn('ed_threads', 'follow_up_notified', 'INTEGER');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_ed_drafts_batch ON ed_drafts(batch, status)');
+
   const threads = {
     create({ counterpart, subject, autoMode = 'notify', autoInstructions = null, chatId = null }) {
       const tid = id('thr');
@@ -86,6 +98,10 @@ export function createEmailDeskStore(db, { now = () => Date.now() } = {}) {
     },
     countAuto: (tid) => db.prepare('UPDATE ed_threads SET auto_count = auto_count + 1, last_auto_at = ? WHERE id = ?').run(now(), tid),
     close: (tid) => db.prepare("UPDATE ed_threads SET status = 'closed', updated_at = ? WHERE id = ?").run(now(), tid).changes > 0,
+    setFollowUp: (tid, at) => db.prepare('UPDATE ed_threads SET follow_up_at = ?, follow_up_notified = NULL WHERE id = ?').run(at, tid),
+    clearFollowUp: (tid) => db.prepare('UPDATE ed_threads SET follow_up_at = NULL, follow_up_notified = NULL WHERE id = ?').run(tid),
+    dueFollowUps: (atMs) => db.prepare("SELECT * FROM ed_threads WHERE status = 'open' AND follow_up_at IS NOT NULL AND follow_up_at <= ? AND follow_up_notified IS NULL ORDER BY follow_up_at ASC LIMIT 20").all(atMs),
+    markFollowUpNotified: (tid) => db.prepare('UPDATE ed_threads SET follow_up_notified = ? WHERE id = ? AND follow_up_notified IS NULL').run(now(), tid).changes > 0,
   };
 
   const messages = {
@@ -101,22 +117,28 @@ export function createEmailDeskStore(db, { now = () => Date.now() } = {}) {
     lastOut: (tid) => db.prepare("SELECT * FROM ed_messages WHERE thread_id = ? AND direction = 'out' ORDER BY at DESC LIMIT 1").get(tid) || null,
     lastIn: (tid) => db.prepare("SELECT * FROM ed_messages WHERE thread_id = ? AND direction = 'in' ORDER BY at DESC LIMIT 1").get(tid) || null,
     autoSentSince: (ms) => db.prepare("SELECT COUNT(*) AS n FROM ed_messages WHERE direction = 'out' AND auto = 1 AND at >= ?").get(ms).n,
+    sentSince: (ms) => db.prepare("SELECT COUNT(*) AS n FROM ed_messages WHERE direction = 'out' AND at >= ?").get(ms).n,
+    last: (tid) => db.prepare('SELECT * FROM ed_messages WHERE thread_id = ? ORDER BY at DESC LIMIT 1').get(tid) || null,
+    recent: (limit = 30) => db.prepare('SELECT m.*, t.counterpart, t.subject AS thread_subject FROM ed_messages m JOIN ed_threads t ON t.id = m.thread_id ORDER BY m.at DESC LIMIT ?').all(limit),
   };
 
   const drafts = {
     add(d) {
       const did = id('drf');
       const seq = (db.prepare('SELECT COALESCE(MAX(seq), 0) AS m FROM ed_drafts').get().m || 0) + 1;
-      db.prepare(`INSERT INTO ed_drafts (id, seq, thread_id, to_addr, subject, body, in_reply_to, refs, auto_mode, auto_instructions, origin, chat_id, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      db.prepare(`INSERT INTO ed_drafts (id, seq, thread_id, to_addr, subject, body, in_reply_to, refs, auto_mode, auto_instructions, origin, chat_id, created_at, batch, to_name, follow_up_days)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
         did, seq, d.threadId || null, d.to.toLowerCase(), d.subject, d.body, d.inReplyTo || null, d.refs || null,
         d.autoMode || 'notify', d.autoInstructions || null, d.origin || 'owner', d.chatId || null, now(),
+        d.batch || null, d.toName || null, Number.isFinite(d.followUpDays) ? d.followUpDays : null,
       );
       return drafts.get(did);
     },
     get: (did) => db.prepare('SELECT * FROM ed_drafts WHERE id = ?').get(did) || null,
     bySeq: (seq) => db.prepare('SELECT * FROM ed_drafts WHERE seq = ?').get(Number(seq)) || null,
-    pending: (limit = 20) => db.prepare("SELECT * FROM ed_drafts WHERE status = 'pending' ORDER BY created_at ASC LIMIT ?").all(limit),
+    pending: (limit = 20) => db.prepare("SELECT * FROM ed_drafts WHERE status = 'pending' ORDER BY created_at ASC, seq ASC LIMIT ?").all(limit),
+    pendingBatch: (batch) => db.prepare("SELECT * FROM ed_drafts WHERE batch = ? AND status = 'pending' ORDER BY seq ASC").all(batch),
+    ofBatch: (batch) => db.prepare('SELECT * FROM ed_drafts WHERE batch = ? ORDER BY seq ASC').all(batch),
     resolve(did, status, error = null) {
       return db.prepare("UPDATE ed_drafts SET status = ?, error = ?, resolved_at = ? WHERE id = ? AND status = 'pending'")
         .run(status, error, now(), did).changes > 0;
@@ -131,5 +153,5 @@ export function createEmailDeskStore(db, { now = () => Date.now() } = {}) {
     set: (k, v) => db.prepare('INSERT INTO ed_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(k, String(v)),
   };
 
-  return { threads, messages, drafts, meta };
+  return { threads, messages, drafts, meta, newBatchId: () => id('bat') };
 }

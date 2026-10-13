@@ -22,6 +22,7 @@ import AgentFlow, { AgentLiveBar } from './components/AgentFlow';
 import AuroraBackground from './components/AuroraBackground';
 import Automation from './components/Automation';
 import Worklog from './components/Worklog';
+import CommandCenter from './components/CommandCenter';
 
 function ChatLayout() {
   const {
@@ -238,6 +239,7 @@ export default function App() {
       <Route path="/prompt-lab" element={<PromptLab />} />
       <Route path="/automation" element={<Automation />} />
       <Route path="/worklog" element={<Worklog />} />
+      <Route path="/command-center" element={<CommandCenter />} />
     </Routes>
   );
 }

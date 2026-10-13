@@ -5,7 +5,7 @@ import Header from './Header';
 import AuroraBackground from './AuroraBackground';
 import {
   IconChat, IconVoice, IconBolt, IconWorklog, IconChart, IconShield, IconTarget,
-  IconFlask, IconSettings, IconUser,
+  IconFlask, IconSettings, IconUser, IconRadar,
 } from './icons';
 
 export default function DashboardLayout({ children }) {
@@ -24,6 +24,7 @@ export default function DashboardLayout({ children }) {
 
   const menuItems = [
     { path: '/', label: 'Chat', icon: IconChat },
+    { path: '/command-center', label: 'Pusat Kendali', icon: IconRadar },
     { path: '/worklog', label: 'Jurnal Kerja', icon: IconWorklog },
     { path: '/automation', label: 'Otomasi', icon: IconBolt },
     { path: '/voice', label: 'Voice Talk', icon: IconVoice },

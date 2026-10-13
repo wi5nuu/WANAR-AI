@@ -172,6 +172,7 @@ function isDateLike(s) {
 }
 
 const CLAIMS = /(saya (catat|set|atur|buat)|sudah (saya )?(catat|dicatat|dibatalkan|diatur|disimpan)|dibatalkan|pengingat .*(dibuat|diset))/i;
+const BRIEFING_ASK = /^(?:briefing|brief|agenda|rangkuman pagi|apa agenda\b.*|agenda (?:saya |aku |ku )?(?:hari ini|sekarang)|(?:apa )?(?:jadwal|rencana) (?:saya |aku )?hari ini)\s*\??$/i;
 const ASKS_ACTION = /(catat|ingatkan|ingetin|batalkan|hapus|atur|simpan|ubah|tambah)/i;
 const hhmm = (min) => `${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`;
 
@@ -217,10 +218,12 @@ export function fallbackPlan(text, now = Date.now()) {
  * Builds the responder used for the owner's plain Telegram messages.
  * Same signature as makeChatResponder, so it is a drop-in replacement.
  */
-export function makeAssistantResponder({ aiManager, worklog, emailDesk = null, context = null, ownerName = process.env.OWNER_NAME || 'Wisnu Alfian Nur Ashar' }) {
+export function makeAssistantResponder({ aiManager, worklog, emailDesk = null, briefing = null, context = null, ownerName = process.env.OWNER_NAME || 'Wisnu Alfian Nur Ashar' }) {
   const first = String(ownerName).split(/\s+/)[0];
 
   return async ({ history = [], text, commands = [], chatId = null }) => {
+    // "agenda hari ini" / "briefing": answered from data, instantly and for free.
+    if (briefing && BRIEFING_ASK.test(String(text || '').trim())) return briefing.build();
     // "kirim" / "batal" while an email draft waits: handled by code, instantly.
     if (emailDesk) {
       const quick = await quickEmailReply(emailDesk, text);

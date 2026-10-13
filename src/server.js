@@ -55,6 +55,8 @@ import { initWorklog } from './worklog/index.js';
 import { createWorklogRouter } from './worklog/routes.js';
 import { initEmailDesk } from './email-desk/index.js';
 import { createEmailDeskRouter } from './email-desk/routes.js';
+import { createBriefing } from './briefing.js';
+import { createCommandCenterRouter } from './command-center/routes.js';
 import { createOwnerContext, createTelegramTranscript } from './memory/owner-context.js';
 import { makeAssistantResponder } from './worklog/assistant.js';
 
@@ -77,6 +79,20 @@ const worklog = initWorklog({ db: sqliteDb, aiManager, automation });
 // chats (web + Telegram), and its own conversations become chat sessions too.
 // Email Desk: draft/send email from Telegram, watch replies (IMAP IDLE), auto-reply policy.
 const emailDesk = initEmailDesk({ db: sqliteDb, aiManager, automation });
+// Morning briefing (schedule, reminders, email, tasks) — built from data, no AI call.
+const briefing = createBriefing({
+  worklog: worklog.service,
+  desk: emailDesk.desk,
+  defaultChatId: () => String(process.env.TELEGRAM_AI_CHAT_IDS || '').split(',')[0]?.trim() || null,
+  notify: automation.channels.has('telegram')
+    ? async (chatId, text) => {
+      const tg = automation.channels.get('telegram');
+      if (tg.mode !== 'live') throw new Error('Telegram belum dikonfigurasi');
+      await tg.send({ to: chatId, text });
+    }
+    : null,
+});
+automation.inbox.registerCommands(briefing.commands());
 const ownerContext = createOwnerContext({ db: sqliteDb, automation, worklog });
 const telegramTranscript = createTelegramTranscript({ db: sqliteDb });
 // The owner's plain messages go to an assistant that can also ACT (reminders,
@@ -85,6 +101,7 @@ automation.inbox.responder = makeAssistantResponder({
   aiManager,
   worklog: worklog.service,
   emailDesk: emailDesk.desk,
+  briefing,
   context: ({ text, chatId }) => ownerContext({ text, excludeSessionId: chatId ? telegramTranscript.sessionId(chatId) : null }),
 });
 automation.inbox.onExchange = (e) => telegramTranscript.record(e);
@@ -1015,6 +1032,7 @@ app.use('/api/automation', createAutomationRouter({
 // ==================== WORK JOURNAL ====================
 app.use('/api/worklog', createWorklogRouter({ worklog, rateLimiters }));
 app.use('/api/email-desk', createEmailDeskRouter({ emailDesk, rateLimiters }));
+app.use('/api/command-center', createCommandCenterRouter({ worklog, emailDesk, automation, briefing, rateLimiters }));
 
 app.get('/api/sessions/:id/messages', (req, res) => {
   const messages = db.getMessages(req.params.id);  res.json({ messages });
@@ -2820,6 +2838,8 @@ async function startServer() {
       if (automation.inbox.start()) console.log('Telegram   : inbox aktif (pelanggan mendaftar lewat /start)');
       worklog.service.start();
       console.log('Worklog    : jurnal kerja aktif (laporan Telegram terjadwal)');
+      emailDesk.desk.start(); // follow-up checks
+      if (briefing.start()) console.log('Briefing   : briefing pagi otomatis di hari kerja (/brief kapan saja)');
       console.log(emailDesk.watcher.start()
         ? 'Email Desk : memantau balasan email (IMAP IDLE, realtime)'
         : 'Email Desk : aktif tanpa pemantau balasan (IMAP_* belum diatur)');
@@ -2830,7 +2850,7 @@ async function startServer() {
   }
   for (const sig of ['SIGINT', 'SIGTERM']) {
     process.once(sig, () => {
-      try { automation.scheduler.stop(); automation.inbox.stop(); worklog.service.stop(); emailDesk.watcher.stop(); automation.channels.closeAll(); } catch { /* ignore */ }
+      try { automation.scheduler.stop(); automation.inbox.stop(); worklog.service.stop(); emailDesk.watcher.stop(); emailDesk.desk.stop(); briefing.stop(); automation.channels.closeAll(); } catch { /* ignore */ }
       process.exit(0);
     });
   }
