@@ -1,0 +1,137 @@
+/**
+ * src/worklog/telegram.js
+ *
+ * Owner-only Telegram commands for the work journal. Registered on the shared
+ * TelegramInbox, which already restricts them to TELEGRAM_AI_CHAT_IDS.
+ *
+ *   /mulai              start working          /istirahat   start a break
+ *   /lanjut             back from the break    /selesai     stop + day summary
+ *   /catat <teks>       free text -> tasks/money/times/report (AI)
+ *   /laporan <teks>     today's ~300-char report
+ *   /tugas <judul>      add a finished task
+ *   /uang +1,5jt gaji   income        /uang -25rb makan   expense
+ *   /hariini  /minggu   summaries
+ *
+ * @author Wisnu Alfian Nur Ashar
+ */
+
+import { formatMinutes, formatRupiah } from './time.js';
+import { parseAmount } from './parse.js';
+
+const expose = (message) => Object.assign(new Error(message), { expose: true });
+
+function savedLine(saved) {
+  const bits = [];
+  if (saved.segments) bits.push(`${saved.segments} jam kerja/istirahat`);
+  if (saved.tasks) bits.push(`${saved.tasks} tugas`);
+  if (saved.finance) bits.push(`${saved.finance} catatan uang`);
+  if (saved.report) bits.push('laporan');
+  return bits.length ? `Tersimpan: ${bits.join(', ')}.` : 'Tidak ada yang bisa dicatat dari pesan itu.';
+}
+
+export function worklogTelegramCommands(worklog) {
+  const guard = (fn) => async (ctx) => {
+    try {
+      return await fn(ctx);
+    } catch (e) {
+      throw expose(e.message || 'Gagal');
+    }
+  };
+
+  return {
+    mulai: {
+      description: 'mulai bekerja',
+      run: guard(async () => {
+        const s = worklog.clockStart('telegram');
+        return `Mulai bekerja. Semangat! (sudah ${formatMinutes(s.workedMin)} hari ini)`;
+      }),
+    },
+    istirahat: {
+      description: 'mulai istirahat',
+      run: guard(async () => {
+        const s = worklog.clockPause('telegram');
+        return `Istirahat dimulai. Total kerja sejauh ini ${formatMinutes(s.workedMin)}. Kirim /lanjut saat kembali.`;
+      }),
+    },
+    lanjut: {
+      description: 'kembali bekerja setelah istirahat',
+      run: guard(async () => {
+        worklog.clockResume('telegram');
+        return 'Kembali bekerja.';
+      }),
+    },
+    selesai: {
+      description: 'selesai bekerja + ringkasan hari ini',
+      run: guard(async () => {
+        worklog.clockStop();
+        return `Selesai bekerja.\n\n${worklog.summaryText(worklog.today())}`;
+      }),
+    },
+    catat: {
+      description: 'catat bebas (tugas, uang, jam, laporan) — mis. /catat selesai fitur login, makan 25rb',
+      run: guard(async ({ arg }) => {
+        if (!arg) return 'Tulis catatannya setelah /catat. Contoh:\n/catat kerja 9-17, istirahat 12-13, selesai fitur login, makan siang 25rb';
+        const { proposal, engine } = await worklog.parseText(arg);
+        const saved = worklog.applyProposal(worklog.today(), proposal, 'telegram');
+        return `${savedLine(saved)}${engine === 'quick' ? ' (diproses tanpa AI)' : ''}`;
+      }),
+    },
+    laporan: {
+      description: 'tulis laporan harian (~300 karakter)',
+      run: guard(async ({ arg }) => {
+        if (!arg) {
+          const cur = worklog.day(worklog.today()).reportText;
+          return cur ? `Laporan hari ini:\n${cur}` : 'Belum ada laporan. Kirim: /laporan <apa yang Anda kerjakan hari ini>';
+        }
+        const r = worklog.setReport(worklog.today(), { text: arg });
+        return `Laporan disimpan (${r.text.length} karakter).`;
+      }),
+    },
+    tugas: {
+      description: 'tambah tugas yang sudah dikerjakan',
+      run: guard(async ({ arg }) => {
+        if (!arg) return 'Contoh: /tugas perbaiki bug pembayaran';
+        worklog.addTask({ date: worklog.today(), title: arg, done: true });
+        const x = worklog.day(worklog.today(), { light: true });
+        return `Tugas dicatat. Selesai hari ini: ${x.tasks.done}.`;
+      }),
+    },
+    uang: {
+      description: 'catat uang: /uang +1,5jt gaji atau /uang -25rb makan',
+      run: guard(async ({ arg }) => {
+        const m = /^([+-])?\s*((?:rp\.?\s*)?[\d.,]+\s*(?:rb|ribu|k|jt|juta)?)\s*(.*)$/i.exec(arg || '');
+        const amount = m ? parseAmount(m[2]) : null;
+        if (!m || !amount) return 'Contoh: /uang -25rb makan siang  atau  /uang +1,5jt bayaran proyek';
+        const type = m[1] === '+' ? 'income' : 'expense';
+        worklog.addFinance({ date: worklog.today(), type, amount, note: m[3] || null, category: null });
+        const x = worklog.day(worklog.today(), { light: true });
+        return `${type === 'income' ? 'Pemasukan' : 'Pengeluaran'} ${formatRupiah(amount)} dicatat. Hari ini: +${formatRupiah(x.money.income)} / -${formatRupiah(x.money.expense)}.`;
+      }),
+    },
+    hariini: {
+      description: 'ringkasan hari ini',
+      run: guard(async () => {
+        try { await worklog.refreshActivity(worklog.today()); } catch { /* optional */ }
+        return worklog.summaryText(worklog.today());
+      }),
+    },
+    minggu: {
+      description: 'ringkasan 7 hari terakhir',
+      run: guard(async () => {
+        const w = worklog.week(worklog.today());
+        const s = w.summary;
+        const lines = w.days.map((d) => `${d.date.slice(5)}  ${formatMinutes(d.workedMin).padEnd(7)} ${d.tasks.done} tugas`);
+        return [
+          '7 hari terakhir',
+          `Total kerja: ${formatMinutes(s.workedMin)}${s.targetMin ? ` (${Math.round((s.achievement || 0) * 100)}% dari target)` : ''}`,
+          `Rata-rata per hari aktif: ${formatMinutes(s.avgWorkedMin)}`,
+          `Tugas selesai: ${s.tasksDone} · Commit: ${s.commits}`,
+          `Uang bersih: ${formatRupiah(s.net)}`,
+          `Keseimbangan rata-rata: ${s.avgBalance}/100`,
+          '',
+          ...lines,
+        ].join('\n');
+      }),
+    },
+  };
+}
