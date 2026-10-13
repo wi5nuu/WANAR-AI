@@ -17,7 +17,7 @@ export function readImapConfig(env = process.env) {
   const host = String(env.IMAP_HOST || (smtpHost.startsWith('smtp.') ? `imap.${smtpHost.slice(5)}` : '')).trim();
   const port = parseInt(env.IMAP_PORT || '993', 10) || 993;
   const user = String(env.IMAP_USER || env.SMTP_USER || '').trim();
-  const pass = env.IMAP_PASS || env.SMTP_PASS || '';
+  const pass = String(env.IMAP_PASS || env.SMTP_PASS || '').replace(/[^\x20-\x7e]/g, '').trim();
   const enabled = String(env.EMAIL_WATCH ?? 'true').toLowerCase() !== 'false';
   return {
     host, port, user, pass,

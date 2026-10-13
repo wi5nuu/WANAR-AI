@@ -70,7 +70,8 @@ export function readMailConfig(env = process.env) {
   const user = (env.SMTP_USER || '').trim();
   const pass = env.SMTP_PASS || '';
   const port = parseInt(env.SMTP_PORT || '587', 10);
-  const brevoKey = String(env.BREVO_API_KEY || '').trim();
+  // Pasted secrets often carry invisible control characters; they would break the HTTP header.
+  const brevoKey = String(env.BREVO_API_KEY || '').replace(/[^\x21-\x7e]/g, '');
   const secure = String(env.SMTP_SECURE || (port === 465 ? 'true' : 'false')).toLowerCase() === 'true';
 
   let fromAddress = (env.MAIL_FROM || user || '').trim();

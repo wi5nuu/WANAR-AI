@@ -331,3 +331,11 @@ describe('Brevo network failures', async () => {
     expect(n).toBe(1);
   });
 });
+
+describe('pasted secrets with invisible characters', async () => {
+  const { readMailConfig } = await import('../src/automation/mailer.js');
+  it('strips control characters from BREVO_API_KEY and IMAP_PASS', () => {
+    expect(readMailConfig({ BREVO_API_KEY: 'xkeysib-abc\u000f', MAIL_FROM: 'a@b.co' }).brevoKey).toBe('xkeysib-abc');
+    expect(readImapConfig({ IMAP_HOST: 'h', IMAP_USER: 'u', IMAP_PASS: 'pass1234\u000f\r' }).pass).toBe('pass1234');
+  });
+});

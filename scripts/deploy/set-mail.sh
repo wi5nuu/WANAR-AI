@@ -21,7 +21,7 @@ ask() { # ask VAR "Pertanyaan" secret(0|1) [default]
   else
     read -rp "$prompt${def:+ [$def]}: " val
   fi
-  val="${val:-$def}"
+  val="$(printf '%s' "${val:-$def}" | tr -d '[:cntrl:]')"
   printf -v "$var" '%s' "$val"
 }
 
