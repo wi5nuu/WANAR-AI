@@ -51,6 +51,10 @@ import { getPoolStats } from './providers/http-client.js';
 import sqliteDb from './database.js';
 import { initAutomation } from './automation/runtime.js';
 import { createAutomationRouter } from './automation/routes.js';
+import { initWorklog } from './worklog/index.js';
+import { createWorklogRouter } from './worklog/routes.js';
+import { makeChatResponder } from './automation/telegram-inbox.js';
+import { createOwnerContext, createTelegramTranscript } from './memory/owner-context.js';
 
 const coordinator = new DistributedCoordinator();
 
@@ -63,6 +67,20 @@ const aiManager = new AIManager();
 
 // Automation (scheduler + bulk email). Constructed here, started in startServer().
 const automation = initAutomation({ db: sqliteDb, aiManager });
+
+// Work journal (jam kerja, tugas, keuangan, laporan, evaluasi). Shares the
+// Telegram bot: adds owner-only commands and gives the AI chat today's context.
+const worklog = initWorklog({ db: sqliteDb, aiManager, automation });
+// One shared memory: the Telegram AI sees the journal, automation and past
+// chats (web + Telegram), and its own conversations become chat sessions too.
+const ownerContext = createOwnerContext({ db: sqliteDb, automation, worklog });
+const telegramTranscript = createTelegramTranscript({ db: sqliteDb });
+automation.inbox.responder = makeChatResponder({
+  aiManager,
+  context: ({ text, chatId }) => ownerContext({ text, excludeSessionId: chatId ? telegramTranscript.sessionId(chatId) : null }),
+});
+automation.inbox.onExchange = (e) => telegramTranscript.record(e);
+automation.inbox.loadHistory = (chatId) => telegramTranscript.history(chatId);
 
 // ==================== MULTER FILE UPLOAD CONFIG ====================
 const ALLOWED_MIMETYPES = new Set([
@@ -673,7 +691,7 @@ function validateChatBody(body) {
       return { valid: false, error: `Message content too long (max ${MAX_CHAT_MSG_CHARS} chars)` };
     }
   }
-  const validProviders = ['openagentic', 'nvidia', 'puter', 'vector'];
+  const validProviders = ['openagentic', 'nvidia', 'puter', 'vector', 'openrouter'];
   if (body.provider && !validProviders.includes(body.provider)) {
     return { valid: false, error: `Invalid provider. Must be one of: ${validProviders.join(', ')}` };
   }
@@ -692,6 +710,8 @@ function checkTokenLimit() {
 const ESTIMATED_COST_PER_TOKEN = {
   nvidia: 1.0 / 1e6,
   puter: 0,
+  // Model gratis OpenRouter (auto-switch) tidak dikenai biaya.
+  openrouter: 0,
 };
 
 function estimateCost(provider, tokens) {
@@ -827,7 +847,7 @@ app.patch('/api/apply-history/:id', asyncHandler(async (req, res) => {
 
 app.get('/api/config', (req, res) => {
   res.json({
-    providers: ['openagentic', 'nvidia', 'puter', 'vector'],
+    providers: ['openagentic', 'nvidia', 'puter', 'vector', 'openrouter'],
     defaultProvider: config.defaultProvider,
     openagentic: {
       models: config.openagentic.models.map(m => ({
@@ -853,9 +873,17 @@ app.get('/api/config', (req, res) => {
       enabled: config.puter.enabled,
     },
     vector: {
-      models: config.vector.models.map(m => ({ id: m.id || m, label: m.label || m.id || m, rec: m.rec || false, tags: m.tags || [] })),
+      models: config.vector.models.map(m => ({ id: m.id || m, label: m.label || m.id || m, family: m.family || '', rec: m.rec || false, tags: m.tags || [] })),
       defaultModel: config.vector.defaultModel,
       maxTokens: config.vector.maxTokens,
+    },
+    openrouter: {
+      models: config.openrouter.models.map(m => ({ id: m.id || m, label: m.label || m.id || m, family: m.family || '', rec: m.rec || false, tags: m.tags || [] })),
+      defaultModel: config.openrouter.defaultModel,
+      maxTokens: config.openrouter.maxTokens,
+      configured: Boolean(config.openrouter.apiKey),
+      autoSwitchFree: config.openrouter.autoSwitchFree !== false,
+      freeModels: config.openrouter.freeModels,
     },
     tokens: { dailyLimit: config.tokens.dailyLimit, dailyCostLimit: config.tokens.dailyCostLimit },
     context: { maxTurns: config.context?.maxTurns || 20 },
@@ -976,6 +1004,9 @@ app.use('/api/automation', createAutomationRouter({
 }));
 // ==================== END AUTOMATION ====================
 
+// ==================== WORK JOURNAL ====================
+app.use('/api/worklog', createWorklogRouter({ worklog, rateLimiters }));
+
 app.get('/api/sessions/:id/messages', (req, res) => {
   const messages = db.getMessages(req.params.id);  res.json({ messages });
 });
@@ -1027,6 +1058,8 @@ app.post('/api/chat', rateLimiters.chat, asyncHandler(async (req, res) => {
     result = await aiManager.nvidiaProvider.chat(truncatedMessages, { model, tools, top_p: req.body.top_p ?? 1, seed: req.body.seed });
   } else if (provider === 'vector') {
     result = await aiManager.vectorProvider.chat(truncatedMessages, { model, tools });
+  } else if (provider === 'openrouter') {
+    result = await aiManager.openrouterProvider.chat(truncatedMessages, { model, tools });
   } else {
     const customProvider = providerRegistry.createDynamicProvider(provider);
     if (customProvider) {
@@ -1072,6 +1105,7 @@ app.post('/api/chat', rateLimiters.chat, asyncHandler(async (req, res) => {
           if (provider === 'openagentic') return aiManager.openagenticProvider.chat(msgs, { model, tools, systemPrompt: WANAR_SYSTEM_PROMPT_WEB + tokenContext });
           if (provider === 'nvidia') return aiManager.nvidiaProvider.chat(msgs, { model, tools, top_p: req.body.top_p ?? 1, seed: req.body.seed });
           if (provider === 'vector') return aiManager.vectorProvider.chat(msgs, { model, tools });
+          if (provider === 'openrouter') return aiManager.openrouterProvider.chat(msgs, { model, tools });
           const cp = providerRegistry.createDynamicProvider(provider);
           if (cp) return cp.chat(msgs, { model, tools, ...req.body });
           return null;
@@ -1099,7 +1133,11 @@ app.post('/api/chat', rateLimiters.chat, asyncHandler(async (req, res) => {
     contextCache.set(cacheKey, responseResult, 60000);
     res.json(responseResult);
   } else {
-    res.status(500).json(result || { success: false, error: 'Failed to get response' });
+    // Kegagalan upstream (model/kuota) bukan kesalahan server → 429/502 agar
+    // klien bisa membedakan "coba lagi nanti" dari "server rusak".
+    const upstream = Number(result?.code);
+    const status = (upstream === 429 || upstream === 402 || result?.daily_quota) ? 429 : 502;
+    res.status(status).json(result || { success: false, error: 'Failed to get response' });
   }
 }));
 
@@ -2736,26 +2774,36 @@ async function startServer() {
   try {
     automation.scheduler.start();
     if (automation.inbox.start()) console.log('Telegram   : inbox aktif (pelanggan mendaftar lewat /start)');
+    worklog.service.start();
+    console.log('Worklog    : jurnal kerja aktif (laporan Telegram terjadwal)');
     console.log('Automation : scheduler aktif (mode email: ' + automation.mailer.mode + ')');
   } catch (e) {
     console.log('Automation : gagal start (' + e.message + ')');
   }
   for (const sig of ['SIGINT', 'SIGTERM']) {
     process.once(sig, () => {
-      try { automation.scheduler.stop(); automation.inbox.stop(); automation.channels.closeAll(); } catch { /* ignore */ }
+      try { automation.scheduler.stop(); automation.inbox.stop(); worklog.service.stop(); automation.channels.closeAll(); } catch { /* ignore */ }
       process.exit(0);
     });
   }
 
   // Pre-warm browser pool di background agar browser_open pertama cepat.
-  import('./tools/browser-pool.js').then(async ({ warmPool }) => {
-    try {
-      const ok = await warmPool();
-      console.log(`Browser    : pool ${ok ? 'warm' : 'disabled'}`);
-    } catch (e) {
-      console.log(`Browser    : pool warmup gagal (${e.message})`);
-    }
-  }).catch(() => {});
+  // DIMATIKAN di produksi (NODE_ENV=production) agar VPS tidak langsung
+  // memuat Chromium ±300MB saat boot. Aktifkan lagi dengan BROWSER_POOL_WARM=true.
+  const warmEnabled = process.env.BROWSER_POOL_WARM === 'true' ||
+    (process.env.BROWSER_POOL_WARM !== 'false' && process.env.NODE_ENV !== 'production');
+  if (warmEnabled) {
+    import('./tools/browser-pool.js').then(async ({ warmPool }) => {
+      try {
+        const ok = await warmPool();
+        console.log(`Browser    : pool ${ok ? 'warm' : 'disabled'}`);
+      } catch (e) {
+        console.log(`Browser    : pool warmup gagal (${e.message})`);
+      }
+    }).catch(() => {});
+  } else {
+    console.log('Browser    : pool tidak di-prewarm (mode ringan; set BROWSER_POOL_WARM=true untuk mengaktifkan)');
+  }
   });
 }
 

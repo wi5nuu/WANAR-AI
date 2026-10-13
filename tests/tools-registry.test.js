@@ -27,6 +27,7 @@ import { browserTools } from '../src/tools/browser.js';
 import { browserApplyTools } from '../src/tools/browser-apply.js';
 import { desktopTools } from '../src/tools/desktop.js';
 import { automationTools } from '../src/tools/automation.js';
+import { worklogTools } from '../src/tools/worklog.js';
 import { securityTools } from '../src/tools/security.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -540,7 +541,7 @@ describe('total tool count', () => {
       systemTools.length + securityTools.length + taskManagementTools.length +
       webFetchTools.length + agentDelegationTools.length + codeIntelligenceTools.length +
       browserTools.length + browserApplyTools.length + desktopTools.length +
-      automationTools.length;
+      automationTools.length + worklogTools.length;
     expect(allTools.length).toBe(expected);
   });
 });

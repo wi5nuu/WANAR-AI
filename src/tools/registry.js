@@ -11,6 +11,7 @@ import { browserTools, executeBrowserTool } from './browser.js';
 import { browserApplyTools, executeBrowserApplyTool } from './browser-apply.js';
 import { desktopTools, executeDesktopTool } from './desktop.js';
 import { automationTools, executeAutomationTool } from './automation.js';
+import { worklogTools, executeWorklogTool } from './worklog.js';
 import {
   authorizeToolCall,
   refusalResult,
@@ -38,6 +39,7 @@ export const allTools = [
   ...browserApplyTools,
   ...desktopTools,
   ...automationTools,
+  ...worklogTools,
 ];
 
 const toolExecutors = {
@@ -92,6 +94,11 @@ const toolExecutors = {
   automation_create_job: executeAutomationTool,
   automation_draft_email: executeAutomationTool,
   automation_send_campaign: executeAutomationTool,
+  // Work journal (own data only)
+  worklog_today: executeWorklogTool,
+  worklog_summary: executeWorklogTool,
+  worklog_log: executeWorklogTool,
+  worklog_clock: executeWorklogTool,
   // Agent Delegation
   agent_explore: executeAgentDelegationTool,
   agent_security: executeAgentDelegationTool,
