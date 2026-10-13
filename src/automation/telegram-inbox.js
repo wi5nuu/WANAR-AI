@@ -38,23 +38,52 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  * bot is reachable by anyone who finds its username, and its text is untrusted
  * input, so it must never be able to act on the host.
  */
-export function makeChatResponder({ aiManager, systemPrompt }) {
-  const system = systemPrompt || [
-    'Kamu adalah Wanar AI, asisten pribadi milik Wisnu Alfian Nur Ashar.',
-    'Kamu sedang mengobrol lewat Telegram: jawab singkat dan jelas (sekitar 1-4 kalimat, lebih panjang hanya bila diminta).',
-    'Gunakan Bahasa Indonesia yang sopan dan santai. Teks biasa saja: tanpa markdown, tanpa HTML.',
-    'Dari Telegram kamu hanya bisa mengobrol: kamu tidak bisa membuka file, menjalankan perintah, atau mengakses sistem.',
-    'Jika diminta melakukan hal itu, jelaskan singkat bahwa itu dilakukan lewat aplikasi web Wanar AI.',
-    'Jangan mengarang fakta. Jika tidak tahu, katakan tidak tahu.',
+export function makeChatResponder({ aiManager, systemPrompt, context = null, ownerName = process.env.OWNER_NAME || 'Wisnu Alfian Nur Ashar' }) {
+  const first = String(ownerName).split(/\s+/)[0] || ownerName;
+
+  // Only chats in TELEGRAM_AI_CHAT_IDS ever reach this responder, so the person
+  // on the other side IS the owner. The model must talk TO them, not ABOUT them.
+  const base = systemPrompt || [
+    `Kamu adalah Wanar AI, AI agent pribadi milik ${ownerName}, yang juga mengembangkanmu.`,
+    `Orang yang sedang mengobrol denganmu di chat Telegram ini ADALAH ${ownerName} sendiri (${first}) — pemilikmu.`,
+    'Chat ini sudah terverifikasi: hanya chat milik pemilik yang bisa mengobrol denganmu.',
+    `Bicara LANGSUNG kepadanya: panggil "${first}" sesekali (tidak tiap kalimat), pakai "saya" untuk dirimu.`,
+    `JANGAN menyebut ${first} sebagai orang ketiga ("asisten milik Wisnu... siap membantu Anda") — dia sendiri yang sedang bicara denganmu.`,
+    '',
+    'Gaya: Bahasa Indonesia santai tapi sopan, ringkas (1-4 kalimat kecuali diminta lebih), teks biasa tanpa markdown/HTML. Emoji secukupnya.',
+    `Sapaan: SELALU "kamu" atau "${first}" untuknya — JANGAN "Anda". Untuk dirimu "saya".`,
+    '',
+    'Contoh yang BENAR:',
+    `- "kamu siapa?" -> "Saya Wanar AI, AI agent pribadimu, ${first} — kamu sendiri yang membangun saya. Di sini saya bisa ngobrol, bantu mikir, dan pegang jurnal kerjamu."`,
+    `- "apa tugasmu?" -> "Hari ini kamu belum mulai kerja. Kirim /mulai saat mulai, /catat untuk mencatat apa saja, dan /hariini untuk ringkasan."`,
+    `- "kirim email ke klien" -> "Dari chat ini saya belum bisa mengirim email, ${first}. Saya bisa bantu tulis draftnya sekarang, lalu kirim lewat halaman Otomasi di Wanar AI."`,
+    'Contoh yang SALAH (jangan): "Saya asisten pribadi milik Wisnu, siap membantu Anda." / "Tunggu ya, saya kerjakan."',
+    '',
+    'Batas kemampuan dari chat ini (jujur, jangan dilebih-lebihkan):',
+    '- Kamu bisa mengobrol, menjawab pertanyaan, membantu berpikir, menulis teks, dan MEMBACA data sistem Wanar AI miliknya di bawah:',
+    '  jurnal kerja, otomasi (job, kampanye, kanal), serta percakapan sebelumnya di chat web maupun Telegram.',
+    '- Untuk pertanyaan tentang aktivitasnya ("tadi saya bahas apa", "job apa yang jalan", "berapa jam kerja minggu ini"), jawab dari data itu secara spesifik (sebut nama, angka, waktu).',
+    '- Jika data di bawah tidak memuat jawabannya, katakan terus terang bahwa datanya tidak ada — jangan menebak.',
+    '- Kamu TIDAK bisa membuka file, menjalankan perintah, browsing, atau mengirim email/pesan dari obrolan bebas.',
+    '- Hal yang bisa dilakukan lewat perintah Telegram tercantum di bawah — sarankan perintah yang tepat bila relevan.',
+    '- Untuk hal lain (otomasi, kirim pesan massal, analisis, coding), arahkan ke aplikasi web Wanar AI.',
+    '- JANGAN pernah menjanjikan tindakan nanti ("tunggu ya", "akan saya kerjakan") untuk hal yang tidak bisa kamu lakukan dari sini. Katakan terus terang caranya.',
+    'Jangan mengarang fakta atau data. Jika tidak tahu, katakan tidak tahu.',
   ].join('\n');
 
-  return async ({ history, text }) => {
+  return async ({ history, text, commands = [], chatId = null }) => {
     const date = new Date().toLocaleDateString('id-ID', {
       timeZone: process.env.AUTOMATION_TZ || 'Asia/Jakarta', weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
     });
-    const messages = [...history, { role: 'user', content: text }];
-    const out = await collect(aiManager, messages, {
-      systemPrompt: `${system}\nHari ini: ${date}.`, temperature: 0.6, maxTokens: 1500,
+    let extra = '';
+    try { extra = typeof context === 'function' ? String((await context({ text, chatId })) || '') : ''; } catch { extra = ''; }
+
+    const parts = [base, `Hari ini: ${date}.`];
+    if (commands.length) parts.push(`Perintah Telegram yang tersedia untuk ${first}:\n${commands.join('\n')}`);
+    if (extra) parts.push(extra);
+
+    const out = await collect(aiManager, [...history, { role: 'user', content: text }], {
+      systemPrompt: parts.join('\n\n'), temperature: 0.6, maxTokens: 1500,
     });
     return out.text;
   };
@@ -79,6 +108,11 @@ export class TelegramInbox extends EventEmitter {
     this.history = new Map();   // chatId -> { at, turns: [{role, content}] }
     this.rate = new Map();      // chatId -> [timestamps]
     this._chains = new Map();   // chatId -> Promise (serialises replies per chat)
+    /** Optional persistence hooks (set by the server): save + restore AI conversations. */
+    this.onExchange = null;   // ({chatId, user, assistant}) => void
+    this.loadHistory = null;  // (chatId) => [{role, content}]
+    /** @type {Map<string, {description:string, run:Function}>} owner-only commands from other modules */
+    this.ownerCommands = new Map();
     this.channel = channel;
     this.store = store;
     this.pollSeconds = pollSeconds;
@@ -93,6 +127,24 @@ export class TelegramInbox extends EventEmitter {
     this.running = false;
     this._abort = false;
     this._loopPromise = null;
+  }
+
+  /**
+   * Lets another module (e.g. the work journal) add OWNER-ONLY commands.
+   * "Owner" = a chat listed in TELEGRAM_AI_CHAT_IDS. Anyone else sending these
+   * commands gets no reaction, exactly as if the command did not exist.
+   * @param {Record<string, {description:string, run:(ctx)=>Promise<string|null>}>} commands
+   */
+  registerCommands(commands) {
+    for (const [name, def] of Object.entries(commands || {})) {
+      const key = String(name).toLowerCase();
+      if (['start', 'stop', 'id', 'help'].includes(key)) continue; // never shadow the built-ins
+      if (/^[a-z_]{1,32}$/.test(key) && typeof def?.run === 'function') this.ownerCommands.set(key, def);
+    }
+  }
+
+  isOwner(chatId) {
+    return this.aiChats.has(String(chatId));
   }
 
   get enabled() {
@@ -179,7 +231,13 @@ export class TelegramInbox extends EventEmitter {
     }
 
     if (command === 'help') {
-      await this._reply(chatId, '/start — berlangganan pesan\n/stop — berhenti berlangganan\n/id — tampilkan Chat ID');
+      let help = '/start — berlangganan pesan\n/stop — berhenti berlangganan\n/id — tampilkan Chat ID';
+      if (this.isOwner(chatId) && this.ownerCommands.size) {
+        help += '\n\n<b>Jurnal kerja</b>\n' + [...this.ownerCommands]
+          .map(([k, d]) => `/${k} — ${escapeHtml(d.description || '')}`).join('\n');
+      }
+      if (this.isOwner(chatId) && this.responder) help += '\n\nPesan biasa dijawab oleh AI.';
+      await this._reply(chatId, help);
       return { action: 'help', chatId };
     }
 
@@ -209,6 +267,18 @@ export class TelegramInbox extends EventEmitter {
       return { action: 'unsubscribed', chatId };
     }
 
+
+    const plugin = this.ownerCommands.get(command);
+    if (plugin && this.isOwner(chatId) && msg.chat.type === 'private') {
+      try {
+        const out = await plugin.run({ chatId, arg, text, person });
+        if (out) for (const part of chunkText(String(out), 3500)) await this._reply(chatId, escapeHtml(part));
+      } catch (e) {
+        await this._reply(chatId, escapeHtml(e?.expose ? e.message : `Gagal: ${e?.message || 'kesalahan tidak diketahui'}`.slice(0, 300)));
+      }
+      return { action: 'command', command, chatId };
+    }
+
     return null;
   }
 
@@ -216,8 +286,19 @@ export class TelegramInbox extends EventEmitter {
 
   _historyFor(chatId) {
     const h = this.history.get(chatId);
-    if (!h || Date.now() - h.at > HISTORY_TTL_MS) return [];
-    return h.turns;
+    if (h && Date.now() - h.at <= HISTORY_TTL_MS) return h.turns;
+    // After a restart the in-memory history is gone: continue from the saved
+    // transcript so the bot still remembers what was just said.
+    if (!h && typeof this.loadHistory === 'function') {
+      try {
+        const turns = (this.loadHistory(chatId) || []).slice(-HISTORY_TURNS);
+        if (turns.length) {
+          this.history.set(chatId, { at: Date.now(), turns });
+          return turns;
+        }
+      } catch { /* history is best-effort */ }
+    }
+    return [];
   }
 
   _remember(chatId, role, content) {
@@ -255,10 +336,15 @@ export class TelegramInbox extends EventEmitter {
     try {
       await this.channel.sendAction?.(chatId, 'typing').catch(() => {});
       const history = this._historyFor(chatId).slice();
-      const answer = String(await this.responder({ chatId, text: text.slice(0, 4000), history }) || '').trim();
+      const commands = [
+        ...[...this.ownerCommands].map(([k, d]) => `/${k} — ${d.description || ''}`),
+        '/help — daftar perintah', '/id — tampilkan Chat ID',
+      ];
+      const answer = String(await this.responder({ chatId, text: text.slice(0, 4000), history, commands }) || '').trim();
       if (!answer) throw new Error('empty');
       this._remember(chatId, 'user', text.slice(0, 4000));
       this._remember(chatId, 'assistant', answer.slice(0, 4000));
+      try { this.onExchange?.({ chatId, user: text.slice(0, 4000), assistant: answer }); } catch { /* never block the reply */ }
       for (const part of chunkText(answer, 3500)) await this._reply(chatId, escapeHtml(part));
       this.emit('ai_reply', { chatId });
     } catch (e) {

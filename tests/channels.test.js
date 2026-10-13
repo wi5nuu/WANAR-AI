@@ -1319,3 +1319,34 @@ describe('a known-dead primary provider is not retried on every request', async 
     expect(aCalls).toBe(1); // before: 3 (once per request)
   });
 });
+
+describe('Telegram AI persona: talks TO the owner, knows its real abilities', async () => {
+  const { makeChatResponder } = await import('../src/automation/telegram-inbox.js');
+
+  it('tells the model the person in the chat IS the owner, and lists the installed commands', async () => {
+    let seen = '';
+    const ai = { async *chatStream(_m, opts) { seen = opts.systemPrompt; yield { type: 'content', content: 'ok' }; yield { type: 'done' }; } };
+    const respond = makeChatResponder({ aiManager: ai, ownerName: 'Wisnu Alfian Nur Ashar', context: () => 'Data jurnal: 0 jam.' });
+    await respond({ history: [], text: 'kamu siapa', commands: ['/mulai — mulai bekerja', '/catat — catat bebas'] });
+
+    expect(seen).toMatch(/ADALAH Wisnu Alfian Nur Ashar sendiri/);
+    expect(seen).toMatch(/JANGAN menyebut Wisnu sebagai orang ketiga/);
+    expect(seen).toMatch(/JANGAN pernah menjanjikan tindakan nanti/);
+    expect(seen).toContain('/mulai — mulai bekerja');
+    expect(seen).toContain('Data jurnal: 0 jam.');
+  });
+
+  it('the inbox passes its real command list to the responder', async () => {
+    const calls = [];
+    const inbox = new TelegramInbox({
+      channel: { mode: 'live', reply: async () => {}, sendAction: async () => {} },
+      store: { subscribers: { upsert() {}, setActive() {}, counts: () => ({}) }, suppressions: { add() {}, remove() {} } },
+      env: { TELEGRAM_AI_CHAT_IDS: '1811580954' },
+      responder: async (args) => { calls.push(args); return 'halo'; },
+    });
+    inbox.registerCommands({ mulai: { description: 'mulai bekerja', run: async () => 'ok' } });
+    const r = await inbox.handleUpdate({ update_id: 1, message: { text: 'apa saja tugas kamu?', chat: { id: 1811580954, type: 'private' }, from: { first_name: 'Wisnu' } } });
+    await r.done;
+    expect(calls[0].commands).toEqual(expect.arrayContaining(['/mulai — mulai bekerja', '/help — daftar perintah']));
+  });
+});
