@@ -223,7 +223,47 @@ const config = {
   },
 
   // ===== FREE PROVIDERS =====
-  
+
+  // OpenRouter — satu API untuk ratusan model, termasuk varian `:free`.
+  // AUTO-SWITCH: bila model pilihan kena rate-limit/kuota/hilang, provider
+  // otomatis pindah ke model gratis berikutnya (lihat src/providers/openrouter.js).
+  openrouter: {
+    apiKey: process.env.OPENROUTER_API_KEY,
+    baseUrl: process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1',
+    defaultModel: process.env.OPENROUTER_DEFAULT_MODEL || 'nvidia/nemotron-3-super-120b-a12b:free',
+    autoSwitchFree: process.env.OPENROUTER_AUTO_SWITCH_FREE !== 'false',
+    referer: process.env.OPENROUTER_HTTP_REFERER || '',
+    title: process.env.OPENROUTER_X_TITLE || 'Wanar AI',
+    // Urutan prioritas fallback model gratis (diurutkan dari yang paling
+    // stabil & cepat berdasarkan pengujian langsung ke katalog OpenRouter).
+    // `openrouter/free` adalah router resmi OpenRouter yang selalu tersedia —
+    // jaring pengaman sebelum kandidat dicocokkan lagi ke katalog live.
+    freeModels: (process.env.OPENROUTER_FREE_MODELS ||
+      'nvidia/nemotron-3-super-120b-a12b:free,openrouter/free,cohere/north-mini-code:free,' +
+      'nvidia/nemotron-3.5-lightning:free,nvidia/nemotron-3-ultra-550b-a55b:free,' +
+      'poolside/laguna-s-2.1:free,liquid/lfm-2.5-2.6b:free,google/gemma-4-31b-it:free,' +
+      'google/gemma-4-26b-a4b-it:free'
+    ).split(',').map(s => s.trim()).filter(Boolean),
+    models: [
+      // ── GRATIS (target auto-switch; diverifikasi langsung ke katalog OpenRouter) ──
+      { id: 'nvidia/nemotron-3-super-120b-a12b:free', label: 'Nemotron 3 Super 120B (Free)', family: 'NVIDIA', rec: true, tags: ['FREE', 'Fast', 'Auto-Switch'] },
+      { id: 'openrouter/free', label: 'Auto Free Router', family: 'OpenRouter', rec: true, tags: ['FREE', 'Always Available', 'Fallback'] },
+      { id: 'cohere/north-mini-code:free', label: 'North Mini Code (Free)', family: 'Cohere', rec: true, tags: ['FREE', 'Coding'] },
+      { id: 'nvidia/nemotron-3.5-lightning:free', label: 'Nemotron 3.5 Lightning (Free)', family: 'NVIDIA', tags: ['FREE', 'Ultra Fast'] },
+      { id: 'nvidia/nemotron-3-ultra-550b-a55b:free', label: 'Nemotron 3 Ultra 550B (Free)', family: 'NVIDIA', tags: ['FREE', 'Largest'] },
+      { id: 'poolside/laguna-s-2.1:free', label: 'Laguna S 2.1 (Free)', family: 'Poolside', tags: ['FREE'] },
+      { id: 'liquid/lfm-2.5-2.6b:free', label: 'LFM 2.5 2.6B (Free)', family: 'Liquid', tags: ['FREE', 'Tiny', 'Fast'] },
+      { id: 'google/gemma-4-31b-it:free', label: 'Gemma 4 31B (Free)', family: 'Google', tags: ['FREE', 'Sering penuh (429)'] },
+      { id: 'google/gemma-4-26b-a4b-it:free', label: 'Gemma 4 26B A4B (Free)', family: 'Google', tags: ['FREE', 'MoE', 'Sering penuh (429)'] },
+      // ── BERBAYAR (bila kuota gratis habis; otomatis pindah ke gratis saat gagal) ──
+      { id: 'deepseek/deepseek-chat-v3', label: 'DeepSeek Chat V3 (Paid)', family: 'DeepSeek', tags: ['Paid', 'Coding'] },
+      { id: 'nvidia/nemotron-3-super-120b-a12b', label: 'Nemotron 3 Super 120B (Paid)', family: 'NVIDIA', tags: ['Paid'] },
+      { id: 'google/gemma-4-31b-it', label: 'Gemma 4 31B (Paid)', family: 'Google', tags: ['Paid'] },
+    ],
+    maxTokens: parseInt(process.env.OPENROUTER_MAX_TOKENS || '8192', 10),
+    maxContextTokens: parseInt(process.env.OPENROUTER_MAX_CONTEXT_TOKENS || '131072', 10),
+  },
+
   // OpenCode Router - Access ALL FREE models via local OpenCode
   opencode: {
     apiKey: process.env.OPENCODE_API_KEY || 'sk-9router',

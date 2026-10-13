@@ -5,6 +5,7 @@ const PROVIDER_MAP = {
   nvidia:      { label: 'NVIDIA',      key: 'nvidia',      hasRoute: false },
   puter:       { label: 'Puter.js',    key: 'puter',       hasRoute: false },
   vector:      { label: 'VectorEngine',key: 'vector',      hasRoute: false },
+  openrouter:  { label: 'OpenRouter (Auto-Switch Free)', key: 'openrouter', hasRoute: false },
 };
 
 export function useConfig() {

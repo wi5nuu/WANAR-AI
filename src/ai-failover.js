@@ -73,6 +73,8 @@ const PROVIDER_TIER = {
   together: 3,
   fireworks: 3,
   opencode: 3,
+  // OpenRouter punya auto-switch internal ke model `:free` — cadangan andal.
+  openrouter: 3,
   azure: 2,
   'azure-openai': 2,
   puter: 4,

@@ -6,6 +6,7 @@ import AnthropicProvider from './providers/anthropic.js';
 import OpenAIProvider from './providers/openai.js';
 import GeminiProvider from './providers/gemini.js';
 import GroqProvider from './providers/groq.js';
+import OpenRouterProvider from './providers/openrouter.js';
 import AzureOpenAIProvider from './providers/azure-openai.js';
 // ===== FREE PROVIDERS (ONLY YOUR CONFIGURED ONES) =====
 import CerebrasProvider from './providers/cerebras.js';
@@ -182,6 +183,7 @@ export class AIManager {
     this.openaiProvider = new OpenAIProvider();
     this.geminiProvider = new GeminiProvider();
     this.groqProvider = new GroqProvider();
+    this.openrouterProvider = new OpenRouterProvider();
     this.azureOpenaiProvider = new AzureOpenAIProvider();
     
     // ===== FREE PROVIDERS (ONLY CONFIGURED ONES) =====
@@ -200,6 +202,7 @@ export class AIManager {
       openai: this.openaiProvider,
       gemini: this.geminiProvider,
       groq: this.groqProvider,
+      openrouter: this.openrouterProvider,
       azure: this.azureOpenaiProvider,
       'azure-openai': this.azureOpenaiProvider,
       // FREE PROVIDERS (ONLY YOUR CONFIGURED ONES)
@@ -726,6 +729,14 @@ export class AIManager {
           features: ['enterprise', 'sla', 'private-networking', 'compliance', 'tool-calling'],
           capabilities: this.azureOpenaiProvider.capabilities,
           stats: this.azureOpenaiProvider.getStats(),
+        },
+        openrouter: {
+          available: this.openrouterProvider.isAvailable(),
+          models: this.openrouterProvider.getAvailableModels(),
+          defaultModel: this.openrouterProvider.defaultModel,
+          features: ['auto-switch-free', 'tool-calling', 'streaming', '100+-models', 'free-tier'],
+          capabilities: this.openrouterProvider.capabilities,
+          stats: this.openrouterProvider.getStats(),
         },
         nvidia: {
           available: this.nvidiaProvider.isAvailable(),

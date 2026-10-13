@@ -1,4 +1,4 @@
-import { chromium } from 'playwright';
+import { getChromium } from './lazy-playwright.js';
 
 // ============================================
 // WANAR AI - BROWSER APPLY TOOL
@@ -80,6 +80,7 @@ export async function executeBrowserApplyTool(toolName, args) {
 
 // ── Launch headless browser ──
 async function launchBrowser() {
+  const chromium = await getChromium();
   return chromium.launch({
     headless: true,
     args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu']

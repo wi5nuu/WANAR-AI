@@ -1,4 +1,4 @@
-import { chromium } from 'playwright';
+import { getChromium } from './lazy-playwright.js';
 import { convert } from 'html-to-text';
 import { acquirePage, releasePage, fastGoto, warmPool, closePool } from './browser-pool.js';
 import { checkOutboundUrl } from '../security/ssrf-guard.js';
@@ -208,6 +208,7 @@ async function getWatchPage() {
   }
   // FULLSCREEN: window dimaksimalkan dan viewport mengikuti ukuran window
   // (viewport: null) agar user melihat halaman penuh dengan jelas.
+  const chromium = await getChromium();
   watchBrowser = await chromium.launch({
     headless: false,
     args: [
@@ -271,6 +272,7 @@ process.on('SIGINT', () => { try { watchBrowser?.close(); } catch { /* noop */ }
 
 // ── Shared browser launcher (headless, per-call) ──
 async function launchBrowser() {
+  const chromium = await getChromium();
   return chromium.launch({
     headless: true,
     args: [

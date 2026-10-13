@@ -22,9 +22,11 @@
 import { collectParsed } from '../automation/ai-compose.js';
 import { localDate, localTime, addDays, atTime, formatDateId, formatRupiah } from './time.js';
 import { parseAmount, parseQuick } from './parse.js';
+import { EMAIL_ACTION_TYPES, emailPromptLines, quickEmailReply, runEmailActions, emailFallback } from '../email-desk/assistant-actions.js';
 
 const MAX_ACTIONS = 8;
-const ACTION_TYPES = ['reminder', 'cancel_reminder', 'task', 'finance', 'clock', 'schedule', 'report'];
+const ACTION_TYPES = ['reminder', 'cancel_reminder', 'task', 'finance', 'clock', 'schedule', 'report', ...EMAIL_ACTION_TYPES];
+const isEmailAction = (a) => EMAIL_ACTION_TYPES.includes(a.type);
 
 function extractPlan(text) {
   const fenced = /```(?:json)?\s*([\s\S]*?)```/i.exec(text);
@@ -215,10 +217,15 @@ export function fallbackPlan(text, now = Date.now()) {
  * Builds the responder used for the owner's plain Telegram messages.
  * Same signature as makeChatResponder, so it is a drop-in replacement.
  */
-export function makeAssistantResponder({ aiManager, worklog, context = null, ownerName = process.env.OWNER_NAME || 'Wisnu Alfian Nur Ashar' }) {
+export function makeAssistantResponder({ aiManager, worklog, emailDesk = null, context = null, ownerName = process.env.OWNER_NAME || 'Wisnu Alfian Nur Ashar' }) {
   const first = String(ownerName).split(/\s+/)[0];
 
   return async ({ history = [], text, commands = [], chatId = null }) => {
+    // "kirim" / "batal" while an email draft waits: handled by code, instantly.
+    if (emailDesk) {
+      const quick = await quickEmailReply(emailDesk, text);
+      if (quick) return quick;
+    }
     const now = Date.now();
     const today = localDate(now);
     const settings = worklog.getSettings();
@@ -250,7 +257,10 @@ export function makeAssistantResponder({ aiManager, worklog, context = null, own
       '- "jam 12" tanpa keterangan = hari ini bila belum lewat, kalau sudah lewat = besok. "jam 2 siang" = 14:00, "jam 7 malam" = 19:00.',
       '- Hanya bertindak bila dia meminta/menyatakan sesuatu yang perlu dicatat. Pertanyaan biasa = actions kosong.',
       '- Jangan mengarang data. Jawab pertanyaan dari DATA SISTEM di bawah; bila tidak ada datanya, katakan terus terang.',
-      '- Kamu TIDAK bisa mengirim email/pesan ke orang lain, membuka file, atau browsing dari sini.',
+      emailDesk
+        ? '- Kamu TIDAK bisa mengirim pesan chat ke orang lain, membuka file, atau browsing dari sini (email bisa, lihat bagian EMAIL).'
+        : '- Kamu TIDAK bisa mengirim email/pesan ke orang lain, membuka file, atau browsing dari sini.',
+      ...(emailDesk ? emailPromptLines(emailDesk) : []),
       '',
       'Balas HANYA satu objek JSON: {"reply":"jawaban singkat untuk ' + first + '","actions":[...]}',
       'Di "reply" JANGAN mengulang detail aksi (sistem akan menambahkan konfirmasi otomatis); cukup tanggapan singkat.',
@@ -281,18 +291,26 @@ export function makeAssistantResponder({ aiManager, worklog, context = null, own
       if (fb.actions.length) plan = { reply: plan?.reply && !CLAIMS.test(plan.reply) ? plan.reply : fb.reply, actions: fb.actions };
       else if (!plan) plan = parsePlan(out.text);
     }
-    let results = executeActions(worklog, plan.actions, { chatId });
+    let emailActions = plan.actions.filter(isEmailAction);
+    if (emailDesk && !emailActions.length) {
+      emailActions = emailFallback(text);
+      if (emailActions.length) plan = { reply: plan.reply && !CLAIMS.test(plan.reply) ? plan.reply : 'Siap, ini drafnya.', actions: [...plan.actions, ...emailActions] };
+    }
+    let results = executeActions(worklog, plan.actions.filter((a) => !isEmailAction(a)), { chatId });
     if (results.length && !results.some((r) => r.startsWith('✓'))) {
       // Every model action failed validation: try the deterministic reading of the message.
       const fb = fallbackPlan(text, now);
       if (fb.actions.length) {
         const retry = executeActions(worklog, fb.actions, { chatId });
-        if (retry.some((r) => r.startsWith('✓'))) { results = retry; plan = { reply: fb.reply, actions: fb.actions }; }
+        if (retry.some((r) => r.startsWith('✓'))) { results = retry; plan = { reply: fb.reply, actions: [...fb.actions, ...emailActions] }; }
       }
+    }
+    if (emailDesk && emailActions.length) {
+      results = [...results, ...(await runEmailActions(emailDesk, emailActions, { chatId, ownerText: text }))];
     }
     // Confirmation lines are written by code; drop any the model imitated.
     const imitated = /^\s*[✓✗]/;
-    let reply = String(plan.reply || '').split(/\r?\n/).filter((l) => !imitated.test(l)).join('\n').trim() || (results.length ? 'Siap.' : '');
+    let reply = String(plan.reply || '').replace(/\bAnda\b/g, 'kamu').split(/\r?\n/).filter((l) => !imitated.test(l)).join('\n').trim() || (results.length ? 'Siap.' : '');
     // Never leave a claim of action standing when nothing was actually done.
     if (!plan.actions.length && CLAIMS.test(reply) && ASKS_ACTION.test(text)) {
       reply += '\n\n(Catatan: belum ada perubahan yang tersimpan — coba tulis lebih spesifik, mis. "ingatkan meeting jam 12".)';

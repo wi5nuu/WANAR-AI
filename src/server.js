@@ -53,6 +53,8 @@ import { initAutomation } from './automation/runtime.js';
 import { createAutomationRouter } from './automation/routes.js';
 import { initWorklog } from './worklog/index.js';
 import { createWorklogRouter } from './worklog/routes.js';
+import { initEmailDesk } from './email-desk/index.js';
+import { createEmailDeskRouter } from './email-desk/routes.js';
 import { createOwnerContext, createTelegramTranscript } from './memory/owner-context.js';
 import { makeAssistantResponder } from './worklog/assistant.js';
 
@@ -73,6 +75,8 @@ const automation = initAutomation({ db: sqliteDb, aiManager });
 const worklog = initWorklog({ db: sqliteDb, aiManager, automation });
 // One shared memory: the Telegram AI sees the journal, automation and past
 // chats (web + Telegram), and its own conversations become chat sessions too.
+// Email Desk: draft/send email from Telegram, watch replies (IMAP IDLE), auto-reply policy.
+const emailDesk = initEmailDesk({ db: sqliteDb, aiManager, automation });
 const ownerContext = createOwnerContext({ db: sqliteDb, automation, worklog });
 const telegramTranscript = createTelegramTranscript({ db: sqliteDb });
 // The owner's plain messages go to an assistant that can also ACT (reminders,
@@ -80,6 +84,7 @@ const telegramTranscript = createTelegramTranscript({ db: sqliteDb });
 automation.inbox.responder = makeAssistantResponder({
   aiManager,
   worklog: worklog.service,
+  emailDesk: emailDesk.desk,
   context: ({ text, chatId }) => ownerContext({ text, excludeSessionId: chatId ? telegramTranscript.sessionId(chatId) : null }),
 });
 automation.inbox.onExchange = (e) => telegramTranscript.record(e);
@@ -1009,6 +1014,7 @@ app.use('/api/automation', createAutomationRouter({
 
 // ==================== WORK JOURNAL ====================
 app.use('/api/worklog', createWorklogRouter({ worklog, rateLimiters }));
+app.use('/api/email-desk', createEmailDeskRouter({ emailDesk, rateLimiters }));
 
 app.get('/api/sessions/:id/messages', (req, res) => {
   const messages = db.getMessages(req.params.id);  res.json({ messages });
@@ -2814,6 +2820,9 @@ async function startServer() {
       if (automation.inbox.start()) console.log('Telegram   : inbox aktif (pelanggan mendaftar lewat /start)');
       worklog.service.start();
       console.log('Worklog    : jurnal kerja aktif (laporan Telegram terjadwal)');
+      console.log(emailDesk.watcher.start()
+        ? 'Email Desk : memantau balasan email (IMAP IDLE, realtime)'
+        : 'Email Desk : aktif tanpa pemantau balasan (IMAP_* belum diatur)');
       console.log('Automation : scheduler aktif (mode email: ' + automation.mailer.mode + ')');
     }
   } catch (e) {
@@ -2821,7 +2830,7 @@ async function startServer() {
   }
   for (const sig of ['SIGINT', 'SIGTERM']) {
     process.once(sig, () => {
-      try { automation.scheduler.stop(); automation.inbox.stop(); worklog.service.stop(); automation.channels.closeAll(); } catch { /* ignore */ }
+      try { automation.scheduler.stop(); automation.inbox.stop(); worklog.service.stop(); emailDesk.watcher.stop(); automation.channels.closeAll(); } catch { /* ignore */ }
       process.exit(0);
     });
   }

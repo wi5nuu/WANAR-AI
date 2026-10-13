@@ -6,11 +6,11 @@
  * dengan human-in-the-loop untuk field confidence rendah dan CAPTCHA.
  */
 
-import { chromium } from 'playwright';
 import { EventEmitter } from 'events';
 import os from 'os';
+import path from 'path';
 import * as db from '../database.js';
-import { createWorker } from 'tesseract.js';
+import { getChromium, getTesseract } from './lazy-playwright.js';
 
 // ── Live event bus (SSE) ──────────────────────────────────────────────────
 export const agentEvents = new EventEmitter();
@@ -282,6 +282,7 @@ async function solveAudioCaptcha(page) {
 // ── Core: OCR image in form ────────────────────────────────────────────────
 async function ocrImage(imageBuffer) {
   try {
+    const { createWorker } = await getTesseract();
     const worker = await createWorker('eng+ind');
     const { data: { text } } = await worker.recognize(imageBuffer);
     await worker.terminate();
@@ -1870,6 +1871,9 @@ export async function startJobSession(sessionId, options = {}) {
   }
 
   try {
+    // Dimuat malas — server tetap ringan dan tetap start tanpa Playwright.
+    const chromium = await getChromium();
+
     // ── Strategy 1: Connect ke Chrome yang sudah berjalan via CDP ──────────
     // Chrome harus dijalankan dengan: chrome.exe --remote-debugging-port=9222
     let usingCDP = false;
@@ -1887,7 +1891,7 @@ export async function startJobSession(sessionId, options = {}) {
       // ── Strategy 2: Playwright persistent context (Chromium) ─────────────
       emit(sessionId, 'session:browser', { message: 'Chrome CDP tidak tersedia, menggunakan Playwright Chromium...' });
       const ctx = await chromium.launchPersistentContext(
-        `C:\\Users\\${os.userInfo().username}\\AppData\\Local\\Playwright\\wanar-profile`,
+        path.join(os.homedir(), '.wanar-ai', 'playwright-profile'),
         {
           headless,
           args: [

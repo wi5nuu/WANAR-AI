@@ -21,7 +21,7 @@ import {
 const TOKEN_KEY = 'automationToken';
 const getToken = () => { try { return localStorage.getItem(TOKEN_KEY) || ''; } catch { return ''; } };
 
-async function api(path, { method = 'GET', body } = {}) {
+async function api(path, { method = 'GET', body } = {}, retried = false) {
   const headers = {};
   if (body) headers['Content-Type'] = 'application/json';
   const t = getToken();
@@ -29,6 +29,16 @@ async function api(path, { method = 'GET', body } = {}) {
   const res = await fetch(`/api/worklog${path}`, { method, headers, body: body ? JSON.stringify(body) : undefined });
   let data = {};
   try { data = await res.json(); } catch { /* non-JSON */ }
+
+  // Akses jaringan butuh AUTOMATION_TOKEN: tanya sekali, simpan, lalu coba lagi.
+  if (res.status === 401 && data.code === 'token_required' && !retried) {
+    const entered = window.prompt('Masukkan token otomasi (AUTOMATION_TOKEN di .env server):');
+    if (entered) {
+      try { localStorage.setItem(TOKEN_KEY, entered.trim()); } catch { /* private mode */ }
+      return api(path, { method, body }, true);
+    }
+  }
+
   if (!res.ok || data.success === false) {
     const err = new Error(data.error || `Permintaan gagal (HTTP ${res.status})`);
     err.data = data;

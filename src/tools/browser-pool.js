@@ -18,7 +18,7 @@
  *   - Idle reaper: browser ditutup otomatis setelah BROWSER_IDLE_MS tidak dipakai
  */
 
-import { chromium } from 'playwright';
+import { getChromium } from './lazy-playwright.js';
 
 const HEADLESS_POOL = String(process.env.BROWSER_POOL_ENABLED || 'true').toLowerCase() !== 'false';
 const BLOCK_RESOURCES = String(process.env.BROWSER_BLOCK_RESOURCES || 'true').toLowerCase() === 'true';
@@ -74,6 +74,7 @@ export async function ensurePool() {
   if (_launching) return _launching;
 
   _launching = (async () => {
+    const chromium = await getChromium();
     _browser = await chromium.launch({ headless: HEADLESS_POOL, args: launchArgs() });
     _context = await _browser.newContext(contextOptions());
     if (BLOCK_RESOURCES) {
