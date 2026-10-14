@@ -161,7 +161,7 @@ function ChatLayout() {
   }, [processing, send, provider, model, route]);
 
   const models = providerConfig ? providerConfig.models : [];
-  const providers = Object.entries(PROVIDER_MAP).map(([k, v]) => ({ key: k, label: v.label }));
+  const providers = Object.entries(PROVIDER_MAP).map(([k, v]) => ({ key: k, label: v.label + (config && config[v.key] && config[v.key].configured === false ? ' — kunci API belum diisi' : '') }));
 
   return (
     <>

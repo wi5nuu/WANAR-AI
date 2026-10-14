@@ -63,3 +63,22 @@ describe('Clouvia provider (OpenAI-compatible gateway)', () => {
     expect(config.clouvia.models.map((m) => m.id)).toContain('deepseek-v4.1-flash');
   });
 });
+
+describe('Clouvia is selectable end to end (UI list, validation, dispatch)', () => {
+  it('/api/config lists clouvia with its allowed models and a configured flag', async () => {
+    vi.resetModules();
+    const { default: request } = await import('supertest');
+    const { default: app } = await import('../src/server.js');
+    const r = await request(app).get('/api/config').expect(200);
+    expect(r.body.providers).toContain('clouvia');
+    expect(r.body.clouvia.models.map((m) => m.id)).toContain('deepseek-v4.1-flash');
+    expect(typeof r.body.clouvia.configured).toBe('boolean');
+  });
+
+  it('chat validation accepts provider "clouvia"', async () => {
+    const { default: request } = await import('supertest');
+    const { default: app } = await import('../src/server.js');
+    const r = await request(app).post('/api/chat').send({ provider: 'clouvia', model: 'deepseek-v4.1-flash', messages: [] });
+    expect(JSON.stringify(r.body)).not.toMatch(/Invalid provider/);
+  });
+});

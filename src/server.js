@@ -680,7 +680,7 @@ function validateChatBody(body) {
       return { valid: false, error: `Message content too long (max ${MAX_CHAT_MSG_CHARS} chars)` };
     }
   }
-  const validProviders = ['openagentic', 'nvidia', 'puter', 'vector', 'openrouter'];
+  const validProviders = ['openagentic', 'nvidia', 'puter', 'vector', 'openrouter', 'clouvia'];
   if (body.provider && !validProviders.includes(body.provider)) {
     return { valid: false, error: `Invalid provider. Must be one of: ${validProviders.join(', ')}` };
   }
@@ -830,7 +830,7 @@ app.patch('/api/apply-history/:id', asyncHandler(async (req, res) => {
 
 app.get('/api/config', (req, res) => {
   res.json({
-    providers: ['openagentic', 'nvidia', 'puter', 'vector', 'openrouter'],
+    providers: ['openagentic', 'nvidia', 'puter', 'vector', 'openrouter', 'clouvia'],
     defaultProvider: config.defaultProvider,
     openagentic: {
       models: config.openagentic.models.map(m => ({
@@ -867,6 +867,12 @@ app.get('/api/config', (req, res) => {
       configured: Boolean((config.openrouter || {}).apiKey),
       autoSwitchFree: (config.openrouter || {}).autoSwitchFree !== false,
       freeModels: (config.openrouter || {}).freeModels,
+    },
+    clouvia: {
+      models: ((config.clouvia || {}).models || []).map(m => ({ id: m.id || m, label: m.label || m.id || m, family: m.family || 'Clouvia', rec: m.rec || false, tags: m.tags || [] })),
+      defaultModel: (config.clouvia || {}).defaultModel,
+      maxTokens: (config.clouvia || {}).maxTokens,
+      configured: Boolean((config.clouvia || {}).apiKey),
     },
     tokens: { dailyLimit: config.tokens.dailyLimit, dailyCostLimit: config.tokens.dailyCostLimit },
     context: { maxTurns: config.context?.maxTurns || 20 },
@@ -1045,6 +1051,8 @@ app.post('/api/chat', rateLimiters.chat, asyncHandler(async (req, res) => {
     result = await aiManager.vectorProvider.chat(truncatedMessages, { model, tools });
   } else if (provider === 'openrouter') {
     result = await aiManager.openrouterProvider.chat(truncatedMessages, { model, tools });
+  } else if (provider === 'clouvia') {
+    result = await aiManager.clouviaProvider.chat(truncatedMessages, { model, tools });
   } else {
     const customProvider = providerRegistry.createDynamicProvider(provider);
     if (customProvider) {
