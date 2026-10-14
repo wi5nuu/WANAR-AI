@@ -43,8 +43,8 @@ export function emailPromptLines(desk) {
     'EMAIL — kamu BISA menulis & mengirim email untuknya dan memantau balasannya:',
     '- {"type":"email","to":["a@x.com","Budi <b@y.co>"],"subject":"...","body":"isi lengkap, sopan, bertanda tangan; boleh {{nama}} untuk nama penerima","auto_reply":"notify|approve|auto","auto_instructions":"pedoman membalas","follow_up_days":3}',
     '    membuat DRAF (satu per penerima, maks 50); sistem menampilkan pratinjau dan dia cukup membalas "kirim".',
-    '    auto_reply: notify = kabari saat ada balasan (default), approve = AI siapkan balasan lalu dia konfirmasi,',
-    '    auto = balas otomatis (hanya bila dia memintanya). follow_up_days = ingatkan & siapkan follow-up bila tidak dibalas.',
+    '    auto_reply: kosongkan = ikuti kebiasaan dia (sekarang: ' + desk.defaultMode + '). notify = kabari saja, approve = AI siapkan balasan lalu dia konfirmasi,',
+    '    auto = AI membalas sendiri. follow_up_days = ingatkan & siapkan follow-up bila tidak dibalas.',
     '- {"type":"email_send","draft":3}  kirim draf #3 (hanya bila dia menyuruh kirim)',
     '- {"type":"email_cancel","draft":3}',
     '- {"type":"email_revise","draft":3,"subject":"...","body":"..."}  ubah draf sesuai permintaannya',
@@ -141,8 +141,11 @@ export async function runEmailActions(desk, actions, { chatId = null, ownerText 
           const { ok, refused } = vetRecipients(desk, requested, ownerText);
           if (refused.length) out.push(`✗ Tidak saya pakai (tidak ada di pesanmu): ${refused.map((r) => r.email).join(', ')}`);
           if (!ok.length) { out.push('✗ Sebutkan alamat email tujuannya di pesanmu.'); break; }
-          let mode = MODE_ALIASES[String(a.auto_reply || '').toLowerCase()] || 'notify';
-          if (mode === 'auto' && !ownerWantsAuto) mode = 'notify';
+          // Standing policy decides unless the owner said otherwise in this very message.
+          let mode = MODE_ALIASES[String(a.auto_reply || '').toLowerCase()] || desk.defaultMode;
+          if (/(jangan|tidak usah|gak usah|nggak usah)\s+(di)?balas/i.test(ownerText)) mode = 'notify';
+          else if (/(konfirmasi|minta persetujuan|tunggu (izin|persetujuan))/i.test(ownerText)) mode = 'approve';
+          else if (mode === 'auto' && !ownerWantsAuto && desk.defaultMode !== 'auto') mode = desk.defaultMode;
           const followUpDays = followUpDaysIn(ownerText) || (Number(a.follow_up_days) > 0 ? Number(a.follow_up_days) : null);
           const { batch, drafts } = await desk.draftBatch({
             recipients: ok, subject: a.subject, body: a.body, brief: a.brief || (a.body ? '' : ownerText), chatId,
@@ -237,4 +240,27 @@ export async function quickDelegate(desk, text) {
   } catch (e) {
     return `✗ ${e.message}`;
   }
+}
+
+const MODE_TEXT = {
+  auto: 'Siap. Balasan email dari percakapan yang kamu mulai akan saya jawab sendiri. Kalau pertanyaannya soal uang, kontrak, atau saya tidak yakin, saya tanya kamu dulu.',
+  approve: 'Oke. Saya tulis balasannya, kamu tinggal bilang "kirim" untuk setiap email.',
+  notify: 'Baik. Saya hanya kabari kamu kalau ada balasan, tidak membalas apa pun sendiri.',
+};
+
+/**
+ * Standing policy by plain language: "balas email otomatis saja",
+ * "konfirmasi dulu sebelum balas", "jangan balas otomatis".
+ * @returns {string|null}
+ */
+export function quickPolicy(desk, text) {
+  const t = String(text || '').trim().toLowerCase();
+  if (t.length > 160) return null;
+  let mode = null;
+  if (/\b(jangan|tidak usah|gak usah|nggak usah)\s+(di)?(balas|jawab)\w*\s*(email|surel|otomatis)?/.test(t) && /(email|surel|otomatis)/.test(t)) mode = 'notify';
+  else if (/\b(konfirmasi|minta izin|tanya)\s+(dulu|saya)\b.*\b(balas|kirim)|\bemail\w*\s+(dibalas|dijawab)\s+(setelah|dengan)\s+(konfirmasi|persetujuan)/.test(t)) mode = 'approve';
+  else if (/\b(balas|jawab)(kan)?\s+(semua\s+)?(email|surel)\w*\s+(saja\s+|aja\s+)?(secara\s+)?otomatis|\bemail\w*\s+(dibalas|dijawab)\s+(secara\s+)?otomatis|\botomatis\s+(saja\s+)?(balas|jawab)\s+(semua\s+)?(email|surel)/.test(t)) mode = 'auto';
+  if (!mode) return null;
+  desk.setDefaultMode(mode);
+  return MODE_TEXT[mode];
 }

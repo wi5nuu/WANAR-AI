@@ -47,6 +47,19 @@ export function emailTelegramCommands(desk, watcher = null) {
         return `✓ Email #${r.draft.seq} ${r.dryRun ? 'DISIMULASIKAN (SMTP belum diatur)' : 'terkirim'} ke ${r.draft.to_addr}. Saya kabari kalau ada balasan.`;
       }),
     },
+    balasotomatis: {
+      description: 'atur kebiasaan membalas email: /balasotomatis auto | konfirmasi | kabari',
+      run: guard(async ({ arg }) => {
+        const map = { auto: 'auto', otomatis: 'auto', konfirmasi: 'approve', approve: 'approve', kabari: 'notify', notify: 'notify' };
+        const mode = map[String(arg || '').trim().toLowerCase()];
+        const now = desk.defaultMode;
+        const label = { auto: 'balas otomatis', approve: 'AI siapkan, kamu konfirmasi', notify: 'kabari saja' };
+        if (!mode) return `Kebiasaan sekarang: ${label[now]}.
+Ubah: /balasotomatis auto | konfirmasi | kabari`;
+        desk.setDefaultMode(mode);
+        return `Oke, sekarang: ${label[mode]}.`;
+      }),
+    },
     tolak: {
       description: 'buang draf email: /tolak 3',
       run: guard(async ({ arg }) => {

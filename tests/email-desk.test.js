@@ -56,7 +56,7 @@ describe('Email Desk: drafts and sending', () => {
     expect(w.sent).toHaveLength(1);
     await expect(w.desk.sendDraft(1)).rejects.toThrow(/sudah diproses/);
     const [t] = w.desk.threads();
-    expect(t).toMatchObject({ counterpart: 'budi@klien.com', auto_mode: 'notify' });
+    expect(t).toMatchObject({ counterpart: 'budi@klien.com', auto_mode: 'auto' }); // standing policy: reply by itself
   });
 
   it('rejects bad addresses and empty content, and "batal" discards', async () => {
@@ -104,7 +104,7 @@ describe('Email Desk: replies (realtime inbound)', () => {
   it('ignores unrelated mail and duplicates', async () => {
     const w = build();
     await sentThread(w);
-    expect(await w.desk.handleInbound(reply({ inReplyTo: null, references: [], from: { address: 'promo@toko.com' } }))).toEqual({ matched: false });
+    expect(await w.desk.handleInbound(reply({ inReplyTo: null, references: [], from: { address: 'noreply@toko.com' } }))).toEqual({ matched: false });
     const m = reply();
     await w.desk.handleInbound(m);
     expect((await w.desk.handleInbound(m)).action).toBe('duplicate');
@@ -349,7 +349,7 @@ describe('Owner delegation and quote stripping', async () => {
 
   it('"kamu saja yang balas" turns on auto-reply for the newest conversation and answers now', async () => {
     const w = build({ ai: aiReturning({ body: 'Terima kasih, Pak Budi. Akan kami tindak lanjuti.' }) });
-    await w.desk.draft({ to: 'budi@klien.com', subject: 'Status invoice', body: 'Halo', chatId: OWNER });
+    await w.desk.draft({ to: 'budi@klien.com', subject: 'Status invoice', body: 'Halo', chatId: OWNER, autoMode: 'notify' });
     await w.desk.sendDraft(1);
     await w.desk.handleInbound(reply()); // notify mode: owner just gets told
 
@@ -424,6 +424,7 @@ describe('Email massal, follow-up & anti prompt-injection', async () => {
 
   it('the model cannot send, cancel or enable auto-reply unless the owner asked', async () => {
     const w = build();
+    w.desk.setDefaultMode('notify');
     await w.desk.draft({ to: 'budi@klien.com', subject: 's', body: 'b' });
     const lines = await runEmailActions(w.desk, [{ type: 'email_send', draft: 1 }, { type: 'email_cancel', draft: 1 }], { ownerText: 'apa kabar email budi?' });
     expect(lines).toEqual(['Draf belum dikirim — ketik "kirim" bila sudah sesuai.']);
@@ -507,5 +508,119 @@ describe('legacy rows and displayed conversations', () => {
     await w.desk.draft({ to: 'wisnu@wanar.id', subject: 'Tes', body: 'x' });
     await w.desk.sendDraft(1);
     expect(w.desk.overview().threads[0].isSelf).toBe(true);
+  });
+});
+
+describe('personal agent policy', async () => {
+  const { runEmailActions } = await import('../src/email-desk/assistant-actions.js');
+
+  it('replies by itself by default and the owner can switch the standing policy', async () => {
+    const w = build({ ai: aiReturning({ body: 'Baik Pak, saya cek dulu ya.' }) });
+    expect(w.desk.defaultMode).toBe('auto');
+    w.desk.setDefaultMode('approve');
+    expect(w.desk.defaultMode).toBe('approve');
+    const d = await w.desk.draft({ to: 'budi@klien.com', subject: 's', body: 'b' });
+    expect(d.auto_mode).toBe('approve');
+    expect(() => w.desk.setDefaultMode('asal')).toThrow(/Mode/);
+  });
+
+  it('a real person writing first gets a conversation, a notification and a prepared reply (not auto-sent)', async () => {
+    const w = build({ ai: aiReturning({ body: 'Halo Sari, terima kasih. Kami kabari ya.' }) });
+    const r = await w.desk.handleInbound({
+      messageId: '<n1@toko>', from: { address: 'sari@toko.id', name: 'Sari' }, subject: 'Tanya kerja sama', text: 'Halo, bisa kerja sama?', headers: {},
+    });
+    expect(r.action).toBe('drafted');
+    expect(w.told.at(-1).t).toMatch(/Email baru dari Sari <sari@toko.id>[\s\S]*Draf email #1/);
+    expect(w.sent).toHaveLength(0);
+    expect(w.desk.threads()[0]).toMatchObject({ counterpart: 'sari@toko.id', auto_mode: 'approve' });
+  });
+
+  it('newsletters, bounces and bulk senders never create conversations or notifications', async () => {
+    const w = build({ ai: aiReturning({ body: 'x' }) });
+    for (const m of [
+      { from: { address: 'newsletter@brand.com' }, headers: { 'list-unsubscribe': '<mailto:u@x>' } },
+      { from: { address: 'info@shop.com' }, headers: { precedence: 'bulk' } },
+      { from: { address: 'wisnu@10561430.brevosend.com' }, headers: {} },
+      { from: { address: 'mailer-daemon@x.com' }, headers: {} },
+    ]) {
+      expect(await w.desk.handleInbound({ messageId: `<${Math.random()}@x>`, subject: 'Promo', text: 'beli', ...m })).toEqual({ matched: false });
+    }
+    expect(w.told).toHaveLength(0);
+    expect(w.desk.threads()).toHaveLength(0);
+  });
+
+  it('caps notifications from unknown senders per day (spam flood protection)', async () => {
+    const w = build({ ai: aiReturning({ escalate: true, reason: 'x' }) });
+    w.desk._env = { ...w.desk._env, EMAIL_NEW_SENDER_DAILY_CAP: '2' };
+    const acts = [];
+    for (let i = 0; i < 4; i++) acts.push(await w.desk.handleInbound({ messageId: `<s${i}@x>`, from: { address: `orang${i}@x.com` }, subject: 'Halo', text: 'hai', headers: {} }));
+    expect(acts.map((a) => a.matched)).toEqual([true, true, false, false]);
+  });
+
+  it('"jangan dibalas" in the owner message beats the standing policy', async () => {
+    const w = build();
+    const lines = await runEmailActions(w.desk, [{ type: 'email', to: 'budi@klien.com', subject: 's', body: 'b' }], { ownerText: 'email budi@klien.com, jangan dibalas otomatis' });
+    expect(lines[0]).toMatch(/Saat dibalas: kabari saja/);
+  });
+});
+
+describe('worklog idempotency', async () => {
+  it('a retried message does not duplicate reminders or tasks', async () => {
+    const { createWorklog } = await import('../src/worklog/index.js');
+    const db = new Database(':memory:');
+    const { service: s } = createWorklog({ db, env: {}, now: () => Date.parse('2026-10-14T01:00:00Z') });
+    const a = s.addReminder({ at: '2026-10-14 16:45', text: 'Ingatkan membuat laporan harian' });
+    const b = s.addReminder({ at: '2026-10-14 16:45', text: '  ingatkan membuat   LAPORAN harian ' });
+    expect(b.id).toBe(a.id);
+    expect(s.listReminders()).toHaveLength(1);
+    s.addReminder({ at: '2026-10-14 17:00', text: 'Ingatkan membuat laporan harian' }); // different time = different reminder
+    expect(s.listReminders()).toHaveLength(2);
+
+    const t1 = s.addTask({ date: '2026-10-14', title: 'Buat laporan harian' });
+    const t2 = s.addTask({ date: '2026-10-14', title: 'buat laporan  harian' });
+    expect(t2.id).toBe(t1.id);
+    expect(s.addTask({ date: '2026-10-14', title: 'Buat laporan harian', done: true }).done).toBe(1);
+    expect(s.store.tasks.forDate('2026-10-14')).toHaveLength(1);
+  });
+});
+
+describe('Telegram bot is private', async () => {
+  const { TelegramInbox } = await import('../src/automation/telegram-inbox.js');
+  const mk = (env) => {
+    const replies = [];
+    const inbox = new TelegramInbox({
+      channel: { mode: 'live', reply: async (c, h) => replies.push(h), sendAction: async () => {} },
+      store: { subscribers: { upsert() {}, setActive() {}, counts: () => ({ total: 0, active: 0 }) }, suppressions: { add() {}, remove() {} } },
+      env,
+    });
+    return { inbox, replies };
+  };
+  const start = (id) => ({ update_id: 1, message: { text: '/start', chat: { id, type: 'private' }, from: { first_name: 'X' } } });
+
+  it('with an owner configured, strangers cannot subscribe to broadcasts', async () => {
+    const { inbox, replies } = mk({ TELEGRAM_AI_CHAT_IDS: '111' });
+    expect((await inbox.handleUpdate(start(999))).action).toBe('rejected');
+    expect(replies.at(-1)).toMatch(/tidak diizinkan/);
+    expect((await inbox.handleUpdate(start(111))).action).toBe('subscribed');
+  });
+
+  it('can still be opened on purpose', async () => {
+    const { inbox } = mk({ TELEGRAM_AI_CHAT_IDS: '111', TELEGRAM_OPEN_SUBSCRIPTION: 'true' });
+    expect((await inbox.handleUpdate(start(999))).action).toBe('subscribed');
+  });
+});
+
+describe('plain-language reply policy', async () => {
+  const { quickPolicy } = await import('../src/email-desk/assistant-actions.js');
+  it('switches the standing policy from natural sentences', () => {
+    const w = build();
+    expect(quickPolicy(w.desk, 'balas semua email otomatis saja')).toMatch(/jawab sendiri/);
+    expect(w.desk.defaultMode).toBe('auto');
+    expect(quickPolicy(w.desk, 'konfirmasi dulu sebelum balas email')).toMatch(/kirim/);
+    expect(w.desk.defaultMode).toBe('approve');
+    expect(quickPolicy(w.desk, 'jangan balas email otomatis')).toMatch(/kabari/);
+    expect(w.desk.defaultMode).toBe('notify');
+    expect(quickPolicy(w.desk, 'bagaimana cuaca besok?')).toBeNull();
+    expect(w.desk.defaultMode).toBe('notify');
   });
 });

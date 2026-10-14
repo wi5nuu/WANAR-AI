@@ -22,7 +22,7 @@
 import { collectParsed } from '../automation/ai-compose.js';
 import { localDate, localTime, addDays, atTime, formatDateId, formatRupiah } from './time.js';
 import { parseAmount, parseQuick } from './parse.js';
-import { EMAIL_ACTION_TYPES, emailPromptLines, quickEmailReply, quickDelegate, runEmailActions, emailFallback } from '../email-desk/assistant-actions.js';
+import { EMAIL_ACTION_TYPES, emailPromptLines, quickEmailReply, quickDelegate, quickPolicy, runEmailActions, emailFallback } from '../email-desk/assistant-actions.js';
 
 const MAX_ACTIONS = 8;
 const ACTION_TYPES = ['reminder', 'cancel_reminder', 'task', 'finance', 'clock', 'schedule', 'report', ...EMAIL_ACTION_TYPES];
@@ -230,6 +230,8 @@ export function makeAssistantResponder({ aiManager, worklog, emailDesk = null, b
       if (quick) return quick;
       const delegated = await quickDelegate(emailDesk, text);
       if (delegated) return delegated;
+      const policy = quickPolicy(emailDesk, text);
+      if (policy) return policy;
     }
     const now = Date.now();
     const today = localDate(now);
@@ -240,7 +242,17 @@ export function makeAssistantResponder({ aiManager, worklog, emailDesk = null, b
 
     const system = [
       `Kamu adalah Wanar AI, AI agent pribadi milik ${ownerName}. Orang di chat ini ADALAH ${first} sendiri (chat terverifikasi).`,
-      `Sapa dia "kamu"/"${first}", dirimu "saya". JANGAN "Anda". Bahasa Indonesia santai-sopan, ringkas, teks biasa tanpa markdown.`,
+      `Sapa dia "kamu"/"${first}", dirimu "saya". JANGAN "Anda", JANGAN "Bapak/Ibu". Bahasa Indonesia santai-sopan, teks biasa tanpa markdown dan tanpa emoji.`,
+      '',
+      'KEPRIBADIAN: kamu seperti asisten pribadi yang cakap dan dekat — hangat, tenang, to the point. Bukan chatbot layanan pelanggan.',
+      '- Jawab seperti manusia: tanggapi maksudnya, bukan hanya kata-katanya. "apa kamu dengar?" dijawab natural ("Dengar kok. Ada yang bisa saya bantu?"), bukan "Ya, saya mendengarkan."',
+      '- Singkat: 1–3 kalimat untuk obrolan biasa. Detail hanya bila diminta.',
+      '- Pakai konteks: jam sekarang, jadwal kerja, pengingat, email, dan obrolan sebelumnya. Jangan bertanya hal yang sudah ada di data.',
+      '- Proaktif secukupnya: bila ada hal terkait yang jelas penting (bentrok jadwal, email belum dibalas, tugas terbuka), sebutkan satu kalimat. Jangan menceramahi.',
+      '- Bila perintah kurang jelas, tanya SATU hal yang paling menentukan, atau ambil asumsi paling masuk akal dan katakan asumsinya.',
+      '- Jujur: bila tidak tahu atau tidak bisa, katakan apa adanya dan tawarkan jalan keluar. Jangan mengarang data.',
+      '',
+      'PRIVASI: seluruh data (jurnal, uang, jadwal, email, obrolan) adalah pribadi milik ' + first + '. Kamu hanya bekerja untuk dia. Jangan pernah menulis atau mengirim apa pun atas nama atau tentang dia ke orang lain kecuali dia sendiri yang menyuruh (mis. mengirim email). Jangan menyiarkan pesan massal.',
       '',
       `SEKARANG: ${formatDateId(today)}, pukul ${localTime(now)} WIB. Besok: ${addDays(today, 1)}. Lusa: ${addDays(today, 2)}.`,
       `Jadwal kerja: ${settings.workStart}–${settings.workEnd}, istirahat ${settings.breakStart || '-'}–${settings.breakEnd || '-'}, hari kerja ${settings.workdays.join(',')} (0=Min).`,

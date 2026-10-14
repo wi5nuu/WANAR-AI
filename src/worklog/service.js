@@ -423,6 +423,17 @@ export class WorklogService extends EventEmitter {
     const d = this._date(date);
     const t = String(title || '').replace(/\s+/g, ' ').trim();
     if (!t) throw new WorklogError('Judul tugas kosong');
+    // Idempotent: the same task on the same day is one task (a retried message must not duplicate it).
+    const norm = (x) => String(x || '').toLowerCase().replace(/\s+/g, ' ').trim();
+    const same = this.store.tasks.forDate(d).find((x) => norm(x.title) === norm(t.slice(0, 160)));
+    if (same) {
+      if (done && !same.done) {
+        const upd = this.store.tasks.update(same.id, { done: true });
+        this._changed(d, 'task');
+        return upd;
+      }
+      return same;
+    }
     const task = this.store.tasks.add({ date: d, title: t.slice(0, 160), done, minutes, project: project ? String(project).slice(0, 60) : null });
     this._changed(d, 'task');
     return task;
@@ -507,6 +518,10 @@ export class WorklogService extends EventEmitter {
     const t = String(text || '').replace(/\s+/g, ' ').trim();
     if (!t) throw new WorklogError('Isi pengingat kosong');
     if (this.store.reminders.upcoming(500).length >= 200) throw new WorklogError('Terlalu banyak pengingat aktif (maks 200)');
+    // Idempotent: same text within the same minute is the same reminder.
+    const normText = (x) => String(x || '').toLowerCase().replace(/\s+/g, ' ').trim();
+    const dup = this.store.reminders.upcoming(500).find((x) => Math.abs(x.at - Math.max(ms, now)) < 60_000 && normText(x.text) === normText(t.slice(0, 300)));
+    if (dup) return dup;
     const r = this.store.reminders.add({ at: Math.max(ms, now), text: t.slice(0, 300), chatId: chatId || this._chatId(), source });
     this._changed(localDate(r.at), 'reminder');
     return r;

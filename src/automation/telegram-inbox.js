@@ -120,6 +120,14 @@ export class TelegramInbox extends EventEmitter {
     this.allowed = new Set(
       String(env.TELEGRAM_ALLOWED_CHAT_IDS || '').split(',').map((s) => s.trim()).filter(Boolean)
     );
+    // Personal agent: when an owner is configured and no explicit allowlist or
+    // join code exists, only the owner's chat may subscribe. Otherwise anyone who
+    // finds the bot could /start and receive broadcasts. Opt out with
+    // TELEGRAM_OPEN_SUBSCRIPTION=true.
+    if (!this.allowed.size && !this.joinCode && this.aiChats.size
+      && String(env.TELEGRAM_OPEN_SUBSCRIPTION || '').toLowerCase() !== 'true') {
+      this.allowed = new Set(this.aiChats);
+    }
     this.welcome = env.TELEGRAM_WELCOME
       || 'Halo {nama}! Anda sekarang terdaftar untuk menerima pesan dari kami. Kirim /stop kapan saja untuk berhenti.';
     this.wanted = String(env.TELEGRAM_POLLING || '').toLowerCase() === 'true';
