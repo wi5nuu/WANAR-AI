@@ -91,3 +91,16 @@ describe('Briefing', () => {
     expect(await respond({ text: 'Briefing' })).toMatch(/^Briefing — /);
   });
 });
+
+describe('Briefing de-duplication', () => {
+  it('lists an open task once even if it is open today and yesterday', () => {
+    const x = setup();
+    const s = x.worklog.service;
+    const today = s.today();
+    const y = new Date(Date.parse(`${today}T12:00:00Z`) - 86_400_000).toISOString().slice(0, 10);
+    s.addTask({ date: today, title: 'Buat laporan harian' });
+    s.addTask({ date: y, title: 'buat  laporan harian' });
+    const text = x.briefing.build();
+    expect((text.match(/Buat laporan harian/gi) || []).length).toBe(1);
+  });
+});

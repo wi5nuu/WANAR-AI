@@ -78,7 +78,10 @@ export function createBriefing({ worklog, desk = null, notify = null, defaultCha
     }
 
     // open tasks (today + carried over from yesterday)
-    const open = [...(worklog.day(today).taskList || []), ...(worklog.day(addDays(today, -1)).taskList || [])].filter((t) => !t.done);
+    const seenTitles = new Set();
+    const open = [...(worklog.day(today).taskList || []), ...(worklog.day(addDays(today, -1)).taskList || [])]
+      .filter((t) => !t.done)
+      .filter((t) => { const k = String(t.title).toLowerCase().replace(/s+/g, ' ').trim(); if (seenTitles.has(k)) return false; seenTitles.add(k); return true; });
     if (open.length) {
       lines.push('', `Tugas terbuka (${open.length}):`);
       for (const t of open.slice(0, 8)) lines.push(`  • ${clip(t.title, 90)}`);
