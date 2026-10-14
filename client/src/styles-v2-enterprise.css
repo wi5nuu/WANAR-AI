@@ -2250,3 +2250,57 @@ body {
   cursor: pointer;
   white-space: nowrap;
 }
+
+/* ============================================================
+   CHAT DI HP — tinggi layar nyata, riwayat, formulir
+   - 100vh di HP lebih tinggi dari layar yang terlihat (bar alamat + keyboard),
+     sehingga formulir chat terpotong. --app-h diisi dari visualViewport
+     (lib/viewport.js); 100dvh adalah cadangannya.
+   - Tombol hapus riwayat dulu hanya muncul saat :hover, yang tidak ada di layar sentuh.
+   ============================================================ */
+html body,
+html body #root,
+html body .app {
+  height: 100vh;
+  height: 100dvh;
+  height: var(--app-h, 100dvh);
+}
+html body .aurora-bg { height: 100vh; height: 100dvh; }
+
+/* layar sentuh: aksi per-item selalu terlihat dan terbaca */
+@media (hover: none) {
+  .sidebar-session-delete {
+    opacity: 1;
+    background: transparent;
+    color: var(--text-tertiary);
+  }
+  .sidebar-session-delete:active { color: var(--error); }
+}
+
+@media (max-width: 768px) {
+  /* sidebar sekarang laci 280px: label harus tampil lagi (aturan lama untuk rel ikon) */
+  .sidebar .sidebar-logo-text { display: block; }
+  .sidebar .sidebar-new-chat span { display: inline; }
+
+  html body .sidebar { height: var(--app-h, 100dvh); }
+  .sidebar-header { position: relative; padding: 14px; }
+  .sidebar-logo { padding-right: 52px; }
+  .sidebar-close-btn {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    width: 40px;
+    height: 40px;
+    border-radius: 10px;
+  }
+  .sidebar-new-chat { min-height: 44px; margin-top: 10px; }
+
+  /* judul riwayat boleh dua baris, bukan terpotong di huruf ke-25 */
+  .sidebar-session { min-height: 48px; }
+
+  /* formulir chat: jauh dari tepi bawah (home indicator) dan tidak melebar */
+  .input-container {
+    padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+  }
+  .input-wrapper textarea { font-size: 16px; } /* < 16px memicu zoom otomatis di iPhone */
+}

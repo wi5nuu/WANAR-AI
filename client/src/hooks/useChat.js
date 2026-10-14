@@ -126,7 +126,6 @@ async function uploadFiles(files) {
           charCount: data.charCount ?? (data.content || '').length,
           truncated: Boolean(data.truncated),
           engine: data.engine || null,
-          imageData: data.imageData || null,
         });
       } else {
         const serverMsg = data?.error || `HTTP ${resp.status}`;

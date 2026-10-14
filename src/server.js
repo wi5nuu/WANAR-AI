@@ -126,8 +126,6 @@ const ALLOWED_MIMETYPES = new Set([
   'application/vnd.oasis.opendocument.text',
   'application/vnd.oasis.opendocument.spreadsheet',
   'application/vnd.oasis.opendocument.presentation',
-  // Images
-  'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/svg+xml', 'image/bmp', 'image/tiff',
   // Archives
   'application/zip', 'application/x-tar', 'application/gzip', 'application/x-rar-compressed',
   'application/x-7z-compressed',
@@ -143,7 +141,6 @@ const ALLOWED_EXTENSIONS = new Set([
   'sh','bash','bat','cmd','ps1','env','gitignore','toml','ini','cfg','conf',
   'log','rs','go','rb','php','swift','kt','kts','r','m','h','hpp','vue','svelte',
   'pdf','doc','docx','odt','rtf','ppt','pptx','odp','xls','xlsx','ods',
-  'png','jpg','jpeg','gif','webp','svg','bmp','tiff','tif',
   'zip','tar','gz','tgz','rar','7z',
 ]);
 
@@ -162,11 +159,15 @@ function getFileExt(originalname) {
   return parts.length > 1 ? parts.pop().toLowerCase() : '';
 }
 
+const PICTURE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'tif', 'tiff', 'svg', 'heic', 'heif', 'ico', 'avif']);
+
 function isAllowedFile(mimetype, originalname) {
   const ext = getFileExt(originalname);
+  // Foto/gambar tidak didukung (fitur dihapus); ekstensi menang atas mimetype generik.
+  if (PICTURE_EXTENSIONS.has(ext) || (mimetype && mimetype.startsWith('image/'))) return false;
   if (ext && ALLOWED_EXTENSIONS.has(ext)) return true;
   if (mimetype && ALLOWED_MIMETYPES.has(mimetype)) return true;
-  if (mimetype && (mimetype.startsWith('text/') || mimetype.startsWith('image/'))) return true;
+  if (mimetype && mimetype.startsWith('text/')) return true;
   return false;
 }
 
@@ -430,19 +431,6 @@ async function extractPdf(buffer, originalname) {
   }
 }
 
-// ---------- OCR gambar via tesseract.js (lazy, dengan timeout) ----------
-
-async function ocrImage(buffer, timeoutMs = 25000) {
-  const { default: Tesseract } = await import('tesseract.js');
-  const job = Tesseract.recognize(buffer, 'ind+eng');
-  const timeout = new Promise((_, reject) =>
-    setTimeout(() => reject(new Error('OCR timeout')), timeoutMs)
-  );
-  const result = await Promise.race([job, timeout]);
-  const text = normalizeExtractedText(result?.data?.text || '');
-  return text;
-}
-
 // ---------- Arsip ZIP (daftar + ekstrak file teks di dalamnya) ----------
 
 async function extractZip(buffer, originalname) {
@@ -499,30 +487,6 @@ async function extractFileContentDetailed(buffer, mimetype, originalname) {
     text = normalizeExtractedText(text);
     const { text: out, truncated } = truncateSmart(text);
     return { content: out, pages: null, truncated, charCount: text.length, engine: 'utf8' };
-  }
-
-  // SVG adalah XML teks
-  if (ext === 'svg' || mime === 'image/svg+xml') {
-    const text = normalizeExtractedText(buffer.toString('utf8'));
-    const { text: out, truncated } = truncateSmart(text);
-    return { content: out, pages: null, truncated, charCount: text.length, engine: 'svg' };
-  }
-
-  // Images — OCR agar teks di dalam gambar tetap terbaca akurat
-  if (mime.startsWith('image/') || ['png','jpg','jpeg','gif','webp','bmp','tiff','tif'].includes(ext)) {
-    if (buffer.length > 8 * 1024 * 1024) {
-      return { content: `[Gambar ${originalname}, ${kb}KB. Terlalu besar untuk OCR (maks 8MB).]`, pages: null, truncated: false, charCount: 0, engine: 'none' };
-    }
-    try {
-      const ocr = await ocrImage(buffer);
-      if (ocr.trim().length >= 10) {
-        const { text: out, truncated } = truncateSmart(ocr);
-        return { content: `--- OCR ${originalname} ---\n${out}`, pages: null, truncated, charCount: ocr.length, engine: 'tesseract' };
-      }
-      return { content: `[Gambar ${originalname}, ${kb}KB. Tidak ada teks terdeteksi (OCR kosong).]`, pages: null, truncated: false, charCount: 0, engine: 'tesseract-empty' };
-    } catch {
-      return { content: `[Gambar ${originalname}, ${kb}KB, tipe: ${mime || ext}. OCR gagal — gambar diteruskan sebagai visual saja.]`, pages: null, truncated: false, charCount: 0, engine: 'none' };
-    }
   }
 
   // PDF — ekstraksi teks akurat via pdf-parse v2
@@ -789,11 +753,6 @@ app.post('/api/upload', handleUpload, asyncHandler(async (req, res) => {
     const detailed = await extractFileContentDetailed(buffer, mimetype, originalname);
     const content = detailed.content;
 
-    // For images, also return base64 for potential vision use (batasi 5MB agar respons tidak jumbo)
-    let imageData = null;
-    if ((mimetype && mimetype.startsWith('image/')) && buffer.length <= 5 * 1024 * 1024) {
-      imageData = `data:${mimetype};base64,${buffer.toString('base64')}`;
-    }
 
     // Preview = first 500 chars
     const preview = content.length > 500 ? content.slice(0, 500) + '...' : content;
@@ -805,7 +764,6 @@ app.post('/api/upload', handleUpload, asyncHandler(async (req, res) => {
       size,
       content,
       preview,
-      imageData,
       pages: detailed.pages ?? null,
       charCount: detailed.charCount ?? content.length,
       truncated: Boolean(detailed.truncated),

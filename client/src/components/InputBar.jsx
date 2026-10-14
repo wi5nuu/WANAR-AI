@@ -21,7 +21,6 @@ const MicImpl =
     : null;
 
 const ACCEPTED_TYPES = [
-  'image/*',
   '.pdf', '.txt', '.md', '.csv', '.json', '.xml', '.yaml', '.yml',
   '.js', '.jsx', '.ts', '.tsx', '.py', '.java', '.cpp', '.c', '.cs',
   '.html', '.css', '.scss', '.sql', '.sh', '.bat', '.env',
@@ -358,7 +357,9 @@ export default function InputBar({
 
   const addFiles = useCallback((files) => {
     const current = attachments || [];
+    const isPicture = (f) => /^image//i.test(f.type || '') || /.(png|jpe?g|gif|webp|bmp|tiff?|svg|heic|heif)$/i.test(f.name || '');
     const newFiles = Array.from(files).filter(f => {
+      if (isPicture(f)) { alert('Upload foto/gambar tidak didukung. Lampirkan dokumen (PDF, teks, kode, spreadsheet).'); return false; }
       if (f.size > MAX_FILE_SIZE) { alert(`File "${f.name}" terlalu besar. Maksimal 20MB.`); return false; }
       if (current.length >= MAX_FILES) { alert(`Maksimal ${MAX_FILES} file sekaligus.`); return false; }
       if (current.find(x => x.name === f.name && x.size === f.size)) return false;
@@ -446,17 +447,9 @@ export default function InputBar({
                 background: 'var(--bg-tertiary)', border: '1px solid var(--border-primary)',
                 fontSize: '12px', color: 'var(--text-secondary)', maxWidth: '200px',
               }}>
-                {file.type.startsWith('image/') ? (
-                  <img
-                    src={URL.createObjectURL(file)}
-                    alt={file.name}
-                    style={{ width: '20px', height: '20px', objectFit: 'cover', borderRadius: '3px' }}
-                  />
-                ) : (
-                  <span style={{ color: 'var(--brand-primary)', flexShrink: 0 }}>
-                    <FileIcon type={file.type} />
-                  </span>
-                )}
+                <span style={{ color: 'var(--brand-primary)', flexShrink: 0 }}>
+                  <FileIcon type={file.type} />
+                </span>
                 <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
                   {file.name}
                 </span>
@@ -487,7 +480,7 @@ export default function InputBar({
           <textarea
             ref={textareaRef}
             className="input-textarea"
-            placeholder={voiceMode ? '🎙️ Mode bicara aktif — ngomong aja…' : hasAttachments ? "Add a message (optional)..." : "Type a message or drop files here..."}
+            placeholder={voiceMode ? '🎙️ Mode bicara aktif — ngomong aja…' : hasAttachments ? "Tambah pesan (opsional)…" : (typeof window !== 'undefined' && window.matchMedia?.('(hover: none)').matches ? "Tulis pesan atau lampirkan dokumen…" : "Tulis pesan, atau seret dokumen ke sini…")}
             rows={1}
             value={inputValue}
             onChange={handleInput}
