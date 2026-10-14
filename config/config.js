@@ -364,6 +364,24 @@ const config = {
     maxContextTokens: parseInt(process.env.HUGGINGFACE_MAX_CONTEXT_TOKENS || '128000', 10),
   },
 
+  // Clouvia Router - gateway OpenAI-compatible (https://router.clouvia.id). Akun punya saldo
+  // BERBAYAR di samping gratis, jadi hanya model di CLOUVIA_MODELS yang boleh dipakai
+  // (bawaan: deepseek-v4.1-flash yang gratis). Lihat src/providers/clouvia.js.
+  clouvia: {
+    apiKey: process.env.CLOUVIA_API_KEY,
+    baseUrl: process.env.CLOUVIA_BASE_URL || 'https://router.clouvia.id/v1',
+    defaultModel: process.env.CLOUVIA_DEFAULT_MODEL || 'deepseek-v4.1-flash',
+    models: (process.env.CLOUVIA_MODELS || 'deepseek-v4.1-flash').split(',').map((s) => s.trim()).filter(Boolean).map((id, i) => ({
+      id,
+      label: id === 'deepseek-v4.1-flash' ? 'DeepSeek V4.1 Flash (Clouvia, gratis)' : id + ' (Clouvia)',
+      family: 'Clouvia',
+      rec: i === 0,
+      tags: id === 'deepseek-v4.1-flash' ? ['FREE', 'Fast', 'Coding'] : ['Clouvia'],
+    })),
+    maxTokens: parseInt(process.env.CLOUVIA_MAX_TOKENS || '8192', 10),
+    maxContextTokens: parseInt(process.env.CLOUVIA_MAX_CONTEXT_TOKENS || '128000', 10),
+  },
+
   // Together AI - Free $25 Credit
   together: {
     apiKey: process.env.TOGETHER_API_KEY,

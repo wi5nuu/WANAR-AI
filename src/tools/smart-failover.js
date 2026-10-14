@@ -44,7 +44,7 @@ export class SmartFailoverSystem {
       // Secondary tier - good alternatives
       secondary: ['nvidia', 'groq', 'gemini'],
       // Tertiary tier - free/budget options
-      tertiary: ['cerebras', 'hyperbolic', 'together', 'fireworks'],
+      tertiary: ['cerebras', 'hyperbolic', 'together', 'fireworks', 'clouvia'],
       // Fallback tier - last resort
       fallback: ['puter', 'vector']
     };

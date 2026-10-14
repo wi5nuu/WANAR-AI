@@ -71,6 +71,7 @@ const PROVIDER_TIER = {
   vector: 3,
   cerebras: 3,
   together: 3,
+  clouvia: 2,
   fireworks: 3,
   opencode: 3,
   // OpenRouter punya auto-switch internal ke model `:free` — cadangan andal.

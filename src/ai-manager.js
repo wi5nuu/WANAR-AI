@@ -11,6 +11,7 @@ import AzureOpenAIProvider from './providers/azure-openai.js';
 // ===== FREE PROVIDERS (ONLY YOUR CONFIGURED ONES) =====
 import CerebrasProvider from './providers/cerebras.js';
 import TogetherProvider from './providers/together.js';
+import ClouviaProvider from './providers/clouvia.js';
 import FireworksProvider from './providers/fireworks.js';
 import OpenCodeProvider from './providers/opencode.js';
 import ContextManager from './context-manager.js';
@@ -189,6 +190,7 @@ export class AIManager {
     // ===== FREE PROVIDERS (ONLY CONFIGURED ONES) =====
     this.cerebrasProvider = new CerebrasProvider();
     this.togetherProvider = new TogetherProvider();
+    this.clouviaProvider = new ClouviaProvider();
     this.fireworksProvider = new FireworksProvider();
     this.opencodeProvider = new OpenCodeProvider();
     
@@ -208,6 +210,7 @@ export class AIManager {
       // FREE PROVIDERS (ONLY YOUR CONFIGURED ONES)
       cerebras: this.cerebrasProvider,
       together: this.togetherProvider,
+      clouvia: this.clouviaProvider,
       fireworks: this.fireworksProvider,
       opencode: this.opencodeProvider,
     };
