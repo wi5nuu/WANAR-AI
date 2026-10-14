@@ -78,7 +78,7 @@ const worklog = initWorklog({ db: sqliteDb, aiManager, automation });
 // One shared memory: the Telegram AI sees the journal, automation and past
 // chats (web + Telegram), and its own conversations become chat sessions too.
 // Email Desk: draft/send email from Telegram, watch replies (IMAP IDLE), auto-reply policy.
-const emailDesk = initEmailDesk({ db: sqliteDb, aiManager, automation });
+const emailDesk = initEmailDesk({ db: sqliteDb, aiManager, automation, worklog: worklog.service });
 // Morning briefing (schedule, reminders, email, tasks) — built from data, no AI call.
 const briefing = createBriefing({
   worklog: worklog.service,

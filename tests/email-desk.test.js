@@ -724,3 +724,58 @@ describe('copy in Sent folder + campaign mail detection', () => {
     expect(await w.desk.handleInbound({ messageId: '<g1@g>', from: { address: 'googlecloud@google.com' }, subject: 'ROI from AI', text: g, headers: {} })).toEqual({ matched: false });
   });
 });
+
+describe('meetings found in email go into the schedule by themselves', async () => {
+  const { extractMeeting } = await import('../src/email-desk/meetings.js');
+  const NOW = Date.parse('2026-10-14T06:48:00Z'); // Rabu 13:48 WIB
+
+  it('reads the real "rapat jam 2 siang, 30 menit, di ruangan IT" email', () => {
+    const m = extractMeeting({ subject: 'Re: Rapat Meeting', from: 'Ngoding', now: NOW,
+      text: 'kita akan ada rapat meeting jam 2 siang sekitar 30menit di ruangan IT di tempat saya sekarang.' });
+    expect(m).toMatchObject({ date: '2026-10-14', time: '14:00', durationMin: 30, place: 'ruangan IT', assumedDate: true, past: false });
+  });
+
+  it('understands days, 24h times, zoom links; ignores promos and chit-chat', () => {
+    expect(extractMeeting({ subject: 'Zoom', text: 'Besok kita zoom jam 9 pagi selama 1 jam https://us02web.zoom.us/j/1', now: NOW }))
+      .toMatchObject({ date: '2026-10-15', time: '09:00', durationMin: 60, assumedDate: false });
+    expect(extractMeeting({ subject: 'Sync', text: 'Jumat pukul 15.30 kita sync di kantor Sudirman', now: NOW }))
+      .toMatchObject({ date: '2026-10-16', time: '15:30', place: 'kantor Sudirman' });
+    expect(extractMeeting({ subject: 'Promo', text: 'Diskon hari ini jam 12.00!', now: NOW })).toBeNull(); // no meeting word
+    expect(extractMeeting({ subject: 'Halo', text: 'besok kita ngopi', now: NOW })).toBeNull(); // no time
+    expect(extractMeeting({ subject: 'Rapat', text: 'rapat jam 9 pagi hari ini', now: NOW })).toMatchObject({ past: true });
+  });
+
+  it('an incoming email with a meeting creates a task, two reminders and a heads-up — once', async () => {
+    const { createWorklog } = await import('../src/worklog/index.js');
+    const { createEmailDesk } = await import('../src/email-desk/index.js');
+    const db = new Database(':memory:');
+    const wl = createWorklog({ db, env: {}, now: () => NOW });
+    const told = [];
+    const automation = {
+      mailer: { mode: 'live', cfg: { fromAddress: 'wisnu@wanar.id', throttleMs: 0 }, async send() { return { messageId: '<x@w>', dryRun: false }; } },
+      channels: { has: () => true, get: () => ({ mode: 'live', send: async ({ text }) => told.push(text) }) },
+    };
+    const { desk } = createEmailDesk({ db, automation, env: { TELEGRAM_AI_CHAT_IDS: '1', EMAIL_WATCH: 'false' }, now: () => NOW, worklog: wl.service });
+    desk.setDefaultMode('notify'); // keep the reply out of this test
+    const mail = { messageId: '<r1@x>', from: { address: 'ngoding84@gmail.com', name: 'Ngoding 1285' }, subject: 'Rapat Meeting', headers: {},
+      text: 'Hari ini kita rapat jam 2 siang sekitar 30 menit di ruangan IT.' };
+    await desk.handleInbound(mail);
+
+    expect(wl.service.day('2026-10-14').taskList.map((t) => t.title)).toEqual([expect.stringMatching(/Rapat Meeting — Ngoding 1285 · 14:00 di ruangan IT/)]);
+    const rem = wl.service.listReminders().map((r) => r.text);
+    // 14:00 is 12 minutes away, so the 15-minutes-before reminder would already be in the past: only the on-time one exists
+    expect(rem).toEqual([expect.stringMatching(/^Sekarang: Rapat Meeting/)]);
+    expect(told.some((t) => /Jadwal dibuat dari email Ngoding 1285[\s\S]*Rabu, 14 Oktober[\s\S]*sekitar 30 menit[\s\S]*ruangan IT/.test(t))).toBe(true);
+
+    await desk.handleInbound({ ...mail, messageId: '<r2@x>' }); // same meeting mentioned again
+    expect(wl.service.listReminders()).toHaveLength(1);
+
+    // a meeting further ahead gets both reminders
+    await desk.handleInbound({ messageId: '<r3@x>', from: { address: 'ngoding84@gmail.com', name: 'Ngoding 1285' }, subject: 'Rapat evaluasi', headers: {},
+      text: 'Besok kita rapat jam 10 pagi di ruang rapat 2.' });
+    const texts = wl.service.listReminders().map((r) => r.text);
+    expect(texts.filter((t) => /Rapat evaluasi/.test(t))).toHaveLength(2);
+    expect(texts.some((t) => /^15 menit lagi: Rapat evaluasi/.test(t))).toBe(true);
+    expect(wl.service.day('2026-10-14').taskList).toHaveLength(1);
+  });
+});

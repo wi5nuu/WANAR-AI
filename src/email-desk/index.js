@@ -79,7 +79,7 @@ Ubah: /balasotomatis auto | konfirmasi | kabari`;
  * @param {object} deps.db
  * @param {object} deps.automation  provides mailer, telegram channel and inbox
  */
-export function createEmailDesk({ db, aiManager = null, automation = null, env = process.env, now }) {
+export function createEmailDesk({ db, aiManager = null, automation = null, env = process.env, now, worklog = null }) {
   const store = createEmailDeskStore(db, now ? { now } : {});
   const telegram = automation?.channels?.has?.('telegram') ? automation.channels.get('telegram') : null;
   const ownerChats = String(env.TELEGRAM_AI_CHAT_IDS || '').split(',').map((s) => s.trim()).filter(Boolean);
@@ -125,6 +125,39 @@ export function createEmailDesk({ db, aiManager = null, automation = null, env =
     });
     await watcher.appendSent(raw);
   };
+
+  // Meeting found in an email -> task + reminders (15 min before and on time) + a heads-up on Telegram.
+  if (worklog) {
+    desk.onMeeting = async (m, ctx) => {
+      const hhmm = m.time;
+      const place = m.place ? ` di ${m.place}` : '';
+      const label = `${m.title}${place}`;
+      const out = [];
+      const when = new Date(m.at).toLocaleString('id-ID', {
+        timeZone: process.env.WORKLOG_TZ || 'Asia/Jakarta', weekday: 'long', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit',
+      });
+
+      // clash check: something else within 30 minutes of the start
+      const clash = worklog.listReminders(200).filter((r) => Math.abs(r.at - m.at) <= 30 * 60_000 && !r.text.includes(m.title.slice(0, 20)));
+
+      try { worklog.addTask({ date: m.date, title: `${m.title} · ${hhmm}${place}`.slice(0, 160), done: false }); out.push('tugas'); } catch { /* duplicate or invalid */ }
+      const lead = m.at - 15 * 60_000;
+      if (lead > desk.now()) {
+        try { worklog.addReminder({ at: lead, text: `15 menit lagi: ${label}`, chatId: ctx.chatId, source: 'email' }); out.push('pengingat 15 menit sebelumnya'); } catch { /* ignore */ }
+      }
+      try { worklog.addReminder({ at: m.at, text: `Sekarang: ${label}`, chatId: ctx.chatId, source: 'email' }); out.push('pengingat tepat waktu'); } catch { /* ignore */ }
+
+      const lines = [
+        `Jadwal dibuat dari email ${ctx.who}:`,
+        `${m.title}`,
+        `${when}${m.durationMin ? ` · sekitar ${m.durationMin} menit` : ''}${place}`,
+        m.assumedDate ? '(Email tidak menyebut tanggal; saya asumsikan ' + (m.date === new Date(desk.now()).toLocaleDateString('en-CA', { timeZone: 'Asia/Jakarta' }) ? 'hari ini' : 'besok') + '.)' : '',
+        clash.length ? `Perhatian, bentrok dengan: ${clash.slice(0, 3).map((r) => r.text).join('; ')}` : '',
+        out.length ? `Tersimpan: ${out.join(', ')}.` : 'Sudah ada di jadwal.',
+      ].filter(Boolean);
+      await desk._tell(ctx.chatId, lines.join('\n'));
+    };
+  }
 
   if (automation?.inbox?.registerCommands) automation.inbox.registerCommands(emailTelegramCommands(desk, watcher));
   return { store, desk, watcher };

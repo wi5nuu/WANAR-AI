@@ -26,6 +26,7 @@
 
 import { collectParsed, generateEmail } from '../automation/ai-compose.js';
 import { isValidEmail } from '../automation/recipients.js';
+import { extractMeeting } from './meetings.js';
 
 export class EmailDeskError extends Error {
   constructor(message, code = 'bad_request') {
@@ -134,6 +135,8 @@ export class EmailDesk {
     this._env = env;
     /** @type {null|((m:object)=>Promise<any>)} set by the composition root */
     this.onSent = null;
+    /** @type {null|((meeting:object, ctx:object)=>Promise<any>)} puts a meeting found in an email into the schedule */
+    this.onMeeting = null;
     this.listeners = new Set();
     this._timer = null;
     this.sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -552,6 +555,21 @@ export class EmailDesk {
     });
     this.store.threads.clearFollowUp(thread.id); // they answered: no follow-up needed
     this._emit('inbound', { thread: thread.id });
+
+    // A meeting mentioned in the email goes into the schedule by itself — nobody has to ask.
+    if (this.onMeeting && thread.counterpart !== this.ownAddress) {
+      try {
+        const who = mail.from?.name || mail.from?.address || thread.counterpart;
+        const m = extractMeeting({ text: fresh, subject: mail.subject || thread.subject, from: who, now: this.now() });
+        const key = m && `meeting:${m.at}:${thread.id}`;
+        if (m && !m.past && !this.store.meta.get(key)) {
+          this.store.meta.set(key, '1');
+          await this.onMeeting(m, { thread, who, chatId: thread.chat_id });
+        }
+      } catch (e) {
+        console.warn('[EMAIL-DESK] jadwal dari email gagal:', e.message);
+      }
+    }
 
     return this._respond(thread, mail, fresh, { isNew });
   }
