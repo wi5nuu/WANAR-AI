@@ -194,7 +194,7 @@ const upload = multer({
       const ext = getFileExt(name);
       return cb(new Error(
         `Tipe file "${file.mimetype || 'unknown'}${ext ? ' (.' + ext + ')' : ''}" tidak didukung. ` +
-        'Didukung: PDF, Word/Excel/PowerPoint, gambar (JPG/PNG/WebP), teks & kode, ZIP.'
+        'Didukung: PDF, Word/Excel/PowerPoint, teks & kode, ZIP.'
       ));
     }
 
