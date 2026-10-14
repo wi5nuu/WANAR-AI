@@ -56,7 +56,12 @@ const ago = (ms) => {
 const uptime = (sec) => (sec >= 86400 ? `${Math.floor(sec / 86400)}h ${Math.floor((sec % 86400) / 3600)}j` : sec >= 3600 ? `${Math.floor(sec / 3600)}j ${Math.floor((sec % 3600) / 60)}m` : `${Math.floor(sec / 60)}m`);
 
 const STATE = { working: ['Sedang bekerja', 'working'], break: ['Istirahat', 'break'], done: ['Selesai', 'done'], idle: ['Belum mulai', 'idle'] };
-const MODES = [['notify', 'Kabari saja'], ['approve', 'AI siapkan, saya konfirmasi'], ['auto', 'Balas otomatis']];
+const MODES = [['inherit', 'Ikuti pengaturan umum'], ['notify', 'Kabari saja'], ['approve', 'AI siapkan, saya konfirmasi'], ['auto', 'Balas otomatis']];
+const POLICY = [
+  ['auto', 'Balas otomatis', 'Semua email masuk, termasuk dari orang baru, langsung dibalas AI.'],
+  ['approve', 'AI siapkan', 'AI menulis balasan, kamu tinggal konfirmasi "kirim".'],
+  ['notify', 'Kabari saja', 'Hanya memberi tahu kamu; tidak ada balasan dibuat.'],
+];
 
 export default function CommandCenter() {
   const [data, setData] = useState(null);
@@ -184,6 +189,33 @@ export default function CommandCenter() {
               </div>
             </div>
 
+            {email && (
+              <div className="au-card cc-gap cc-policy">
+                <h3><span className="cc-title">Balasan email</span><small>satu pengaturan untuk semua email</small></h3>
+                <div className="cc-seg" role="radiogroup" aria-label="Cara membalas email">
+                  {POLICY.map(([k, label]) => (
+                    <button
+                      key={k}
+                      type="button"
+                      role="radio"
+                      aria-checked={email.policy?.mode === k}
+                      className={`cc-seg-btn ${email.policy?.mode === k ? 'on' : ''} ${k}`}
+                      disabled={!!busy}
+                      onClick={() => email.policy?.mode !== k && act('policy', () => api('/email/policy', { method: 'POST', body: { mode: k } }),
+                        (r) => (k === 'auto' ? `Balas otomatis aktif.${r.answered ? ` ${r.answered} email yang menunggu langsung dibalas.` : ''}` : k === 'approve' ? 'Mode: AI siapkan, kamu konfirmasi.' : 'Mode: hanya kabari.'))}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <div className="au-muted cc-policy-note">
+                  {POLICY.find(([k]) => k === email.policy?.mode)?.[2]}
+                  {email.policy?.mode === 'auto' && ' Newsletter dan email otomatis diabaikan; hal sensitif (uang, kontrak, data pribadi) hanya dijawab "pesan diterima" dan kamu diberi tahu.'}
+                  {email.threads.some((t) => t.override) && ` · ${email.threads.filter((t) => t.override).length} percakapan punya pengecualian sendiri (buka Detail untuk mengubah).`}
+                </div>
+              </div>
+            )}
+
             <div className="au-grid cols-2 cc-gap">
               {/* Action queue */}
               <div className="au-card">
@@ -251,7 +283,8 @@ export default function CommandCenter() {
                         </div>
                         {t.isSelf && <span className="au-chip">tes / diri sendiri</span>}
                         {!t.isSelf && t.last?.direction === 'in' && <span className="au-chip warn">balas</span>}
-                        {t.autoMode === 'auto' && <span className="au-chip brand">auto {t.autoCount}/3</span>}
+                        {t.override && <span className="au-chip info">pengecualian: {t.override === 'auto' ? 'otomatis' : t.override === 'approve' ? 'AI siapkan' : 'kabari'}</span>}
+                        {t.autoMode === 'auto' && t.autoCount > 0 && <span className="au-chip brand">dibalas {t.autoCount}x</span>}
                         <button className="au-btn sm" onClick={() => setThread(t)}>Detail</button>
                       </div>
                     ))}
@@ -391,7 +424,7 @@ function WeekBars({ days, targetMin }) {
 
 function ThreadModal({ thread, onClose, act, busy }) {
   const [detail, setDetail] = useState(null);
-  const [mode, setMode] = useState(thread.autoMode);
+  const [mode, setMode] = useState(thread.override || 'inherit');
   const [instr, setInstr] = useState('');
   const [days, setDays] = useState(3);
 

@@ -78,6 +78,7 @@ export function createEmailDeskStore(db, { now = () => Date.now() } = {}) {
   addColumn('ed_drafts', 'follow_up_days', 'INTEGER');
   addColumn('ed_threads', 'follow_up_at', 'INTEGER');
   addColumn('ed_threads', 'follow_up_notified', 'INTEGER');
+  addColumn('ed_threads', 'mode_override', 'TEXT'); // NULL = ikut pengaturan umum
   db.exec('CREATE INDEX IF NOT EXISTS idx_ed_drafts_batch ON ed_drafts(batch, status)');
 
   const threads = {
@@ -96,6 +97,13 @@ export function createEmailDeskStore(db, { now = () => Date.now() } = {}) {
         .run(mode, instructions ?? null, now(), tid);
       return threads.get(tid);
     },
+    /** Per-conversation exception to the global policy (null = follow the global setting). */
+    setOverride(tid, mode) {
+      db.prepare('UPDATE ed_threads SET mode_override = ?, updated_at = ? WHERE id = ?').run(mode, now(), tid);
+      return threads.get(tid);
+    },
+    /** Drop every per-conversation exception: the global setting rules again. */
+    clearOverrides: () => db.prepare('UPDATE ed_threads SET mode_override = NULL WHERE mode_override IS NOT NULL').run().changes,
     countAuto: (tid) => db.prepare('UPDATE ed_threads SET auto_count = auto_count + 1, last_auto_at = ? WHERE id = ?').run(now(), tid),
     close: (tid) => db.prepare("UPDATE ed_threads SET status = 'closed', updated_at = ? WHERE id = ?").run(now(), tid).changes > 0,
     setFollowUp: (tid, at) => db.prepare('UPDATE ed_threads SET follow_up_at = ?, follow_up_notified = NULL WHERE id = ?').run(at, tid),

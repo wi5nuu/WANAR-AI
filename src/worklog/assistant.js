@@ -230,7 +230,7 @@ export function makeAssistantResponder({ aiManager, worklog, emailDesk = null, b
       if (quick) return quick;
       const delegated = await quickDelegate(emailDesk, text);
       if (delegated) return delegated;
-      const policy = quickPolicy(emailDesk, text);
+      const policy = await quickPolicy(emailDesk, text);
       if (policy) return policy;
     }
     const now = Date.now();

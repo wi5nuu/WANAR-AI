@@ -25,7 +25,7 @@ const SEND_NOW = /(langsung kirim|kirim langsung|langsung saja kirim|tanpa konfi
 const SEND_INTENT = /\b(kirim|kirimkan|send|gas|lanjut kirim)\b/i;
 const CANCEL_INTENT = /\b(batal|batalkan|cancel|jangan kirim|buang|hapus draf)\b/i;
 const AUTO_INTENT = /(otomatis|auto ?reply|balas sendiri|kamu (saja |aja )?yang (balas|jawab)|biar (kamu|ai) (yang )?(balas|jawab)|balaskan saja)/i;
-const MODE_ALIASES = { notify: 'notify', kabari: 'notify', approve: 'approve', konfirmasi: 'approve', auto: 'auto', otomatis: 'auto' };
+const MODE_ALIASES = { notify: 'notify', kabari: 'notify', approve: 'approve', konfirmasi: 'approve', auto: 'auto', otomatis: 'auto', inherit: 'inherit', ikuti: 'inherit' };
 
 const addressesIn = (text) => (String(text || '').match(EMAIL_RE) || []).map((a) => a.toLowerCase());
 
@@ -141,11 +141,12 @@ export async function runEmailActions(desk, actions, { chatId = null, ownerText 
           const { ok, refused } = vetRecipients(desk, requested, ownerText);
           if (refused.length) out.push(`✗ Tidak saya pakai (tidak ada di pesanmu): ${refused.map((r) => r.email).join(', ')}`);
           if (!ok.length) { out.push('✗ Sebutkan alamat email tujuannya di pesanmu.'); break; }
-          // Standing policy decides unless the owner said otherwise in this very message.
-          let mode = MODE_ALIASES[String(a.auto_reply || '').toLowerCase()] || desk.defaultMode;
+          // The global switch (Pusat Kendali / "balas email otomatis") decides, unless the owner
+          // made an exception in THIS message. The model's own suggestion never pins a mode.
+          let mode = null;
           if (/(jangan|tidak usah|gak usah|nggak usah)\s+(di)?balas/i.test(ownerText)) mode = 'notify';
-          else if (/(konfirmasi|minta persetujuan|tunggu (izin|persetujuan))/i.test(ownerText)) mode = 'approve';
-          else if (mode === 'auto' && !ownerWantsAuto && desk.defaultMode !== 'auto') mode = desk.defaultMode;
+          else if (/(konfirmasi|minta persetujuan|tunggu (izin|persetujuan)|ai siapkan|siapkan (balasan|dulu))/i.test(ownerText)) mode = 'approve';
+          else if (ownerWantsAuto) mode = 'auto';
           const followUpDays = followUpDaysIn(ownerText) || (Number(a.follow_up_days) > 0 ? Number(a.follow_up_days) : null);
           const { batch, drafts } = await desk.draftBatch({
             recipients: ok, subject: a.subject, body: a.body, brief: a.brief || (a.body ? '' : ownerText), chatId,
@@ -182,7 +183,7 @@ export async function runEmailActions(desk, actions, { chatId = null, ownerText 
         case 'email_mode': {
           const mode = MODE_ALIASES[String(a.mode || '').toLowerCase()];
           if (!mode) throw new Error('Mode balasan tidak dikenal (notify/approve/auto)');
-          if (mode === 'auto' && !ownerWantsAuto) { out.push('✗ Balas otomatis hanya saya aktifkan bila kamu memintanya langsung.'); break; }
+          if (mode === 'auto' && !ownerWantsAuto && desk.defaultMode !== 'auto') { out.push('✗ Balas otomatis hanya saya aktifkan bila kamu memintanya langsung.'); break; }
           const t = desk.setAutoMode(a.to || a.thread, mode, a.instructions || (mode === 'auto' ? ownerText : null));
           out.push(`✓ Percakapan dengan ${t.counterpart}: ${mode === 'auto' ? 'balas otomatis' : mode === 'approve' ? 'AI siapkan balasan, kamu konfirmasi' : 'kabari saja'}`);
           break;
@@ -243,7 +244,7 @@ export async function quickDelegate(desk, text) {
 }
 
 const MODE_TEXT = {
-  auto: 'Siap. Balasan email dari percakapan yang kamu mulai akan saya jawab sendiri. Kalau pertanyaannya soal uang, kontrak, atau saya tidak yakin, saya tanya kamu dulu.',
+  auto: 'Siap. Semua email yang masuk, termasuk dari orang baru, langsung saya balas sendiri. Newsletter dan email otomatis tidak dibalas. Untuk hal sensitif (uang, kontrak, data pribadi) saya hanya membalas "pesan diterima" dan memberitahumu.',
   approve: 'Oke. Saya tulis balasannya, kamu tinggal bilang "kirim" untuk setiap email.',
   notify: 'Baik. Saya hanya kabari kamu kalau ada balasan, tidak membalas apa pun sendiri.',
 };
@@ -253,7 +254,7 @@ const MODE_TEXT = {
  * "konfirmasi dulu sebelum balas", "jangan balas otomatis".
  * @returns {string|null}
  */
-export function quickPolicy(desk, text) {
+export async function quickPolicy(desk, text) {
   const t = String(text || '').trim().toLowerCase();
   if (t.length > 160) return null;
   let mode = null;
@@ -261,6 +262,6 @@ export function quickPolicy(desk, text) {
   else if (/\b(konfirmasi|minta izin|tanya)\s+(dulu|saya)\b.*\b(balas|kirim)|\bemail\w*\s+(dibalas|dijawab)\s+(setelah|dengan)\s+(konfirmasi|persetujuan)/.test(t)) mode = 'approve';
   else if (/\b(balas|jawab)(kan)?\s+(semua\s+)?(email|surel)\w*\s+(saja\s+|aja\s+)?(secara\s+)?otomatis|\bemail\w*\s+(dibalas|dijawab)\s+(secara\s+)?otomatis|\botomatis\s+(saja\s+)?(balas|jawab)\s+(semua\s+)?(email|surel)/.test(t)) mode = 'auto';
   if (!mode) return null;
-  desk.setDefaultMode(mode);
-  return MODE_TEXT[mode];
+  const r = await desk.applyPolicy(mode);
+  return `${MODE_TEXT[mode]}${r.answered ? ` Sekaligus saya balas ${r.answered} email yang masih menunggu.` : ''}`;
 }

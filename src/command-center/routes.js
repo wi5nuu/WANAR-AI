@@ -109,6 +109,13 @@ export function createCommandCenterRouter({ worklog, emailDesk = null, automatio
     if (!t) throw Object.assign(new Error('Percakapan tidak ditemukan'), { code: 'not_found' });
     return { thread: t, messages: desk.threadMessages(t.id, 50) };
   }));
+  // One switch for all email: notify | approve | auto. 'auto' also answers what is already waiting.
+  router.post('/email/policy', wrap(async (req) => {
+    const mode = String(req.body?.mode || '');
+    if (!['notify', 'approve', 'auto'].includes(mode)) throw Object.assign(new Error('Mode: notify | approve | auto'), { expose: true });
+    const r = await desk.applyPolicy(mode, { clearExceptions: req.body?.clearExceptions === true });
+    return { policy: { mode: r.mode }, answered: r.answered };
+  }));
   router.post('/email/check', wrap(async () => ({ processed: watcher ? await watcher.check() : 0 })));
 
   router.post('/briefing/send', wrap(async () => {

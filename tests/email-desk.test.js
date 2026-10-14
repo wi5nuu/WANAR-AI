@@ -152,15 +152,27 @@ describe('Email Desk: replies (realtime inbound)', () => {
   it('auto: stops after the per-conversation cap', async () => {
     const w = build({ ai: aiReturning({ body: 'ok' }) });
     w.desk.limits.autoGapMs = 0;
+    w.desk.limits.autoPerThread = 3;
     await sentThread(w, 'auto');
     const actions = [];
     for (let i = 0; i < 5; i++) actions.push((await w.desk.handleInbound(reply({ inReplyTo: null, references: [] }))).action);
     expect(actions).toEqual(['auto_replied', 'auto_replied', 'auto_replied', 'drafted', 'drafted']);
   });
 
-  it('escalates sensitive or unknown questions to the owner instead of answering', async () => {
+  it('auto: a sensitive question still gets an answer — a neutral receipt — and the owner is told', async () => {
     const w = build({ ai: aiReturning({ escalate: true, reason: 'Klien minta diskon 20%' }) });
     await sentThread(w, 'auto');
+    const r = await w.desk.handleInbound(reply());
+    expect(r.action).toBe('auto_replied');
+    expect(w.sent).toHaveLength(2);
+    expect(w.sent.at(-1).text).toMatch(/pesan Anda sudah kami terima/);
+    expect(w.sent.at(-1).text).not.toMatch(/diskon|20%/); // commits to nothing
+    expect(w.told.at(-1).t).toMatch(/Perlu perhatianmu[\s\S]*Klien minta diskon 20%/);
+  });
+
+  it('approve mode: a sensitive question is NOT answered, the owner decides', async () => {
+    const w = build({ ai: aiReturning({ escalate: true, reason: 'Klien minta diskon 20%' }) });
+    await sentThread(w, 'approve');
     const r = await w.desk.handleInbound(reply());
     expect(r.action).toBe('escalated');
     expect(w.told.at(-1).t).toMatch(/Perlu keputusanmu: Klien minta diskon 20%/);
@@ -465,6 +477,7 @@ describe('Email massal, follow-up & anti prompt-injection', async () => {
 
   it('overview groups drafts/batches and lists who is waiting on whom', async () => {
     const w = fast(build());
+    w.desk.setDefaultMode('notify'); // the owner answers by hand, so the mail stays "waiting on you"
     await w.desk.draft({ to: 'budi@klien.com', subject: 'Status invoice', body: 'Halo' });
     await w.desk.sendDraft(1);
     await w.desk.handleInbound(reply());
@@ -520,19 +533,68 @@ describe('personal agent policy', async () => {
     w.desk.setDefaultMode('approve');
     expect(w.desk.defaultMode).toBe('approve');
     const d = await w.desk.draft({ to: 'budi@klien.com', subject: 's', body: 'b' });
-    expect(d.auto_mode).toBe('approve');
+    expect(d.auto_mode).toBe('inherit'); // follows the global switch, not frozen at creation
+    await w.desk.sendDraft(d);
+    expect(w.desk.modeOf(w.desk.threads()[0])).toBe('approve');
+    w.desk.setDefaultMode('auto');
+    expect(w.desk.modeOf(w.desk.threads()[0])).toBe('auto'); // one switch flips every conversation
     expect(() => w.desk.setDefaultMode('asal')).toThrow(/Mode/);
   });
 
-  it('a real person writing first gets a conversation, a notification and a prepared reply (not auto-sent)', async () => {
+  it('approve policy: a real person writing first gets a conversation, a notification and a prepared reply (not auto-sent)', async () => {
     const w = build({ ai: aiReturning({ body: 'Halo Sari, terima kasih. Kami kabari ya.' }) });
+    w.desk.setDefaultMode('approve');
     const r = await w.desk.handleInbound({
       messageId: '<n1@toko>', from: { address: 'sari@toko.id', name: 'Sari' }, subject: 'Tanya kerja sama', text: 'Halo, bisa kerja sama?', headers: {},
     });
     expect(r.action).toBe('drafted');
     expect(w.told.at(-1).t).toMatch(/Email baru dari Sari <sari@toko.id>[\s\S]*Draf email #1/);
     expect(w.sent).toHaveLength(0);
-    expect(w.desk.threads()[0]).toMatchObject({ counterpart: 'sari@toko.id', auto_mode: 'approve' });
+    expect(w.desk.modeOf(w.desk.threads()[0])).toBe('approve');
+  });
+
+  it('auto policy: a real person writing first is answered immediately, by itself', async () => {
+    const w = build({ ai: aiReturning({ body: 'Halo Sari, terima kasih. Kami kabari ya.' }) });
+    expect(w.desk.defaultMode).toBe('auto');
+    const r = await w.desk.handleInbound({
+      messageId: '<n2@toko>', from: { address: 'sari@toko.id', name: 'Sari' }, subject: 'Tanya kerja sama', text: 'Halo, bisa kerja sama?', headers: {},
+    });
+    expect(r.action).toBe('auto_replied');
+    expect(w.sent).toHaveLength(1);
+    expect(w.sent[0].to).toBe('sari@toko.id');
+    expect(w.sent[0].headers['Auto-Submitted']).toBe('auto-replied');
+  });
+
+  it('a per-conversation "AI siapkan" is the exception to a global auto', async () => {
+    const w = build({ ai: aiReturning({ body: 'Baik, kami kabari.' }) });
+    await w.desk.draft({ to: 'sari@toko.id', subject: 'Kerja sama', body: 'Halo', autoMode: 'approve' });
+    await w.desk.sendDraft(1);
+    expect(w.desk.defaultMode).toBe('auto');
+    const r = await w.desk.handleInbound({ messageId: '<n3@toko>', inReplyTo: '<out1@wanar.id>', from: { address: 'sari@toko.id' }, subject: 'Re: Kerja sama', text: 'Bisa', headers: {} });
+    expect(r.action).toBe('drafted'); // pinned thread waits for the owner
+    expect(w.sent).toHaveLength(1);
+    w.desk.setAutoMode(w.desk.threads()[0], 'inherit'); // back under the global switch
+    expect(w.desk.modeOf(w.desk.threads()[0])).toBe('auto');
+  });
+
+  it('switching to auto answers what is already waiting (catch-up), but never newsletters', async () => {
+    const w = build({ ai: aiReturning({ body: 'Terima kasih, kami cek.' }) });
+    w.desk.setDefaultMode('notify');
+    await w.desk.handleInbound({ messageId: '<c1@toko>', from: { address: 'sari@toko.id' }, subject: 'Tanya harga', text: 'Berapa harganya?', headers: {} });
+    await w.desk.handleInbound({ messageId: '<c2@brand>', from: { address: 'contact@prosple.com' }, subject: 'Rekomendasi untukmu', text: 'Hiring now! Click here. To unsubscribe, click here.', headers: {} });
+    expect(w.sent).toHaveLength(0);
+    const r = await w.desk.applyPolicy('auto');
+    expect(r).toMatchObject({ mode: 'auto', answered: 1 });
+    expect(w.sent.map((m) => m.to)).toEqual(['sari@toko.id']);
+  });
+
+  it('never writes to its own Brevo alias, and marketing mail is not "waiting on you"', async () => {
+    const w = build({ ai: aiReturning({ body: 'x' }) });
+    w.desk.ownAddress = 'wisnu@gmail.com';
+    await expect(w.desk.draft({ to: 'wisnu@10561430.brevosend.com', subject: 's', body: 'b' })).rejects.toThrow(/alamat pengirim Brevo/);
+    w.desk.setDefaultMode('notify');
+    await w.desk.handleInbound({ messageId: '<m1@aws>', from: { address: 'aws-marketing-email-replies@amazon.com' }, subject: 'Report', text: 'Download now', headers: {} });
+    expect(w.desk.overview().awaitingYou).toEqual([]);
   });
 
   it('newsletters, bounces and bulk senders never create conversations or notifications', async () => {
@@ -612,15 +674,15 @@ describe('Telegram bot is private', async () => {
 
 describe('plain-language reply policy', async () => {
   const { quickPolicy } = await import('../src/email-desk/assistant-actions.js');
-  it('switches the standing policy from natural sentences', () => {
+  it('switches the standing policy from natural sentences', async () => {
     const w = build();
-    expect(quickPolicy(w.desk, 'balas semua email otomatis saja')).toMatch(/jawab sendiri/);
+    expect(await quickPolicy(w.desk, 'balas semua email otomatis saja')).toMatch(/langsung saya balas sendiri/);
     expect(w.desk.defaultMode).toBe('auto');
-    expect(quickPolicy(w.desk, 'konfirmasi dulu sebelum balas email')).toMatch(/kirim/);
+    expect(await quickPolicy(w.desk, 'konfirmasi dulu sebelum balas email')).toMatch(/kirim/);
     expect(w.desk.defaultMode).toBe('approve');
-    expect(quickPolicy(w.desk, 'jangan balas email otomatis')).toMatch(/kabari/);
+    expect(await quickPolicy(w.desk, 'jangan balas email otomatis')).toMatch(/kabari/);
     expect(w.desk.defaultMode).toBe('notify');
-    expect(quickPolicy(w.desk, 'bagaimana cuaca besok?')).toBeNull();
+    expect(await quickPolicy(w.desk, 'bagaimana cuaca besok?')).toBeNull();
     expect(w.desk.defaultMode).toBe('notify');
   });
 });

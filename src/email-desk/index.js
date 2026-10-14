@@ -56,8 +56,8 @@ export function emailTelegramCommands(desk, watcher = null) {
         const label = { auto: 'balas otomatis', approve: 'AI siapkan, kamu konfirmasi', notify: 'kabari saja' };
         if (!mode) return `Kebiasaan sekarang: ${label[now]}.
 Ubah: /balasotomatis auto | konfirmasi | kabari`;
-        desk.setDefaultMode(mode);
-        return `Oke, sekarang: ${label[mode]}.`;
+        const r = await desk.applyPolicy(mode);
+        return `Oke, sekarang: ${label[mode]}.${r.answered ? ` Saya juga membalas ${r.answered} email yang masih menunggu.` : ''}`;
       }),
     },
     tolak: {

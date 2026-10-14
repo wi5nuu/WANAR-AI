@@ -70,3 +70,19 @@
 .cc-days { width: 70px; }
 
 .cc-page .au-card h3 { flex-wrap: wrap; row-gap: 0.25rem; }
+
+/* sakelar kebijakan balasan email */
+.cc-seg { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; padding: 4px; background: var(--bg-tertiary); border-radius: 14px; }
+.cc-seg-btn {
+  border: 0; border-radius: 11px; padding: 0 10px; min-height: 46px;
+  font: inherit; font-weight: 700; font-size: 0.9rem; color: var(--text-secondary);
+  background: transparent; cursor: pointer;
+  transition: background 0.18s, color 0.18s, box-shadow 0.18s;
+}
+.cc-seg-btn:hover:not(:disabled):not(.on) { background: var(--hover-bg); color: var(--text-primary); }
+.cc-seg-btn.on { background: var(--bg-secondary); color: var(--text-primary); box-shadow: var(--shadow-sm); }
+.cc-seg-btn.auto.on { background: var(--brand-gradient); color: #fff; box-shadow: 0 4px 14px rgba(255, 107, 0, 0.28); }
+.cc-seg-btn:focus-visible { outline: 0; box-shadow: var(--focus-ring); }
+.cc-seg-btn:disabled { opacity: 0.6; cursor: wait; }
+.cc-policy-note { margin-top: 0.6rem; }
+@media (max-width: 520px) { .cc-seg-btn { font-size: 0.82rem; padding: 0 4px; } }
