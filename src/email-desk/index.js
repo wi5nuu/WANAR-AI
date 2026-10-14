@@ -12,6 +12,7 @@
 import { createEmailDeskStore } from './store.js';
 import { EmailDesk } from './service.js';
 import { ImapWatcher } from './imap.js';
+import MailComposer from 'nodemailer/lib/mail-composer/index.js';
 
 let instance = null;
 
@@ -103,6 +104,27 @@ export function createEmailDesk({ db, aiManager = null, automation = null, env =
     onMail: (mail) => desk.handleInbound(mail),
     cursor: { get: () => store.meta.get('imap_last_uid'), set: (v) => store.meta.set('imap_last_uid', v) },
   });
+
+  // Every outgoing email (typed by you or sent by the assistant) is also filed in Gmail "Terkirim".
+  desk.onSent = async (m) => {
+    if (!watcher.cfg.configured) return;
+    const headers = {};
+    if (m.auto) headers['Auto-Submitted'] = 'auto-replied';
+    const raw = await new Promise((resolve, reject) => {
+      new MailComposer({
+        from: { name: m.fromName || '', address: m.from },
+        to: m.to,
+        subject: m.subject,
+        text: m.text,
+        date: new Date(),
+        messageId: m.messageId || undefined,
+        inReplyTo: m.inReplyTo || undefined,
+        references: m.references || undefined,
+        headers,
+      }).compile().build((err, buf) => (err ? reject(err) : resolve(buf)));
+    });
+    await watcher.appendSent(raw);
+  };
 
   if (automation?.inbox?.registerCommands) automation.inbox.registerCommands(emailTelegramCommands(desk, watcher));
   return { store, desk, watcher };

@@ -686,3 +686,41 @@ describe('plain-language reply policy', async () => {
     expect(w.desk.defaultMode).toBe('notify');
   });
 });
+
+describe('copy in Sent folder + campaign mail detection', () => {
+  it('every real send hands a copy to onSent (with threading headers); dry-run does not', async () => {
+    const w = build();
+    const copies = [];
+    w.desk.onSent = async (m) => { copies.push(m); };
+    await w.desk.draft({ to: 'budi@klien.com', subject: 'Status invoice', body: 'Halo Pak Budi' });
+    await w.desk.sendDraft(1);
+    await new Promise((r) => setTimeout(r, 5));
+    expect(copies).toHaveLength(1);
+    expect(copies[0]).toMatchObject({ to: 'budi@klien.com', subject: 'Status invoice', text: 'Halo Pak Budi', auto: false });
+    expect(copies[0].messageId).toMatch(/^<out1@/);
+
+    const dry = build({ live: false });
+    const c2 = [];
+    dry.desk.onSent = async (m) => { c2.push(m); };
+    await dry.desk.draft({ to: 'a@b.co', subject: 's', body: 'b' });
+    await dry.desk.sendDraft(1);
+    expect(c2).toHaveLength(0);
+  });
+
+  it('a failing Sent-folder copy never fails the send', async () => {
+    const w = build();
+    w.desk.onSent = async () => { throw new Error('imap down'); };
+    await w.desk.draft({ to: 'budi@klien.com', subject: 's', body: 'b' });
+    await expect(w.desk.sendDraft(1)).resolves.toMatchObject({ dryRun: false });
+  });
+
+  it('survey/campaign mail with tracking links is not answered, even without an unsubscribe line', async () => {
+    const w = build({ ai: aiReturning({ body: 'jangan dikirim' }) });
+    const text = 'Halo Wisnu. Punya waktu 5 menit? Isi Survei Sekarang https://lacak.dicoding.net/CL0/http:%2F%2Fdicoding.id/1/abc Batas pengisian Jumat.';
+    const r = await w.desk.handleInbound({ messageId: '<d1@dicoding>', from: { address: 'dbs@dicoding.com' }, subject: 'Cukup 5 Menit, Gift Card Rp50.000!', text, headers: {} });
+    expect(r).toEqual({ matched: false });
+    expect(w.sent).toHaveLength(0);
+    const g = 'Learn three strategies https://a.example/x https://b.example/y https://c.example/z https://d.example/w';
+    expect(await w.desk.handleInbound({ messageId: '<g1@g>', from: { address: 'googlecloud@google.com' }, subject: 'ROI from AI', text: g, headers: {} })).toEqual({ matched: false });
+  });
+});

@@ -107,6 +107,36 @@ export class ImapWatcher {
     this.backoff = Math.min(this.backoff * 2, 5 * 60_000);
   }
 
+  /**
+   * Files a copy of an outgoing message in the mailbox's Sent folder, so replies the
+   * assistant sends appear in Gmail "Terkirim" exactly like ones typed by hand
+   * (Brevo/SMTP relays do not do this). Own short-lived connection: never disturbs IDLE.
+   * @param {Buffer|string} raw  RFC822 message
+   */
+  async appendSent(raw) {
+    if (!this.cfg.configured) return { ok: false, reason: 'IMAP belum diatur' };
+    let c;
+    try {
+      const { ImapFlow } = await this.loadLibs();
+      c = new ImapFlow({
+        host: this.cfg.host, port: this.cfg.port, secure: this.cfg.secure,
+        auth: { user: this.cfg.user, pass: this.cfg.pass }, logger: false,
+      });
+      c.on('error', () => {});
+      await c.connect();
+      const boxes = await c.list();
+      const sent = boxes.find((b) => b.specialUse === '\\Sent')?.path || '[Gmail]/Sent Mail';
+      await c.append(sent, raw, ['\\Seen']);
+      this.status.sentCopies = (this.status.sentCopies || 0) + 1;
+      return { ok: true, mailbox: sent };
+    } catch (e) {
+      this.status.lastCopyError = String(e.message || e).slice(0, 160);
+      return { ok: false, reason: this.status.lastCopyError };
+    } finally {
+      try { await c?.logout(); } catch { /* ignore */ }
+    }
+  }
+
   /** Fetches and processes mail newer than the cursor. Safe to call often. */
   async check(via = 'manual') {
     const c = this.client;

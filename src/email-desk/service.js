@@ -41,6 +41,7 @@ const MODE_LABEL = { notify: 'kabari saja', approve: 'AI siapkan balasan, kamu k
 // Marketing/newsletter senders are never a person waiting for an answer: no reply, no notification.
 const BULK_LOCALPART = /(marketing|newsletter|promo|campaign|digest|mailer|broadcast|no-?reply|do-?not-?reply|donotreply|notifications?|alerts?|updates?|bounces?|postmaster|mailer-daemon)/i;
 const BULK_BODY = /(unsubscribe|berhenti berlangganan|berhenti menerima|manage (your )?(email )?preferences|kelola preferensi|view (this email |it )?(online|in (your )?browser)|lihat (di|secara) (browser|online)|do not reply to this (e-?mail|message)|jangan membalas email ini)/i;
+const TRACKING_LINKS = /(utm_(campaign|medium|source)=|sendgrid\.net|mcauto-images|mailchimp|list-manage\.com|lacak\.|click\.|links?\.|track(ing)?\.|\/CL0\/|email\.awscloud\.com|mkt\d*\.)/i;
 const BOT_SENDER = /^(no-?reply|do-?not-?reply|mailer-daemon|postmaster|bounces?|notifications?)([+.-]|@)/i;
 
 const clip = (s, n) => {
@@ -131,6 +132,8 @@ export class EmailDesk {
       followUpCheckMs: 5 * 60_000,
     };
     this._env = env;
+    /** @type {null|((m:object)=>Promise<any>)} set by the composition root */
+    this.onSent = null;
     this.listeners = new Set();
     this._timer = null;
     this.sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -420,6 +423,13 @@ export class EmailDesk {
       if (auto) this.store.threads.countAuto(thread.id);
       if (d.follow_up_days) this.store.threads.setFollowUp(thread.id, this.now() + d.follow_up_days * DAY_MS);
       this.store.drafts.finish(d.id, 'sent');
+      // Best effort, never blocks or fails the send: keep a copy in the mailbox's Sent folder.
+      if (this.onSent && !info.dryRun) {
+        Promise.resolve(this.onSent({
+          from: this.ownAddress, fromName: this.ownerName, to: d.to_addr, subject: d.subject, text: d.body,
+          messageId: info.messageId || null, inReplyTo: d.in_reply_to || null, references: d.refs || d.in_reply_to || null, auto,
+        })).catch(() => {});
+      }
       this._emit('sent', { draft: d.id, thread: thread.id, dryRun: Boolean(info.dryRun) });
       return { draft: d, thread: this.store.threads.get(thread.id), dryRun: Boolean(info.dryRun) };
     } catch (e) {
@@ -467,7 +477,10 @@ export class EmailDesk {
     if (BOT_SENDER.test(from)) return 'pengirim adalah alamat otomatis/no-reply';
     if (this.isOwnAlias(from)) return 'pengirim adalah alamat Brevo milik sendiri';
     if (BULK_LOCALPART.test(from.split('@')[0])) return 'pengirim pemasaran/otomatis';
-    if (BULK_BODY.test(String(mail.text || '').slice(0, 20000))) return 'email promosi/newsletter';
+    const body = String(mail.text || '').slice(0, 20000);
+    if (BULK_BODY.test(body)) return 'email promosi/newsletter';
+    // Campaign mail is recognisable by its link tracking even without an unsubscribe line.
+    if (TRACKING_LINKS.test(body) || (body.match(/https?:\/\//g) || []).length >= 4) return 'email kampanye (banyak tautan pelacak)';
     if (/(^|\.)(brevosend|sendgrid|mailchimp|mailgun|amazonses|sparkpostmail|mandrillapp)\./i.test(from.split('@')[1] || '')) return 'pengirim massal';
     if (hv('auto-submitted') && hv('auto-submitted') !== 'no') return 'email otomatis (auto-submitted)';
     if (/bulk|junk|list|auto_reply/.test(hv('precedence'))) return 'email massal/milis';
@@ -774,7 +787,7 @@ export class EmailDesk {
         autoCount: t.auto_count, followUpAt: t.follow_up_at, updatedAt: t.updated_at,
         isSelf: t.counterpart === this.ownAddress,
         // newsletters / marketing / own Brevo alias are never "a person waiting for you"
-        bulk: BULK_LOCALPART.test(String(t.counterpart).split('@')[0]) || this.isOwnAlias(t.counterpart) || (last?.direction === 'in' && BULK_BODY.test(String(last.body || '').slice(0, 20000))),
+        bulk: BULK_LOCALPART.test(String(t.counterpart).split('@')[0]) || this.isOwnAlias(t.counterpart) || (last?.direction === 'in' && (BULK_BODY.test(String(last.body || '').slice(0, 20000)) || TRACKING_LINKS.test(String(last.body || '').slice(0, 20000)))),
         last: last ? { direction: last.direction, at: last.at, snippet: clip(this.cleanBody(last), 160), auto: Boolean(last.auto) } : null,
       };
     });
