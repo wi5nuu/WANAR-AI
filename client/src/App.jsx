@@ -23,6 +23,7 @@ import AuroraBackground from './components/AuroraBackground';
 import Automation from './components/Automation';
 import Worklog from './components/Worklog';
 import CommandCenter from './components/CommandCenter';
+import UpdateBanner from './components/UpdateBanner';
 
 function ChatLayout() {
   const {
@@ -225,6 +226,8 @@ function ChatLayout() {
 
 export default function App() {
   return (
+    <>
+    <UpdateBanner />
     <Routes>
       <Route path="/" element={<ChatLayout />} />
       <Route path="/settings" element={<Settings />} />
@@ -241,5 +244,6 @@ export default function App() {
       <Route path="/worklog" element={<Worklog />} />
       <Route path="/command-center" element={<CommandCenter />} />
     </Routes>
+    </>
   );
 }

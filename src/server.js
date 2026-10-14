@@ -1585,6 +1585,20 @@ app.delete('/api/rag/index', (req, res) => {
   res.json({ success: true, message: 'RAG index cleared' });
 });
 
+// Identifies the deployed frontend build, so an open tab can tell it is stale.
+let _buildCache = { mtime: 0, build: 'dev' };
+app.get('/api/version', (req, res) => {
+  try {
+    const p = path.join(clientDist, 'index.html');
+    const st = fs.statSync(p);
+    if (st.mtimeMs !== _buildCache.mtime) {
+      _buildCache = { mtime: st.mtimeMs, build: crypto.createHash('sha1').update(fs.readFileSync(p)).digest('hex').slice(0, 12) };
+    }
+  } catch { /* no build (API-only run) */ }
+  res.set('Cache-Control', 'no-store');
+  res.json({ build: _buildCache.build });
+});
+
 app.get('/api/health', (req, res) => {
   const limitCheck = checkTokenLimit();
   res.json({

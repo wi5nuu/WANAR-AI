@@ -104,3 +104,29 @@ describe('Briefing de-duplication', () => {
     expect((text.match(/Buat laporan harian/gi) || []).length).toBe(1);
   });
 });
+
+describe('GET /api/version', () => {
+  it('returns a stable build id that changes with the frontend build', async () => {
+    const fs = await import('fs');
+    const path = await import('path');
+    const os = await import('os');
+    const crypto = await import('crypto');
+    // Mirror of the server rule: sha1(index.html).slice(0, 12)
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dist-'));
+    const f = path.join(dir, 'index.html');
+    fs.writeFileSync(f, '<html>a</html>');
+    const id = (p) => crypto.createHash('sha1').update(fs.readFileSync(p)).digest('hex').slice(0, 12);
+    const a = id(f);
+    expect(a).toMatch(/^[0-9a-f]{12}$/);
+    expect(id(f)).toBe(a);
+    fs.writeFileSync(f, '<html>b</html>');
+    expect(id(f)).not.toBe(a);
+  });
+
+  it('the running app exposes it, uncached', async () => {
+    const { default: app } = await import('../src/server.js');
+    const r = await request(app).get('/api/version').expect(200);
+    expect(r.body.build).toMatch(/^[0-9a-f]{12}$|^dev$/);
+    expect(r.headers['cache-control']).toMatch(/no-store/);
+  });
+});

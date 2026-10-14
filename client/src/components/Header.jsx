@@ -7,8 +7,9 @@ import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   IconWorklog, IconBolt, IconChart, IconVoice, IconSparkles, IconBriefcase,
-  IconUser, IconShield, IconFlask, IconSettings, IconDots, IconRadar,
+  IconUser, IconShield, IconFlask, IconSettings, IconDots, IconRadar, IconRefresh,
 } from './icons';
+import { hardRefresh } from '../lib/refresh.js';
 
 // Grouped so the most-used tools sit on top; every entry has an icon from the
 // shared set so the menu matches the page sidebar.
@@ -170,6 +171,16 @@ export default function Header({
                   ))}
                 </div>
               ))}
+              <div className="header-apps-group" role="group" aria-label="Aplikasi">
+                <div className="header-apps-group-label">Aplikasi</div>
+                <button className="header-apps-item" role="menuitem" onClick={() => { setAppsOpen(false); hardRefresh(); }}>
+                  <span className="header-apps-item-icon"><IconRefresh size={18} /></span>
+                  <span className="header-apps-item-text">
+                    <span className="header-apps-item-label">Muat ulang total</span>
+                    <span className="header-apps-item-desc">Bersihkan cache dan ambil versi terbaru</span>
+                  </span>
+                </button>
+              </div>
             </div>
           )}
         </div>
