@@ -2799,7 +2799,10 @@ async function startServer() {
   }
 
   console.log('[DEBUG] About to call app.listen...');
-  app.listen(PORT, () => {
+  // WANAR_BIND=127.0.0.1 keeps the app off the public interface (nginx and SSH tunnels
+  // reach it over loopback). Unset = all interfaces, as before (local development).
+  const BIND = String(process.env.WANAR_BIND || '').trim() || undefined;
+  const onListen = () => {
     console.log('[DEBUG] app.listen callback triggered!');
   console.log('\n' + '='.repeat(60));
   console.log('                    WANAR AI v2.0');
@@ -2872,7 +2875,8 @@ async function startServer() {
   } else {
     console.log('Browser    : pool tidak di-prewarm (mode ringan; set BROWSER_POOL_WARM=true untuk mengaktifkan)');
   }
-  });
+  };
+  if (BIND) app.listen(PORT, BIND, onListen); else app.listen(PORT, onListen);
 }
 
 export default app;

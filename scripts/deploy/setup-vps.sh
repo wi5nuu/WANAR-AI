@@ -133,7 +133,14 @@ if ! run_as_app env PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
 fi
 
 mkdir -p "$APP_DIR/data" "$APP_DIR/logs"
-$SUDO chown -R "$APP_USER:$APP_USER" "$APP_DIR/data" "$APP_DIR/logs"
+$SUDO chown -R "$APP_USER:$APP_USER" "$APP_DIR"
+
+# Izin berkas. Tarball dibuat di Windows, jadi ekstraksi memberi mode 777 pada semuanya:
+# tanpa langkah ini setiap user di server bisa membaca database dan .env.
+# Pemilik (user layanan) penuh, grup hanya baca, orang lain tidak ada akses.
+$SUDO chmod -R u=rwX,g=rX,o= "$APP_DIR"
+$SUDO chmod 700 "$APP_DIR/data" "$APP_DIR/logs"
+[ -f "$APP_DIR/.env" ] && $SUDO chmod 600 "$APP_DIR/.env"
 
 # ── 5b. Opsional: browser untuk job agent ──────────────────────────────────
 if [ "$WITH_BROWSER" -eq 1 ]; then
@@ -160,6 +167,8 @@ Group=$APP_USER
 WorkingDirectory=$APP_DIR
 Environment=NODE_ENV=production
 Environment=PORT=$PORT
+# Hanya loopback: nginx dan terowongan SSH tetap bisa, internet tidak (lapis kedua setelah ufw).
+Environment=WANAR_BIND=127.0.0.1
 # .env dibaca sendiri oleh aplikasi (dotenv) — tidak perlu EnvironmentFile
 ExecStart=$(command -v node) src/server.js
 Restart=on-failure
