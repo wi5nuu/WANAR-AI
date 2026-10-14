@@ -41,6 +41,8 @@ export default function DashboardLayout({ children }) {
   return (
     <div className="dash-root" style={{ display: 'flex', height: '100vh', position: 'relative' }}>
       <AuroraBackground density={55} />
+      {/* Phones: tap outside the opened menu to close it */}
+      {sidebarOpen && <div className="dash-backdrop" onClick={() => setSidebarOpen(false)} aria-hidden="true" />}
       {/* Sidebar */}
       <aside className="dash-aside" style={{
         width: sidebarOpen ? '240px' : '60px',

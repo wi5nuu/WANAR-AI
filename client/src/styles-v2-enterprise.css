@@ -2019,18 +2019,7 @@ body {
   font-size: 11px;
   color: var(--text-tertiary);
 }
-@media (max-width: 480px) {
-  .header-apps-menu {
-    position: fixed;
-    top: auto;
-    bottom: calc(64px + env(safe-area-inset-bottom, 0px));
-    left: 12px;
-    right: 12px;
-    min-width: 0;
-    max-height: 55vh;
-    overflow-y: auto;
-  }
-}
+/* (aturan layar kecil untuk .header-apps-menu ada di bagian paling bawah file) */
 
 /* ============================================
    HEADER APPS MENU — grouped, iconed, animated
@@ -2148,4 +2137,62 @@ body {
   .header-apps-menu, .header-apps-item { animation: none; }
   .dash-nav.active::after { animation: none; display: none; }
   .dash-nav:hover svg, .header-apps-item:hover { transform: none; }
+}
+
+
+/* ============================================================
+   HEADER APPS MENU — phones (<= 480px)
+   Header memakai backdrop-filter, sehingga elemen position:fixed di dalamnya
+   dipatok ke KOTAK HEADER, bukan ke layar. Versi lama memakai "bottom: 64px",
+   yang membuat menu terlempar ke atas layar dan tidak terlihat. Sekarang
+   dipatok dari atas (header berada di y=0, jadi hasilnya sama di kedua kasus).
+   ============================================================ */
+@media (max-width: 480px) {
+  .header-apps-menu {
+    position: fixed;
+    top: calc(64px + env(safe-area-inset-top, 0px));
+    bottom: auto;
+    left: 12px;
+    right: 12px;
+    min-width: 0;
+    width: auto;
+    max-height: calc(100vh - 88px);
+    max-height: calc(100dvh - 88px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    transform-origin: top right;
+  }
+  /* area sentuh yang nyaman untuk jari */
+  .header-apps-item { min-height: 48px; }
+  .header-apps-btn { min-width: 44px; min-height: 44px; }
+}
+
+/* ============================================================
+   DASHBOARD SIDEBAR — phones (<= 768px)
+   Sidebar yang dibuka tidak lagi MENDORONG konten (konten tinggal kolom sempit).
+   Rel ikon 60px selalu tersisa; menu penuh melayang di atasnya dengan latar
+   gelap yang bisa diketuk untuk menutup.
+   ============================================================ */
+.dash-backdrop { display: none; }
+@media (max-width: 768px) {
+  .dash-root { padding-left: 60px; }
+  .dash-root > .dash-aside {
+    position: fixed !important;
+    top: 0; bottom: 0; left: 0;
+    height: 100vh; height: 100dvh;
+    z-index: 400 !important;
+    max-width: calc(100vw - 56px);
+    overflow-y: auto;
+    box-shadow: 8px 0 32px rgba(0, 0, 0, 0.18);
+  }
+  .dash-root > .dash-backdrop {
+    display: block;
+    position: fixed !important;
+    inset: 0;
+    z-index: 350 !important;
+    background: rgba(15, 18, 30, 0.38);
+    -webkit-tap-highlight-color: transparent;
+  }
+  .dash-root > div:not(.dash-backdrop) { min-width: 0; }
 }
