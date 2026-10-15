@@ -219,6 +219,21 @@ export class WorklogService extends EventEmitter {
     if (!s.followSchedule && !s.autoStart) return [];
     const now = this.now();
     const date = localDate(now);
+
+    // A session left running from a PREVIOUS day (nobody pressed stop, the server was off at
+    // closing time) must not block today: close it at that day's scheduled end, or the
+    // end of that day, whichever comes first. Otherwise today could never auto-start.
+    const stale = this._open();
+    if (stale && stale.date < date && s.autoStop && stale.kind === 'work') {
+      // Only a session that began BEFORE the scheduled end should have been stopped by the
+      // schedule; one that began after it is deliberate overtime and stays open.
+      const planned = atTime(stale.date, s.workEnd);
+      if (stale.start_at < planned) {
+        this.store.segments.close(stale.id, planned);
+        this._changed(stale.date, 'clock');
+      }
+    }
+
     if (!s.workdays.includes(weekday(date))) return [];
 
     const ws = atTime(date, s.workStart);

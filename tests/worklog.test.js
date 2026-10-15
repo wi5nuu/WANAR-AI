@@ -691,6 +691,18 @@ describe('follow schedule: one "Mulai", the day runs itself', () => {
     expect(st.breakMin).toBe(60);
   });
 
+  it('a session left running from yesterday is closed and does not block the auto start of today', () => {
+    const w = setup({ autoStart: true });
+    const Y = addDays(D, -1);
+    w.set(T('09:00'));
+    w.svc.store.segments.add({ date: Y, kind: 'work', startAt: atTime(Y, '13:00'), source: 'auto' });
+    const st = w.svc.status();
+    expect(st.state).toBe('working');
+    expect(st.openSince).toBe(T('08:00'));
+    const y = w.svc.day(Y);
+    expect(y.workedMin).toBe(4 * 60); // 13:00 → 17:00 (scheduled end), not 20 hours
+  });
+
   it('followSchedule=false leaves the clock fully manual', () => {
     const w = setup({ followSchedule: false });
     w.set(T('08:00')); w.svc.clockStart();
