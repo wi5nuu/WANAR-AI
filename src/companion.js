@@ -3,8 +3,8 @@
  *
  * "Peka": the assistant sometimes starts the conversation itself, like a caring
  * subordinate who notices how the boss' day is going —
- *   "Pak Wisnu, sudah tiga jam nonstop ya. Capek? Istirahat sebentar yuk."
- *   "Pak Wisnu, ada yang ingin diceritakan?"
+ *   "Mas Wisnu, sudah tiga jam nonstop ya. Capek? Istirahat sebentar yuk."
+ *   "Mas Wisnu, ada yang ingin diceritakan?"
  *
  * Triggers come from REAL state (work clock, break, tasks, time of day), and are
  * gated so it never becomes noise: quiet hours, a daily cap, a minimum gap, no
@@ -73,7 +73,7 @@ export function createCompanion({
   env = process.env, now = () => Date.now(), random = Math.random, ownerName = process.env.OWNER_NAME || 'Wisnu Alfian Nur Ashar',
 }) {
   const first = String(ownerName).split(/\s+/)[0];
-  const call = () => String(env.OWNER_CALL || '').trim() || `Pak ${first}`;
+  const call = () => String(env.OWNER_CALL || '').trim() || `Mas ${first}`;
   const meta = worklog.store.meta;
   const cfg = {
     enabled: String(env.COMPANION_ENABLED ?? 'true').toLowerCase() !== 'false',
@@ -196,7 +196,12 @@ export function createCompanion({
       ]);
       const text = String(r.text || '').replace(/```[\s\S]*?```/g, '').replace(/^["“]|["”]$/g, '').trim();
       if (text.length >= 8 && text.length <= 600) {
-        return text.replace(/\bBapak\s*\/\s*Ibu\b/gi, call()).replace(/\bAnda\b/g, call()).replace(/\b[Kk]amu\b/g, call());
+        return text
+          .replace(/\bBapak\s*\/\s*Ibu\b/gi, call())
+          .replace(/\bAnda\b/g, call())
+          .replace(/\b[Kk]amu\b/g, call())
+          .replace(new RegExp(`\\b(?:Pak|Bapak)\\s+${first}\\b`, 'g'), call())
+          .replace(/\b(?:Pak|Bapak)\b(?!\s+[A-Z])/g, 'Mas');
       }
     } catch { /* fall through */ }
     return fallback();

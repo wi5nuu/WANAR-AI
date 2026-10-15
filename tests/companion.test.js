@@ -34,7 +34,7 @@ describe('Companion: peka terhadap keadaan nyata', () => {
     t.set(at(11, 0)); // 180 minutes straight
     const r = await t.c.tick();
     expect(r.kind).toBe('long_stretch');
-    expect(r.text).toMatch(/Pak Wisnu/);
+    expect(r.text).toMatch(/Mas Wisnu/);
     expect(t.sent).toHaveLength(1);
     expect(t.remembered).toEqual([r.text]); // so his reply "iya capek" has context
   });
@@ -91,32 +91,32 @@ describe('Companion: peka terhadap keadaan nyata', () => {
   it('"jangan ganggu dulu" pauses it, "boleh sapa saya lagi" resumes', async () => {
     const t = build();
     t.set(at(8, 0)); t.svc.clockStart('x'); t.set(at(11, 0));
-    expect(companionIntent(t.c, 'jangan ganggu dulu ya', 'Pak Wisnu')).toMatch(/tidak akan menyapa dulu sampai sekitar pukul/);
+    expect(companionIntent(t.c, 'jangan ganggu dulu ya', 'Mas Wisnu')).toMatch(/tidak akan menyapa dulu sampai sekitar pukul/);
     expect(t.c.isPaused()).toBe(true);
     expect(await t.c.tick()).toBeNull();
-    expect(companionIntent(t.c, 'boleh sapa saya lagi', 'Pak Wisnu')).toMatch(/menyapa lagi/);
+    expect(companionIntent(t.c, 'boleh sapa saya lagi', 'Mas Wisnu')).toMatch(/menyapa lagi/);
     expect(t.c.isPaused()).toBe(false);
-    expect(companionIntent(t.c, 'tolong buatkan email ke budi', 'Pak Wisnu')).toBeNull();
+    expect(companionIntent(t.c, 'tolong buatkan email ke budi', 'Mas Wisnu')).toBeNull();
   });
 
   it('wording from the model is cleaned of Bapak/Ibu, Anda and kamu; AI down falls back to a human template', async () => {
     const t = build({ ai: aiSaying('Selamat siang, Bapak/Ibu. Apakah Anda capek? Kamu perlu istirahat?') });
     t.set(at(8, 0)); t.svc.clockStart('x'); t.set(at(11, 0));
     const r = await t.c.tick();
-    expect(r.text).toBe('Selamat siang, Pak Wisnu. Apakah Pak Wisnu capek? Pak Wisnu perlu istirahat?');
+    expect(r.text).toBe('Selamat siang, Mas Wisnu. Apakah Mas Wisnu capek? Mas Wisnu perlu istirahat?');
 
     const d = build({ ai: { async *chatStream() { throw new Error('down'); } } });
     d.set(at(8, 0)); d.svc.clockStart('x'); d.set(at(11, 0));
     const r2 = await d.c.tick();
-    expect(r2.text).toMatch(/Pak Wisnu/);
+    expect(r2.text).toMatch(/Mas Wisnu/);
     expect(r2.text).not.toMatch(/Bapak\/Ibu|Anda|kamu/i);
   });
 
   it('"/peka coba" sends one now even in quiet hours; OWNER_CALL changes the address; it can be disabled', async () => {
-    const t = build({ env: { OWNER_CALL: 'Mas Wisnu' } });
+    const t = build({ env: { OWNER_CALL: 'Bos Wisnu' } });
     t.set(at(22, 45));
     const r = await t.c.tick({ force: true });
-    expect(r.text).toMatch(/Mas Wisnu/);
+    expect(r.text).toMatch(/Bos Wisnu/);
     expect(t.c.commands().peka).toBeTruthy();
     t.c.setEnabled(false);
     t.set(at(11, 0)); t.svc.clockStart('x');

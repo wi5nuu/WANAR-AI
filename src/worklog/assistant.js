@@ -62,13 +62,22 @@ export function parsePlan(raw) {
   return extractPlan(text) || { reply: text.replace(/```[\s\S]*?```/g, '').trim(), actions: [] };
 }
 
-/** Never let the assistant call its owner "Bapak/Ibu", "Anda" or "kamu". */
+/**
+ * Never let the assistant call its owner "Bapak/Ibu", "Anda", "kamu" or "Pak/Bapak":
+ * he is addressed by his own call name ("Mas Wisnu"). "Pak Andi" (someone else) stays.
+ */
 export function addressOwner(text, call) {
-  return String(text || '')
-    .replace(/\bBapak\s*\/\s*Ibu\b/gi, call)
+  const first = String(call || '').trim().split(/\s+/).pop() || '';
+  const esc = first.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  let out = String(text || '')
     .replace(/\bBapak\s*\/\s*Ibu\b/gi, call)
     .replace(/\bAnda\b/g, call)
     .replace(/\b[Kk]amu\b/g, call);
+  // "Pak Wisnu" / "Bapak Wisnu" -> "Mas Wisnu"
+  if (esc) out = out.replace(new RegExp(`\\b(?:Pak|Bapak)\\s+${esc}\\b`, 'g'), call);
+  // a bare "Pak"/"Bapak" (not followed by another person's name) is aimed at him
+  out = out.replace(/\b(?:Pak|Bapak)\b(?!\s+[A-Z])/g, 'Mas');
+  return out;
 }
 
 /** Real work state (clock + open tasks) so "enaknya ngapain?" gets concrete answers. */
@@ -269,7 +278,7 @@ export function fallbackPlan(text, now = Date.now()) {
 export function makeAssistantResponder({ aiManager, worklog, emailDesk = null, briefing = null, companion = null, context = null, ownerName = process.env.OWNER_NAME || 'Wisnu Alfian Nur Ashar' }) {
   const first = String(ownerName).split(/\s+/)[0];
   // The assistant is the owner's subordinate: it addresses him respectfully by name.
-  const call = String(process.env.OWNER_CALL || '').trim() || `Pak ${first}`;
+  const call = String(process.env.OWNER_CALL || '').trim() || `Mas ${first}`;
 
   return async ({ history = [], text, commands = [], chatId = null }) => {
     // Any message from the boss counts as "he is here"; and he can pause or resume check-ins in words.
