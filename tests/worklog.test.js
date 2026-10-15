@@ -896,7 +896,7 @@ describe('Telegram assistant: plain language -> validated actions', async () => 
     const w = build({ start: T('09:00') });
     const ai = { async *chatStream() { yield { type: 'content', content: '{"reply":"Hari ini kamu belum mulai kerja.","actions":[]}' }; yield { type: 'done' }; } };
     const reply = await makeAssistantResponder({ aiManager: ai, worklog: w.svc })({ text: 'saya sudah kerja berapa jam?' });
-    expect(reply).toBe('Hari ini kamu belum mulai kerja.');
+    expect(reply).toBe('Hari ini Pak Wisnu belum mulai kerja.'); // never "kamu"/"Anda"/"Bapak/Ibu" to the owner
     expect(w.svc.listReminders()).toHaveLength(0);
   });
 
@@ -943,5 +943,63 @@ describe('assistant without model cooperation', async () => {
     const ai = { chatStream() { throw new Error('model must not be called'); } };
     const reply = await makeAssistantResponder({ aiManager: ai, worklog: w.svc })({ text: 'apa saja pengingat saya?' });
     expect(reply).toMatch(/1\. .*Meeting Pak Andi/);
+  });
+});
+
+describe("persona: bawahan yang sopan, hangat, dan tahu konteks", async () => {
+  const { makeAssistantResponder, addressOwner } = await import("../src/worklog/assistant.js");
+
+  it("the prompt makes the owner the boss, bans Bapak/Ibu/Anda/kamu, asks for empathy and uses real tasks", async () => {
+    const w = build({ start: T("09:00") });
+    w.svc.addTask({ date: D, title: "Kirim laporan harian" });
+    let prompt = "";
+    const ai = { async *chatStream(_m, o) { prompt = o.systemPrompt; yield { type: "content", content: JSON.stringify({ reply: "Baik, Pak Wisnu.", actions: [] }) }; yield { type: "done" }; } };
+    await makeAssistantResponder({ aiManager: ai, worklog: w.svc })({ text: "pagi gini enaknya ngapain yak hehe", chatId: "1" });
+    expect(prompt).toMatch(/ATASANMU sekaligus PEMILIKMU/);
+    expect(prompt).toMatch(/panggil dia "Pak Wisnu"/);
+    expect(prompt).toContain('JANGAN pernah memakai "Bapak/Ibu", "Anda", atau "kamu"');
+    expect(prompt).toMatch(/Saat dia curhat: dengarkan/);
+    expect(prompt).toMatch(/Tugas terbuka hari ini: Kirim laporan harian/);
+    expect(prompt).toMatch(/Status kerja hari ini:/);
+  });
+
+  it("addressOwner rewrites every forbidden form", () => {
+    expect(addressOwner("Selamat pagi, Bapak/Ibu. Apakah Anda siap? Kamu bisa istirahat.", "Pak Wisnu"))
+      .toBe("Selamat pagi, Pak Wisnu. Apakah Pak Wisnu siap? Pak Wisnu bisa istirahat.");
+  });
+
+  it("OWNER_CALL changes how he is addressed", async () => {
+    process.env.OWNER_CALL = "Mas Wisnu";
+    try {
+      const w = build({ start: T("09:00") });
+      const ai = { async *chatStream() { yield { type: "content", content: JSON.stringify({ reply: "Siap, Anda tenang saja.", actions: [] }) }; yield { type: "done" }; } };
+      const reply = await makeAssistantResponder({ aiManager: ai, worklog: w.svc })({ text: "halo", chatId: "1" });
+      expect(reply).toBe("Siap, Mas Wisnu tenang saja.");
+    } finally { delete process.env.OWNER_CALL; }
+  });
+});
+
+describe("persona: tetap menjawab walau model gagal", async () => {
+  const { makeAssistantResponder } = await import("../src/worklog/assistant.js");
+
+  it("an empty model answer falls back to a plain warm reply instead of an error", async () => {
+    const w = build({ start: T("09:00") });
+    let call = 0;
+    const ai = { async *chatStream(_m, o) {
+      call++;
+      if (call <= 2) { yield { type: "done" }; return; } // JSON attempt + its corrective retry: empty
+      expect(o.systemPrompt).not.toMatch(/Kamu BISA bertindak/); // plain conversation, no action schema
+      yield { type: "content", content: "Wah, pasti capek ya, Pak. Cerita saja, saya dengar." }; yield { type: "done" };
+    } };
+    const reply = await makeAssistantResponder({ aiManager: ai, worklog: w.svc })({ text: "capek banget hari ini", chatId: "1" });
+    expect(reply).toBe("Wah, pasti capek ya, Pak. Cerita saja, saya dengar.");
+  });
+
+  it("when every attempt fails the boss still gets a polite human answer, never a thrown error", async () => {
+    const w = build({ start: T("09:00") });
+    const ai = { async *chatStream() { yield { type: "error", content: "provider down" }; } };
+    const reply = await makeAssistantResponder({ aiManager: ai, worklog: w.svc })({ text: "halo", chatId: "1" });
+    expect(reply).toMatch(/^Maaf Pak Wisnu, saya sedang kesulitan terhubung/);
+    expect(reply).toMatch(/\/hariini/);
   });
 });

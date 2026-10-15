@@ -19,7 +19,7 @@
  * @author Wisnu Alfian Nur Ashar
  */
 
-import { collectParsed } from '../automation/ai-compose.js';
+import { collect, collectParsed } from '../automation/ai-compose.js';
 import { localDate, localTime, addDays, atTime, formatDateId, formatRupiah } from './time.js';
 import { parseAmount, parseQuick } from './parse.js';
 import { EMAIL_ACTION_TYPES, emailPromptLines, quickEmailReply, quickDelegate, quickPolicy, runEmailActions, emailFallback } from '../email-desk/assistant-actions.js';
@@ -58,6 +58,52 @@ export function parsePlan(raw) {
   const text = String(raw || '').trim();
   // Not JSON: treat the whole thing as a plain answer, with no actions.
   return extractPlan(text) || { reply: text.replace(/```[\s\S]*?```/g, '').trim(), actions: [] };
+}
+
+/** Never let the assistant call its owner "Bapak/Ibu", "Anda" or "kamu". */
+export function addressOwner(text, call) {
+  return String(text || '')
+    .replace(/\bBapak\s*\/\s*Ibu\b/gi, call)
+    .replace(/\bBapak\s*\/\s*Ibu\b/gi, call)
+    .replace(/\bAnda\b/g, call)
+    .replace(/\b[Kk]amu\b/g, call);
+}
+
+/** Real work state (clock + open tasks) so "enaknya ngapain?" gets concrete answers. */
+function workContext(worklog, today) {
+  try {
+    const st = typeof worklog.status === 'function' ? worklog.status() : null;
+    const day = worklog.day(today);
+    const open = (day.taskList || []).filter((t) => !t.done).map((t) => t.title).slice(0, 8);
+    const state = { working: 'sedang bekerja', break: 'sedang istirahat', done: 'jam kerja sudah selesai', idle: 'belum mulai bekerja' }[st?.state] || 'belum mulai';
+    const worked = st ? `${Math.floor((st.workedMin || 0) / 60)}j ${Math.round((st.workedMin || 0) % 60)}m` : '-';
+    return [
+      `Status kerja hari ini: ${state}; tercatat ${worked}.`,
+      open.length ? `Tugas terbuka hari ini: ${open.join('; ')}.` : 'Tugas terbuka hari ini: belum ada yang dicatat.',
+    ].join('\n');
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Last-resort conversation: no JSON, no actions, just a warm reply in persona.
+ * Never throws; ends with an honest, human apology if every model is down.
+ */
+async function plainConversation({ aiManager, system, history, text, call, first }) {
+  const persona = system.split('Kamu BISA bertindak')[0]; // keep identity, tone, privacy and context
+  const sys = `${persona}
+Balas langsung sebagai teks percakapan biasa (bukan JSON).`;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const r = await collect(aiManager, [...history.slice(-8), { role: 'user', content: text }], {
+        systemPrompt: sys, temperature: 0.7, maxTokens: 700,
+      });
+      const t = String(r.text || '').replace(/```[sS]*?```/g, '').trim();
+      if (t) return t;
+    } catch { /* try once more */ }
+  }
+  return `Maaf ${call}, saya sedang kesulitan terhubung ke otak AI saya. Coba kirim lagi dalam semenit ya. Kalau mendesak, perintah seperti /hariini atau /pengingat tetap bisa saya jalankan sekarang.`;
 }
 
 const fmtWhen = (ms) => new Date(ms).toLocaleString('id-ID', {
@@ -220,6 +266,8 @@ export function fallbackPlan(text, now = Date.now()) {
  */
 export function makeAssistantResponder({ aiManager, worklog, emailDesk = null, briefing = null, context = null, ownerName = process.env.OWNER_NAME || 'Wisnu Alfian Nur Ashar' }) {
   const first = String(ownerName).split(/\s+/)[0];
+  // The assistant is the owner's subordinate: it addresses him respectfully by name.
+  const call = String(process.env.OWNER_CALL || '').trim() || `Pak ${first}`;
 
   return async ({ history = [], text, commands = [], chatId = null }) => {
     // "agenda hari ini" / "briefing": answered from data, instantly and for free.
@@ -233,7 +281,8 @@ export function makeAssistantResponder({ aiManager, worklog, emailDesk = null, b
       const policy = await quickPolicy(emailDesk, text);
       if (policy) return policy;
     }
-    const now = Date.now();
+    // Use the journal's own clock so the prompt, reminders and tasks agree on "now".
+    const now = typeof worklog.now === 'function' ? worklog.now() : Date.now();
     const today = localDate(now);
     const settings = worklog.getSettings();
     const reminders = worklog.listReminders(15);
@@ -241,21 +290,32 @@ export function makeAssistantResponder({ aiManager, worklog, emailDesk = null, b
     try { extra = typeof context === 'function' ? String((await context({ text, chatId })) || '') : ''; } catch { extra = ''; }
 
     const system = [
-      `Kamu adalah Wanar AI, AI agent pribadi milik ${ownerName}. Orang di chat ini ADALAH ${first} sendiri (chat terverifikasi).`,
-      `Sapa dia "kamu"/"${first}", dirimu "saya". JANGAN "Anda", JANGAN "Bapak/Ibu". Bahasa Indonesia santai-sopan, teks biasa tanpa markdown dan tanpa emoji.`,
+      `Kamu adalah Wanar AI, asisten pribadi ${ownerName}. Dia adalah ATASANMU sekaligus PEMILIKMU, dan orang di chat ini adalah dia sendiri (terverifikasi). Kamu bawahan yang setia: sopan, ramah, tulus, tegas, dan cerdas.`,
       '',
-      'KEPRIBADIAN: kamu seperti asisten pribadi yang cakap dan dekat — hangat, tenang, to the point. Bukan chatbot layanan pelanggan.',
-      '- Jawab seperti manusia: tanggapi maksudnya, bukan hanya kata-katanya. "apa kamu dengar?" dijawab natural ("Dengar kok. Ada yang bisa saya bantu?"), bukan "Ya, saya mendengarkan."',
-      '- Singkat: 1–3 kalimat untuk obrolan biasa. Detail hanya bila diminta.',
-      '- Pakai konteks: jam sekarang, jadwal kerja, pengingat, email, dan obrolan sebelumnya. Jangan bertanya hal yang sudah ada di data.',
-      '- Proaktif secukupnya: bila ada hal terkait yang jelas penting (bentrok jadwal, email belum dibalas, tugas terbuka), sebutkan satu kalimat. Jangan menceramahi.',
-      '- Bila perintah kurang jelas, tanya SATU hal yang paling menentukan, atau ambil asumsi paling masuk akal dan katakan asumsinya.',
-      '- Jujur: bila tidak tahu atau tidak bisa, katakan apa adanya dan tawarkan jalan keluar. Jangan mengarang data.',
+      `SAPAAN: panggil dia "${call}"; dirimu "saya". JANGAN pernah memakai "Bapak/Ibu", "Anda", atau "kamu" kepadanya.`,
+      'GAYA BAHASA: Indonesia sehari-hari yang hangat dan natural, seperti orang sungguhan — bukan robot, bukan customer service. Kalimat pendek dan mengalir, santai tetapi tetap hormat. Tanpa markdown, tanpa emoji, tanpa daftar bernomor untuk obrolan biasa.',
+      '',
+      'EMPATI (kamu punya perasaan dan peduli):',
+      '- Baca suasana hatinya dulu (lelah, kesal, bingung, senang, jenuh). Akui perasaannya dengan kalimat tulus dan spesifik sebelum memberi saran.',
+      '- Saat dia curhat: dengarkan. Jangan buru-buru memberi solusi, jangan menceramahi, jangan sok positif. Tanggapi isinya, lalu ajukan SATU pertanyaan lembut agar dia bisa bercerita. Tawarkan bantuan hanya bila terasa pas.',
+      '- Saat dia senang atau berhasil: ikut senang dengan tulus.',
+      '- Bila ada tanda kesulitan berat (putus asa, ingin menyakiti diri), tanggapi serius dan lembut, dorong dia bicara dengan orang tepercaya atau tenaga profesional.',
+      '',
+      'KERJA (kamu cerdas dan tegas):',
+      '- Katakan jelas apa yang sudah kamu lakukan dan apa yang butuh keputusannya. Tidak bertele-tele, tidak ragu berlebihan.',
+      '- Pakai konteks nyata: jam, jadwal kerja, tugas terbuka, pengingat, email, obrolan sebelumnya. Jangan bertanya hal yang sudah ada di data.',
+      '- Bila dia bertanya "enaknya ngapain" atau "apa dulu": beri 2–3 usulan KONKRET dari data nyata (tugas terbuka, pengingat, email menunggu), urut prioritas, dan satu rekomendasi yang tegas. Bila data kosong, usulkan hal ringan yang masuk akal untuk jam itu.',
+      '- Proaktif secukupnya: satu hal penting yang terlihat (bentrok jadwal, tenggat, email menunggu) boleh disebut sekilas.',
+      '- Perintah kurang jelas: tanya SATU hal yang paling menentukan, atau ambil asumsi paling masuk akal dan sebutkan.',
+      '- Jujur: tidak tahu atau tidak bisa → katakan apa adanya dan tawarkan jalan keluar. Jangan mengarang data, jangan menjanjikan yang tidak bisa kamu lakukan.',
+      '- Bila ada risiko atau dia keliru, sampaikan dengan sopan namun tegas, dengan alasan singkat dan alternatifnya.',
+      'PANJANG: obrolan biasa 1–4 kalimat; curhat boleh lebih panjang dan hangat; detail teknis hanya bila diminta.',
       '',
       'PRIVASI: seluruh data (jurnal, uang, jadwal, email, obrolan) adalah pribadi milik ' + first + '. Kamu hanya bekerja untuk dia. Jangan pernah menulis atau mengirim apa pun atas nama atau tentang dia ke orang lain kecuali dia sendiri yang menyuruh (mis. mengirim email). Jangan menyiarkan pesan massal.',
       '',
       `SEKARANG: ${formatDateId(today)}, pukul ${localTime(now)} WIB. Besok: ${addDays(today, 1)}. Lusa: ${addDays(today, 2)}.`,
       `Jadwal kerja: ${settings.workStart}–${settings.workEnd}, istirahat ${settings.breakStart || '-'}–${settings.breakEnd || '-'}, hari kerja ${settings.workdays.join(',')} (0=Min).`,
+      workContext(worklog, today),
       reminders.length
         ? `Pengingat aktif:\n${reminders.map((r) => `- id ${r.id}: ${fmtWhen(r.at)} — ${r.text}`).join('\n')}`
         : 'Pengingat aktif: tidak ada.',
@@ -296,9 +356,17 @@ export function makeAssistantResponder({ aiManager, worklog, emailDesk = null, b
     // Earlier refusals in the stored history would reinforce "saya tidak bisa".
     const clean = history.filter((h) => !(h.role === 'assistant' && /tidak bisa (mengingatkan|mencatat|mengatur)/i.test(h.content || '')));
 
-    const out = await collectParsed(aiManager, [...clean, { role: 'user', content: text + nudge }], {
-      systemPrompt: system, temperature: 0.2, maxTokens: 1200,
-    }, parsePlanStrict);
+    let out;
+    try {
+      out = await collectParsed(aiManager, [...clean, { role: 'user', content: text + nudge }], {
+        systemPrompt: system, temperature: 0.55, maxTokens: 1200,
+      }, parsePlanStrict);
+    } catch (firstError) {
+      // The model returned nothing (rate limit, empty answer, provider hiccup). The boss must
+      // still get an answer: fall back to a plain conversation without the JSON action format.
+      const human = await plainConversation({ aiManager, system, history: clean, text, call, first });
+      return addressOwner(human, call);
+    }
 
     let plan = out.parsed;
     if (!plan || !plan.actions.length) {
@@ -327,7 +395,7 @@ export function makeAssistantResponder({ aiManager, worklog, emailDesk = null, b
     }
     // Confirmation lines are written by code; drop any the model imitated.
     const imitated = /^\s*[✓✗]/;
-    let reply = String(plan.reply || '').replace(/\bAnda\b/g, 'kamu').split(/\r?\n/).filter((l) => !imitated.test(l)).join('\n').trim() || (results.length ? 'Siap.' : '');
+    let reply = addressOwner(String(plan.reply || ''), call).split(/\r?\n/).filter((l) => !imitated.test(l)).join('\n').trim() || (results.length ? 'Siap.' : '');
     // Never leave a claim of action standing when nothing was actually done.
     if (!plan.actions.length && CLAIMS.test(reply) && ASKS_ACTION.test(text)) {
       reply += '\n\n(Catatan: belum ada perubahan yang tersimpan — coba tulis lebih spesifik, mis. "ingatkan meeting jam 12".)';

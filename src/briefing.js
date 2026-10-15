@@ -62,6 +62,8 @@ export function createBriefing({ worklog, desk = null, notify = null, defaultCha
         parts.push(`  • Perlu kamu balas (${o.awaitingYou.length}):`);
         for (const t of o.awaitingYou.slice(0, 5)) parts.push(`     – ${t.counterpart} — ${clip(t.subject, 50)}: «${clip(t.last?.snippet, 70)}»`);
       }
+      const seenThem = new Set();
+      o.awaitingThem = o.awaitingThem.filter((t) => { const k = `${t.counterpart}|${String(t.subject).toLowerCase().replace(/^(re|balas):s*/g, '')}`; if (seenThem.has(k)) return false; seenThem.add(k); return true; });
       if (o.awaitingThem.length) {
         parts.push(`  • Menunggu balasan (${o.awaitingThem.length}):`);
         for (const t of o.awaitingThem.slice(0, 5)) parts.push(`     – ${t.counterpart} — ${clip(t.subject, 50)} (sejak ${daysAgo(at, t.last.at)} hari)`);
