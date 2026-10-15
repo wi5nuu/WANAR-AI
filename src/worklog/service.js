@@ -228,13 +228,37 @@ export class WorklogService extends EventEmitter {
     const be = hasBreak ? atTime(date, s.breakEnd) : null;
     const events = [];
 
-    // Auto start (opt-in): only on a day with nothing recorded yet.
+    // Auto start (opt-in): on a day with nothing recorded yet, the day is built from the
+    // SCHEDULE — work from workStart, the break at its scheduled minutes, then back to work —
+    // even when the server first noticed it late (restart, reset, opened at noon).
+    const autoSegs = () => this.store.segments.forDate(date);
+    // Repair for an earlier bug: a late auto start began the day at breakStart (12:00) and never
+    // recorded the break. That exact shape (one auto work segment starting at breakStart) is rebuilt.
+    if (s.autoStart && hasBreak && ws < bs && now >= ws && now < we) {
+      const segs = autoSegs();
+      if (segs.length === 1 && segs[0].source === 'auto' && segs[0].kind === 'work' && segs[0].start_at === bs) {
+        this.store.segments.remove(segs[0].id);
+        this.store.meta.set(`autostart:${date}`, '');
+        this.store.meta.set(`autobreak:${date}`, '');
+      }
+    }
     if (s.autoStart && now >= ws && now < we && !this._open()
-        && !this.store.meta.get(`autostart:${date}`) && !this.store.segments.forDate(date).length) {
+        && !this.store.meta.get(`autostart:${date}`) && !autoSegs().length) {
       this.store.meta.set(`autostart:${date}`, now);
-      const startAt = hasBreak && ws < bs && now >= bs ? Math.min(now, bs) : ws;
-      this.store.segments.add({ date, kind: 'work', startAt, source: 'auto' });
-      events.push({ kind: 'start', at: startAt });
+      const add = (kind, startAt, endAt = null) => this.store.segments.add({ date, kind, startAt, ...(endAt != null ? { endAt } : {}), source: 'auto' });
+      if (hasBreak && ws < bs && now >= bs) {
+        add('work', ws, bs);                       // 08:00 → 12:00
+        this.store.meta.set(`autobreak:${date}`, now);
+        if (now >= be) {
+          add('break', bs, be);                    // 12:00 → 13:00
+          if (!(s.autoStop && be >= we)) add('work', be);   // 13:00 → now (open)
+        } else {
+          add('break', bs);                        // still on break (open)
+        }
+      } else {
+        add('work', ws);                           // before the break: simply from workStart
+      }
+      events.push({ kind: 'start', at: ws });
     }
     if (!s.followSchedule) return this._afterSchedule(date, events);
 

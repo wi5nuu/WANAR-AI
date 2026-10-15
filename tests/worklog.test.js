@@ -661,6 +661,36 @@ describe('follow schedule: one "Mulai", the day runs itself', () => {
     expect(w.svc.day(D).segments[0]).toMatchObject({ start_at: T('08:00'), source: 'auto' });
   });
 
+  it('autoStart noticed late (14:51) still counts from 08:00 and deducts the 12–13 break', () => {
+    const w = setup({ autoStart: true });
+    w.set(T('14:51'));
+    const st = w.svc.status();
+    expect(st.state).toBe('working');
+    expect(st.workedMin).toBe(4 * 60 + 111); // 08–12 + 13–14:51
+    expect(st.breakMin).toBe(60);
+    const segs = w.svc.day(D).segments.map((x) => [x.kind, x.start_at, x.end_at]);
+    expect(segs).toEqual([['work', T('08:00'), T('12:00')], ['break', T('12:00'), T('13:00')], ['work', T('13:00'), null]]);
+  });
+
+  it('autoStart noticed during the break: work 08–12, break running', () => {
+    const w = setup({ autoStart: true });
+    w.set(T('12:30'));
+    expect(w.svc.status()).toMatchObject({ state: 'break', workedMin: 240 });
+  });
+
+  it('repairs a day wrongly started at the break start (12:00 auto, no break)', () => {
+    const w = setup({ autoStart: true });
+    w.set(T('08:00'));
+    w.svc.status(); // starts normally
+    w.svc.resetDay(D);
+    w.svc.store.segments.add({ date: D, kind: 'work', startAt: T('12:00'), source: 'auto' });
+    w.svc.store.meta.set(`autostart:${D}`, T('12:00'));
+    w.set(T('14:51'));
+    const st = w.svc.status();
+    expect(st.workedMin).toBe(4 * 60 + 111);
+    expect(st.breakMin).toBe(60);
+  });
+
   it('followSchedule=false leaves the clock fully manual', () => {
     const w = setup({ followSchedule: false });
     w.set(T('08:00')); w.svc.clockStart();
