@@ -41,7 +41,7 @@ const PATTERNS = [
   [FailReason.GONE, /(\b410\b|\bgone\b|model[^a-z]{0,3}not[^a-z]{0,3}found|does not exist|no longer available|has been (?:retired|deprecated|removed)|\b404\b.*model)/i],
   [FailReason.RATE, /(rate ?limit|too many requests|429|tokens per minute|\btpm\b|requests per minute|\brpm\b|overloaded)/i],
   [FailReason.TOKEN, /(context length|maximum context|context window|max.?tokens|token limit|too long|reduce the length)/i],
-  [FailReason.AUTH, /(401|403|unauthorized|invalid api key|invalid_api_key|forbidden|authentication|api key not valid|permission)/i],
+  [FailReason.AUTH, /(\b40[13]\b|unauthorized|invalid[ _-]?api[ _-]?key|invalid[_ ]key|api key (?:tidak valid|salah|not valid|is required|required|missing)|x-api-key header is required|kunci (?:api )?(?:tidak valid|salah)|forbidden|authentication|incorrect api key|permission)/i],
   [FailReason.SERVER, /(5\d\d|internal server error|bad gateway|service unavailable|gateway timeout|server error)/i],
   [FailReason.NETWORK, /(econnreset|etimedout|enotfound|econnrefused|socket hang up|network|fetch failed|timeout)/i],
   [FailReason.EMPTY, /(empty response|empty response|returned an empty)/i],

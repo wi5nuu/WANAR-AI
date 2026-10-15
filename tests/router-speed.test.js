@@ -66,3 +66,14 @@ describe('router speed', () => {
     expect(chain.indexOf('c')).toBeLessThan(chain.indexOf('b'));
   });
 });
+
+describe('key errors are recognised in any wording', () => {
+  it.each([
+    ['Clouvia API error: API key tidak valid.', 'auth'],
+    ['x-api-key header is required', 'auth'],
+    ['Incorrect API key provided', 'auth'],
+    ['Request failed with status code 401', 'auth'],
+  ])('%s -> %s', (msg, reason) => {
+    expect(classifyError(msg)).toBe(reason);
+  });
+});
