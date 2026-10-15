@@ -110,6 +110,7 @@ export class TelegramInbox extends EventEmitter {
     this._chains = new Map();   // chatId -> Promise (serialises replies per chat)
     /** Optional persistence hooks (set by the server): save + restore AI conversations. */
     this.onExchange = null;   // ({chatId, user, assistant}) => void
+    this.onOutgoing = null;   // ({chatId, assistant}) => void  (assistant-initiated messages)
     this.loadHistory = null;  // (chatId) => [{role, content}]
     /** @type {Map<string, {description:string, run:Function}>} owner-only commands from other modules */
     this.ownerCommands = new Map();
@@ -307,6 +308,17 @@ export class TelegramInbox extends EventEmitter {
       } catch { /* history is best-effort */ }
     }
     return [];
+  }
+
+  /**
+   * A message the assistant sent on its own initiative (check-in, reminder, briefing).
+   * Remembered as an assistant turn so the boss' reply to it makes sense.
+   */
+  noteOutgoing(chatId, text) {
+    const t = String(text || '').slice(0, 4000);
+    if (!t) return;
+    this._remember(String(chatId), 'assistant', t);
+    try { this.onOutgoing?.({ chatId: String(chatId), assistant: t }); } catch { /* best effort */ }
   }
 
   _remember(chatId, role, content) {

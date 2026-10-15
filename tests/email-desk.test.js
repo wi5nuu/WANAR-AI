@@ -779,3 +779,31 @@ describe('meetings found in email go into the schedule by themselves', async () 
     expect(wl.service.day('2026-10-14').taskList).toHaveLength(1);
   });
 });
+
+describe('bulk greeting is personal; "konfirmasi" in the content is not a reply policy', async () => {
+  const { guessName, parseRecipientList } = await import('../src/email-desk/service.js');
+  const { runEmailActions } = await import('../src/email-desk/assistant-actions.js');
+
+  it('guesses a first name from the address, never from role mailboxes', () => {
+    expect(guessName('budi.santoso@klien.com')).toBe('Budi');
+    expect(guessName('sari@toko.id')).toBe('Sari');
+    expect(guessName('info@toko.id')).toBeNull();
+    expect(guessName('cs.support@toko.id')).toBeNull();
+    expect(guessName('x7@toko.id')).toBeNull();
+    expect(parseRecipientList('Pak Joko <joko@x.com>, rina@y.id')).toEqual([
+      { email: 'joko@x.com', name: 'Pak Joko' }, { email: 'rina@y.id', name: 'Rina' },
+    ]);
+  });
+
+  it('"Kepada Bapak/Ibu," becomes each recipient\'s own name; the policy stays the global one', async () => {
+    const w = build();
+    const ownerText = 'kirim undangan rapat ke budi.santoso@klien.com, info@toko.id, minta konfirmasi kehadiran';
+    const lines = await runEmailActions(w.desk, [{
+      type: 'email', to: ['budi.santoso@klien.com', 'info@toko.id'], subject: 'Undangan', body: 'Kepada Bapak/Ibu,\n\nMohon hadir Jumat.\n\nHormat saya,\nWisnu',
+    }], { chatId: OWNER, ownerText });
+    expect(lines[0]).toMatch(/Saat dibalas: balas otomatis/); // "konfirmasi kehadiran" did not flip it to approve
+    const drafts = w.desk.pendingDrafts();
+    expect(drafts.find((d) => d.to_addr === 'budi.santoso@klien.com').body).toMatch(/^Kepada Budi,/);
+    expect(drafts.find((d) => d.to_addr === 'info@toko.id').body).toMatch(/^Kepada Bapak\/Ibu,/);
+  });
+});

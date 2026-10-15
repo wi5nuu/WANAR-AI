@@ -56,6 +56,7 @@ import { createWorklogRouter } from './worklog/routes.js';
 import { initEmailDesk } from './email-desk/index.js';
 import { createEmailDeskRouter } from './email-desk/routes.js';
 import { createBriefing } from './briefing.js';
+import { createCompanion } from './companion.js';
 import { createCommandCenterRouter } from './command-center/routes.js';
 import { createOwnerContext, createTelegramTranscript } from './memory/owner-context.js';
 import { makeAssistantResponder } from './worklog/assistant.js';
@@ -93,6 +94,21 @@ const briefing = createBriefing({
     : null,
 });
 automation.inbox.registerCommands(briefing.commands());
+// "Peka": occasional, state-driven check-ins ("capek ya?", "ada yang ingin diceritakan?").
+const companion = createCompanion({
+  worklog: worklog.service,
+  aiManager,
+  defaultChatId: () => String(process.env.TELEGRAM_AI_CHAT_IDS || '').split(',')[0]?.trim() || null,
+  notify: automation.channels.has('telegram')
+    ? async (chatId, text) => {
+      const tg = automation.channels.get('telegram');
+      if (tg.mode !== 'live') throw new Error('Telegram belum dikonfigurasi');
+      await tg.send({ to: chatId, text });
+    }
+    : null,
+  remember: (chatId, text) => automation.inbox.noteOutgoing(chatId, text),
+});
+automation.inbox.registerCommands(companion.commands());
 const ownerContext = createOwnerContext({ db: sqliteDb, automation, worklog });
 const telegramTranscript = createTelegramTranscript({ db: sqliteDb });
 // The owner's plain messages go to an assistant that can also ACT (reminders,
@@ -102,9 +118,11 @@ automation.inbox.responder = makeAssistantResponder({
   worklog: worklog.service,
   emailDesk: emailDesk.desk,
   briefing,
+  companion,
   context: ({ text, chatId }) => ownerContext({ text, excludeSessionId: chatId ? telegramTranscript.sessionId(chatId) : null }),
 });
 automation.inbox.onExchange = (e) => telegramTranscript.record(e);
+automation.inbox.onOutgoing = (e) => telegramTranscript.recordOutgoing(e);
 automation.inbox.loadHistory = (chatId) => telegramTranscript.history(chatId);
 
 // ==================== MULTER FILE UPLOAD CONFIG ====================
@@ -2822,6 +2840,7 @@ async function startServer() {
       worklog.service.start();
       console.log('Worklog    : jurnal kerja aktif (laporan Telegram terjadwal)');
       emailDesk.desk.start(); // follow-up checks
+      if (companion.start()) console.log('Peka       : sapaan peduli aktif (maks ' + companion.config.maxPerDay + '/hari, /peka untuk mengatur)');
       if (briefing.start()) console.log('Briefing   : briefing pagi otomatis di hari kerja (/brief kapan saja)');
       console.log(emailDesk.watcher.start()
         ? 'Email Desk : memantau balasan email (IMAP IDLE, realtime)'
@@ -2833,7 +2852,7 @@ async function startServer() {
   }
   for (const sig of ['SIGINT', 'SIGTERM']) {
     process.once(sig, () => {
-      try { automation.scheduler.stop(); automation.inbox.stop(); worklog.service.stop(); emailDesk.watcher.stop(); emailDesk.desk.stop(); briefing.stop(); automation.channels.closeAll(); } catch { /* ignore */ }
+      try { automation.scheduler.stop(); automation.inbox.stop(); worklog.service.stop(); emailDesk.watcher.stop(); emailDesk.desk.stop(); briefing.stop(); companion.stop(); automation.channels.closeAll(); } catch { /* ignore */ }
       process.exit(0);
     });
   }

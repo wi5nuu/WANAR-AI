@@ -14,8 +14,9 @@ ENV_FILE="${ENV_FILE:-/opt/wanar-ai/.env}"
 SERVICE="${SERVICE:-wanar}"
 
 [[ "$NAME" =~ ^[A-Z][A-Z0-9_]{2,60}$ ]] || { echo "Nama variabel tidak valid. Contoh: CLOUVIA_API_KEY"; exit 1; }
-[ -f "$ENV_FILE" ] || { echo "File $ENV_FILE tidak ditemukan"; exit 1; }
-SUDO=""; [ -w "$ENV_FILE" ] || SUDO="sudo"
+# Folder aplikasi hanya bisa dibuka user layanan (izin 750), jadi semua akses file lewat sudo.
+SUDO="sudo"
+$SUDO test -f "$ENV_FILE" || { echo "File $ENV_FILE tidak ditemukan"; exit 1; }
 
 read -rsp "$NAME: " VAL; echo
 VAL="$(printf '%s' "$VAL" | tr -d '[:cntrl:][:space:]')"   # buang karakter tak terlihat / spasi
@@ -29,7 +30,7 @@ $SUDO grep -vE "^${NAME}=" "$ENV_FILE" > "$TMP" || true
 printf '%s=%s\n' "$NAME" "$VAL" >> "$TMP"
 
 $SUDO cp "$ENV_FILE" "$ENV_FILE.bak.$(date +%Y%m%d%H%M%S)"
-OWN="$(stat -c '%U:%G' "$ENV_FILE")"
+OWN="$($SUDO stat -c '%U:%G' "$ENV_FILE")"
 $SUDO install -m 600 -o "${OWN%%:*}" -g "${OWN##*:}" "$TMP" "$ENV_FILE"
 echo "OK: $NAME disimpan (panjang ${#VAL} karakter)."
 

@@ -20,6 +20,7 @@
  */
 
 import { collect, collectParsed } from '../automation/ai-compose.js';
+import { companionIntent } from '../companion.js';
 import { localDate, localTime, addDays, atTime, formatDateId, formatRupiah } from './time.js';
 import { parseAmount, parseQuick } from './parse.js';
 import { EMAIL_ACTION_TYPES, emailPromptLines, quickEmailReply, quickDelegate, quickPolicy, runEmailActions, emailFallback } from '../email-desk/assistant-actions.js';
@@ -264,12 +265,18 @@ export function fallbackPlan(text, now = Date.now()) {
  * Builds the responder used for the owner's plain Telegram messages.
  * Same signature as makeChatResponder, so it is a drop-in replacement.
  */
-export function makeAssistantResponder({ aiManager, worklog, emailDesk = null, briefing = null, context = null, ownerName = process.env.OWNER_NAME || 'Wisnu Alfian Nur Ashar' }) {
+export function makeAssistantResponder({ aiManager, worklog, emailDesk = null, briefing = null, companion = null, context = null, ownerName = process.env.OWNER_NAME || 'Wisnu Alfian Nur Ashar' }) {
   const first = String(ownerName).split(/\s+/)[0];
   // The assistant is the owner's subordinate: it addresses him respectfully by name.
   const call = String(process.env.OWNER_CALL || '').trim() || `Pak ${first}`;
 
   return async ({ history = [], text, commands = [], chatId = null }) => {
+    // Any message from the boss counts as "he is here"; and he can pause or resume check-ins in words.
+    if (companion) {
+      try { companion.noteOwnerMessage(); } catch { /* best effort */ }
+      const said = companionIntent(companion, text, call);
+      if (said) return said;
+    }
     // "agenda hari ini" / "briefing": answered from data, instantly and for free.
     if (briefing && BRIEFING_ASK.test(String(text || '').trim())) return briefing.build();
     // "kirim" / "batal" while an email draft waits: handled by code, instantly.

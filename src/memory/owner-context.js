@@ -236,6 +236,17 @@ export function createTelegramTranscript({ db, tz = 'Asia/Jakarta' }) {
     history(chatId, limit = 12) {
       return recent.all(sessionId(chatId), limit).reverse().map((r) => ({ role: r.role, content: r.content }));
     },
+    /** Assistant-initiated message (no user turn before it). */
+    recordOutgoing({ chatId, assistant, at = Date.now() }) {
+      const id = sessionId(chatId, at);
+      const label = new Date(at).toLocaleDateString('id-ID', { timeZone: tz, day: 'numeric', month: 'short' });
+      db.transaction(() => {
+        ensure.run(id, `Telegram · ${label}`, 'telegram', 'telegram-bot');
+        add.run(id, 'assistant', String(assistant).slice(0, 8000), 'telegram', 'telegram-bot');
+        touch.run(id);
+      })();
+      return id;
+    },
     record({ chatId, user, assistant, at = Date.now() }) {
       const id = sessionId(chatId, at);
       const label = new Date(at).toLocaleDateString('id-ID', { timeZone: tz, day: 'numeric', month: 'short' });

@@ -84,6 +84,17 @@ export function personalize(text, name) {
  * Parses recipients from an array or free text: "a@x.com, Budi <b@y.co>; c@z.id dan d@w.com".
  * @returns {{email:string, name:string|null}[]} unique, valid, in order
  */
+const NOT_A_NAME = new Set(['info', 'admin', 'cs', 'sales', 'support', 'contact', 'kontak', 'hello', 'hi', 'halo', 'office', 'team', 'tim', 'hrd', 'hr', 'finance', 'marketing', 'noreply', 'mail', 'email', 'layanan', 'customer', 'service', 'help', 'billing', 'order', 'pemesanan', 'redaksi', 'humas', 'sekretariat', 'webmaster', 'press', 'user', 'users', 'orang', 'akun', 'account', 'test', 'tes', 'demo', 'owner', 'member', 'guest', 'tamu', 'staff', 'staf', 'divisi', 'bagian']);
+
+/** "budi.santoso@x.com" -> "Budi"; role/generic mailboxes ("info@") -> null. Best effort, never invented. */
+export function guessName(email) {
+  const local = String(email || '').split('@')[0].toLowerCase();
+  const first = local.split(/[._+-]/)[0];
+  if (/\d/.test(first)) return null; // digits => an account name, not a person's name
+  if (!/^[a-z]{3,14}$/.test(first) || NOT_A_NAME.has(first) || NOT_A_NAME.has(local)) return null;
+  return first[0].toUpperCase() + first.slice(1);
+}
+
 export function parseRecipientList(input) {
   const parts = Array.isArray(input) ? input : String(input || '').split(/[,;\n]|\s+dan\s+/i);
   const out = [];
@@ -94,7 +105,7 @@ export function parseRecipientList(input) {
     const email = (m ? m[2] : (/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.exec(raw)?.[0] || '')).trim().toLowerCase();
     if (!email || !isValidEmail(email) || seen.has(email)) continue;
     seen.add(email);
-    const name = m && m[1].trim() ? m[1].trim().slice(0, 80) : null;
+    const name = (m && m[1].trim() ? m[1].trim().slice(0, 80) : null) || guessName(email);
     out.push({ email, name });
   }
   return out;
@@ -292,6 +303,10 @@ export class EmailDesk {
       const g = await generateEmail(this.aiManager, { brief, personalize: true, signature: this.signature });
       text = String(g.body || '').trim();
       subj = subj || clip(g.subject, 200);
+    }
+    // A generic greeting becomes a personal one per recipient ("Kepada Bapak/Ibu," -> "Kepada Budi,").
+    if (!/{{s*nama/i.test(text)) {
+      text = text.replace(/\b(Yth\.?\s+|Kepada\s+|Halo\s+|Dear\s+)?(Bapak\s*\/\s*Ibu|Bapak\s+atau\s+Ibu)\b/i, (m0, lead) => `${lead || ''}{{nama|Bapak/Ibu}}`);
     }
     const batch = this.store.newBatchId();
     const drafts = [];

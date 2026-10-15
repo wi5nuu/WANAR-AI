@@ -6,7 +6,7 @@ const PROVIDER_MAP = {
   puter:       { label: 'Puter.js',    key: 'puter',       hasRoute: false },
   vector:      { label: 'VectorEngine',key: 'vector',      hasRoute: false },
   openrouter:  { label: 'OpenRouter (Auto-Switch Free)', key: 'openrouter', hasRoute: false },
-  clouvia:     { label: 'Clouvia Router (DeepSeek V4.1 Flash)', key: 'clouvia', hasRoute: false },
+  clouvia:     { label: 'Clouvia Router (100+ Model · Saldo Permanen)', key: 'clouvia', hasRoute: false },
 };
 
 export function useConfig() {

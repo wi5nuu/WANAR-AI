@@ -145,7 +145,8 @@ export async function runEmailActions(desk, actions, { chatId = null, ownerText 
           // made an exception in THIS message. The model's own suggestion never pins a mode.
           let mode = null;
           if (/(jangan|tidak usah|gak usah|nggak usah)\s+(di)?balas/i.test(ownerText)) mode = 'notify';
-          else if (/(konfirmasi|minta persetujuan|tunggu (izin|persetujuan)|ai siapkan|siapkan (balasan|dulu))/i.test(ownerText)) mode = 'approve';
+          // "minta konfirmasi kehadiran" is CONTENT of the email, not an instruction about replies
+          else if (/(konfirmasi dulu|minta (izin|persetujuan) (dulu|saya)|tunggu (izin|persetujuan)|ai siapkan|siapkan (balasan|dulu)|balasnya (saya )?konfirmasi)/i.test(ownerText)) mode = 'approve';
           else if (ownerWantsAuto) mode = 'auto';
           const followUpDays = followUpDaysIn(ownerText) || (Number(a.follow_up_days) > 0 ? Number(a.follow_up_days) : null);
           const { batch, drafts } = await desk.draftBatch({
