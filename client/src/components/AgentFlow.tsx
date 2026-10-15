@@ -9,11 +9,18 @@
  *  - Tombol "▶ Simulasi Demo" untuk melihat animasi tanpa backend
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FlowGraph, FlowNode, FlowState, ViewMode } from './agentflow/types';
 import { AGENT_GRAPH } from './agentflow/flowGraph';
 import { FlowchartCanvas } from './agentflow/FlowchartCanvas';
 import './agentflow/agentflow.css';
+import './systemmap/systemmap.css';
+
+// The 3D live map pulls in three.js: load it only when the map is opened.
+const SystemMap = lazy(() => import('./systemmap/SystemMap'));
+
+type Screen = 'map' | 'flow';
+const VIEW_KEY = 'agentFlowView';
 
 // ── Metadata tool → layanan yang benar-benar dipakai di backend ──
 interface ToolMeta { service: string; label: string; icon: string; color: string }
@@ -173,6 +180,14 @@ function edgeIdsForNode(graph: FlowGraph, nodeId: string): string[] {
 
 export default function AgentFlow({ flow, onClose }: { flow: FlowState; onClose: () => void }) {
   const [mode, setMode] = useState<ViewMode>('simple');
+  const [screen, setScreenState] = useState<Screen>(() => {
+    try { return localStorage.getItem(VIEW_KEY) === 'flow' ? 'flow' : 'map'; } catch { return 'map'; }
+  });
+  const setScreen = useCallback((v: Screen) => {
+    setScreenState(v);
+    try { localStorage.setItem(VIEW_KEY, v); } catch { /* private mode */ }
+  }, []);
+  const [demoTick, setDemoTick] = useState(0);
   const [demo, setDemo] = useState<FlowState | null>(null);
   const demoTimersRef = useRef<number[]>([]);
   const activeNodeRef = useRef<SVGGElement>(null);
@@ -302,7 +317,7 @@ export default function AgentFlow({ flow, onClose }: { flow: FlowState; onClose:
 
   return (
     <div className={`agent-flow-overlay ${isFullscreen ? 'is-fullscreen' : ''}`} onClick={onClose}>
-      <div ref={modalRef} className={`agent-flow-modal glass-strong ${isFullscreen ? 'fullscreen' : ''}`} onClick={e => e.stopPropagation()}>
+      <div ref={modalRef} className={`agent-flow-modal glass-strong ${isFullscreen ? 'fullscreen' : ''} ${screen === 'map' ? 'af-wide' : ''}`} onClick={e => e.stopPropagation()}>
         {/* Header */}
         <div className="agent-flow-header">
           <div>
@@ -311,7 +326,8 @@ export default function AgentFlow({ flow, onClose }: { flow: FlowState; onClose:
               Alur Kerja AI Agent
             </div>
             <div className="agent-flow-subtitle">
-              {demo ? 'Simulasi demo — garis hidup berjalan tanpa backend'
+              {screen === 'map' ? 'Realtime: semua kanal → Wanar Core → provider → model. Klik titik cahaya atau node untuk melihat prosesnya.'
+                : demo ? 'Simulasi demo — garis hidup berjalan tanpa backend'
                 : isRunning ? 'Sedang berjalan — garis menyala mengikuti proses nyata'
                 : view.stage === 'done' ? `Selesai dalam ${elapsed}s`
                 : view.stage === 'error' ? 'Berhenti karena error'
@@ -322,9 +338,9 @@ export default function AgentFlow({ flow, onClose }: { flow: FlowState; onClose:
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             <button
               className={`af-demo-btn${demo ? ' on' : ''}`}
-              onClick={demo ? stopDemo : startDemo}
+              onClick={screen === 'map' ? () => setDemoTick(n => n + 1) : (demo ? stopDemo : startDemo)}
             >
-              {demo ? '⏹ Stop Demo' : '▶ Simulasi Demo'}
+              {screen !== 'map' && demo ? '⏹ Stop Demo' : '▶ Simulasi Demo'}
             </button>
             <button
               className="af-fullscreen-btn"
@@ -352,14 +368,26 @@ export default function AgentFlow({ flow, onClose }: { flow: FlowState; onClose:
           </div>
         </div>
 
-        {/* Mode toggle */}
-        <div className="agent-flow-toggle">
+        {/* View + mode toggle */}
+        <div className="agent-flow-toggle af-toggle-row">
+          <span className="af-view-tabs" role="tablist" aria-label="Tampilan">
+            <button role="tab" aria-selected={screen === 'map'} className={screen === 'map' ? 'on' : ''} onClick={() => setScreen('map')}>🌐 Peta Sistem 3D</button>
+            <button role="tab" aria-selected={screen === 'flow'} className={screen === 'flow' ? 'on' : ''} onClick={() => setScreen('flow')}>🧭 Alur Chat</button>
+          </span>
           <button className={mode === 'simple' ? 'active' : ''} onClick={() => setMode('simple')}>Mode Dasar</button>
           <button className={mode === 'tech' ? 'active' : ''} onClick={() => setMode('tech')}>Mode Teknis</button>
         </div>
 
+        {screen === 'map' && (
+          <div className="agent-flow-body af-map-body">
+            <Suspense fallback={<div className="af-map-loading">Memuat peta 3D…</div>}>
+              <SystemMap mode={mode} demoTick={demoTick} />
+            </Suspense>
+          </div>
+        )}
+
         {/* Canvas */}
-        <div className="agent-flow-body">
+        {screen === 'flow' && <div className="agent-flow-body">
           <FlowchartCanvas
             flow={view}
             graph={AGENT_GRAPH}
@@ -446,17 +474,17 @@ export default function AgentFlow({ flow, onClose }: { flow: FlowState; onClose:
               })}
             </div>
           )}
-        </div>
+        </div>}
 
         {/* Legend */}
-        <div className="agent-flow-legend">
+        {screen === 'flow' && <div className="agent-flow-legend">
           <span><StatusDot status="done" /> Selesai</span>
           <span><StatusDot status="active" /> Sedang jalan</span>
           <span><StatusDot status="pending" /> Menunggu</span>
           <span><StatusDot status="error" /> Error</span>
-        </div>
+        </div>}
 
-        {view.error && (
+        {screen === 'flow' && view.error && (
           <div className="agent-flow-error" style={{ margin: '0 16px 12px' }}>⚠️ {view.error}</div>
         )}
       </div>

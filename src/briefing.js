@@ -13,6 +13,7 @@
  */
 
 import { localDate, localTime, addDays, atTime, weekday, formatDateId, formatMinutes, formatRupiah } from './worklog/time.js';
+import { withTrace, traceStep } from './observability/trace-hub.js';
 
 const clip = (s, n) => {
   const t = String(s || '').replace(/\s+/g, ' ').trim();
@@ -106,7 +107,19 @@ export function createBriefing({ worklog, desk = null, notify = null, defaultCha
     worklog.store.meta.set(key, String(at)); // mark first: never twice
     const chat = defaultChatId();
     if (!chat) return false;
-    try { await notify(chat, build(at)); return true; } catch (e) { console.warn('[BRIEFING] gagal kirim:', e.message); return false; }
+    return withTrace({ channel: 'briefing', title: 'Briefing pagi otomatis', input: `Briefing ${today}`, meta: { date: today } }, async () => {
+      traceStep('intent', { name: 'briefing', detail: 'Disusun dari data jadwal, pengingat, email & tugas — tanpa AI, 0 token', model: false });
+      const text = build(at);
+      try {
+        await notify(chat, text);
+        traceStep('deliver', { channel: 'telegram', kind: 'briefing', chars: text.length, ok: true });
+        return true;
+      } catch (e) {
+        console.warn('[BRIEFING] gagal kirim:', e.message);
+        traceStep('deliver', { channel: 'telegram', kind: 'briefing', ok: false, error: e.message });
+        return false;
+      }
+    });
   }
 
   return {

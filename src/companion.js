@@ -17,6 +17,7 @@
 
 import { collect } from './automation/ai-compose.js';
 import { localDate, minuteOfDay, weekday } from './worklog/time.js';
+import { withTrace, traceStep } from './observability/trace-hub.js';
 
 const hm = (s, d = 0) => { const m = /^(\d{1,2}):(\d{2})$/.exec(String(s || '')); return m ? Number(m[1]) * 60 + Number(m[2]) : d; };
 const pick = (arr, rnd) => arr[Math.floor(rnd() * arr.length) % arr.length];
@@ -227,15 +228,25 @@ export function createCompanion({
       setNum(`count:${sg.today}`, getNum(`count:${sg.today}`) + 1);
       markToday(choice.kind, sg.today);
     }
-    const text = await compose(choice.kind, choice.facts);
-    try {
-      await notify(chat, text);
-      try { remember?.(chat, text); } catch { /* history is best effort */ }
-      return { kind: choice.kind, text };
-    } catch (e) {
-      console.warn('[COMPANION] gagal kirim:', e.message);
-      return null;
-    }
+    return withTrace({ channel: 'companion', title: `Sapaan peka: ${choice.kind}`, input: choice.facts, meta: { kind: choice.kind, forced: force } }, async () => {
+      traceStep('intent', {
+        name: `peka:${choice.kind}`,
+        detail: force ? 'Dipicu manual (/peka coba)' : 'Dipicu otomatis dari keadaan & kegiatan hari ini',
+        model: true,
+        signals: { workedMin: Math.round(sg.workedMin || 0), tasks: `${sg.tasksDone}/${sg.tasksTotal}`, minute: sg.minute },
+      });
+      const text = await compose(choice.kind, choice.facts);
+      try {
+        await notify(chat, text);
+        traceStep('deliver', { channel: 'telegram', kind: 'check-in', chars: text.length, ok: true });
+        try { remember?.(chat, text); } catch { /* history is best effort */ }
+        return { kind: choice.kind, text };
+      } catch (e) {
+        console.warn('[COMPANION] gagal kirim:', e.message);
+        traceStep('deliver', { channel: 'telegram', kind: 'check-in', ok: false, error: e.message });
+        return null;
+      }
+    });
   }
 
   return {

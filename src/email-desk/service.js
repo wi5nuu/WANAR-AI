@@ -27,6 +27,7 @@
 import { collectParsed, generateEmail } from '../automation/ai-compose.js';
 import { isValidEmail } from '../automation/recipients.js';
 import { extractMeeting } from './meetings.js';
+import { withTrace, traceStep } from '../observability/trace-hub.js';
 
 export class EmailDeskError extends Error {
   constructor(message, code = 'bad_request') {
@@ -552,6 +553,20 @@ export class EmailDesk {
    * @returns {Promise<{matched:boolean, action?:string}>}
    */
   async handleInbound(mail) {
+    return withTrace({
+      channel: 'email',
+      title: `Email masuk: ${String(mail?.subject || '(tanpa subjek)').slice(0, 80)}`,
+      input: `Dari: ${mail?.from?.address || '?'}\nSubjek: ${mail?.subject || ''}\n\n${String(mail?.text || '').slice(0, 1500)}`,
+      meta: { from: mail?.from?.address || null },
+    }, async () => {
+      traceStep('receive', { channel: 'email', from: mail?.from?.address || null, chars: String(mail?.text || '').length });
+      const r = await this._handleInboundCore(mail);
+      traceStep('intent', { name: `email:${r?.action || (r?.matched === false ? 'ignored' : 'handled')}`, detail: JSON.stringify(r || {}).slice(0, 300), model: false });
+      return r;
+    });
+  }
+
+  async _handleInboundCore(mail) {
     if (mail.messageId && this.store.messages.byMessageId(mail.messageId)) return { matched: false, action: 'duplicate' };
     let thread = this.matchThread(mail);
     let isNew = false;

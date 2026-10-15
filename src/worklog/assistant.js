@@ -24,6 +24,7 @@ import { companionIntent } from '../companion.js';
 import { localDate, localTime, addDays, atTime, formatDateId, formatRupiah } from './time.js';
 import { parseAmount, parseQuick } from './parse.js';
 import { EMAIL_ACTION_TYPES, emailPromptLines, quickEmailReply, quickDelegate, quickPolicy, runEmailActions, emailFallback } from '../email-desk/assistant-actions.js';
+import { traceStep } from '../observability/trace-hub.js';
 
 const MAX_ACTIONS = 8;
 const ACTION_TYPES = ['reminder', 'cancel_reminder', 'task', 'finance', 'clock', 'schedule', 'report', ...EMAIL_ACTION_TYPES];
@@ -275,18 +276,21 @@ export function makeAssistantResponder({ aiManager, worklog, emailDesk = null, b
     if (companion) {
       try { companion.noteOwnerMessage(); } catch { /* best effort */ }
       const said = companionIntent(companion, text, call);
-      if (said) return said;
+      if (said) { traceStep('intent', { name: 'peka-control', detail: 'Mengatur sapaan peka (jeda/lanjut) — dijawab kode, tanpa AI', model: false }); return said; }
     }
     // "agenda hari ini" / "briefing": answered from data, instantly and for free.
-    if (briefing && BRIEFING_ASK.test(String(text || '').trim())) return briefing.build();
+    if (briefing && BRIEFING_ASK.test(String(text || '').trim())) {
+      traceStep('intent', { name: 'briefing', detail: 'Agenda/briefing disusun dari data jurnal, pengingat & email — tanpa AI, 0 token', model: false });
+      return briefing.build();
+    }
     // "kirim" / "batal" while an email draft waits: handled by code, instantly.
     if (emailDesk) {
       const quick = await quickEmailReply(emailDesk, text);
-      if (quick) return quick;
+      if (quick) { traceStep('intent', { name: 'email-confirm', detail: 'Konfirmasi draf email (kirim/batal) — dijalankan kode', model: false }); return quick; }
       const delegated = await quickDelegate(emailDesk, text);
-      if (delegated) return delegated;
+      if (delegated) { traceStep('intent', { name: 'email-delegate', detail: 'Delegasi balasan email — dijalankan kode', model: false }); return delegated; }
       const policy = await quickPolicy(emailDesk, text);
-      if (policy) return policy;
+      if (policy) { traceStep('intent', { name: 'email-policy', detail: 'Mengubah kebijakan balas email — dijalankan kode', model: false }); return policy; }
     }
     // Use the journal's own clock so the prompt, reminders and tasks agree on "now".
     const now = typeof worklog.now === 'function' ? worklog.now() : Date.now();
@@ -354,6 +358,7 @@ export function makeAssistantResponder({ aiManager, worklog, emailDesk = null, b
 
     // Listing questions are answered from the database directly: exact and zero tokens.
     if (/^(?:apa saja|apa aja|daftar|list|lihat|cek|ada)\b.*\b(?:pengingat|reminder)/i.test(text.trim())) {
+      traceStep('intent', { name: 'reminder-list', detail: 'Daftar pengingat dibaca langsung dari database — tanpa AI', model: false });
       return reminders.length
         ? ['Pengingat aktif:', ...reminders.map((r, i) => `${i + 1}. ${fmtWhen(r.at)} — ${r.text}`)].join('\n')
         : 'Tidak ada pengingat aktif.';
@@ -363,6 +368,12 @@ export function makeAssistantResponder({ aiManager, worklog, emailDesk = null, b
     // Earlier refusals in the stored history would reinforce "saya tidak bisa".
     const clean = history.filter((h) => !(h.role === 'assistant' && /tidak bisa (mengingatkan|mencatat|mengatur)/i.test(h.content || '')));
 
+    traceStep('intent', {
+      name: 'ai-plan',
+      detail: 'Dijawab AI dalam format rencana JSON {reply, actions}: AI menulis jawaban dan memilih aksi (pengingat, tugas, uang, jam kerja, email)',
+      model: true,
+      context: { reminders: reminders.length, history: clean.length, extraChars: extra.length, email: Boolean(emailDesk) },
+    });
     let out;
     try {
       out = await collectParsed(aiManager, [...clean, { role: 'user', content: text + nudge }], {
@@ -371,11 +382,17 @@ export function makeAssistantResponder({ aiManager, worklog, emailDesk = null, b
     } catch (firstError) {
       // The model returned nothing (rate limit, empty answer, provider hiccup). The boss must
       // still get an answer: fall back to a plain conversation without the JSON action format.
+      traceStep('fallback', { name: 'plain-conversation', detail: `Format rencana gagal (${String(firstError?.message || firstError).slice(0, 120)}) — beralih ke obrolan biasa` });
       const human = await plainConversation({ aiManager, system, history: clean, text, call, first });
       return addressOwner(human, call);
     }
 
     let plan = out.parsed;
+    traceStep('plan', {
+      parsed: Boolean(plan), attempts: out.attempts, provider: out.provider, model: out.model,
+      reply: String(plan?.reply || '').slice(0, 600),
+      actions: (plan?.actions || []).map((a) => a.type),
+    });
     if (!plan || !plan.actions.length) {
       // The model ignored the format, or claimed to act without any action:
       // act deterministically so the request is never silently lost.
@@ -400,6 +417,7 @@ export function makeAssistantResponder({ aiManager, worklog, emailDesk = null, b
     if (emailDesk && emailActions.length) {
       results = [...results, ...(await runEmailActions(emailDesk, emailActions, { chatId, ownerText: text }))];
     }
+    if (results.length) traceStep('actions', { results: results.slice(0, 20), ok: results.filter((r) => r.startsWith('✓')).length, failed: results.filter((r) => r.startsWith('✗')).length });
     // Confirmation lines are written by code; drop any the model imitated.
     const imitated = /^\s*[✓✗]/;
     let reply = addressOwner(String(plan.reply || ''), call).split(/\r?\n/).filter((l) => !imitated.test(l)).join('\n').trim() || (results.length ? 'Siap.' : '');

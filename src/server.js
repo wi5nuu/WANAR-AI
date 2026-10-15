@@ -60,6 +60,9 @@ import { createCompanion } from './companion.js';
 import { createCommandCenterRouter } from './command-center/routes.js';
 import { createOwnerContext, createTelegramTranscript } from './memory/owner-context.js';
 import { makeAssistantResponder } from './worklog/assistant.js';
+import { traceHub, traceStep } from './observability/trace-hub.js';
+import { installHeaderCapture } from './observability/quota.js';
+import { createSystemMapRouter } from './observability/routes.js';
 
 const coordinator = new DistributedCoordinator();
 
@@ -69,6 +72,14 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = config.server.port;
 const aiManager = new AIManager();
+// Live system map: capture providers' rate-limit headers, and account tokens per
+// REAL model call (actual provider/model after failover, every channel).
+installHeaderCapture();
+aiManager.onUsage = (u) => {
+  try {
+    db.recordTokenUsage(new Date().toISOString().slice(0, 10), u.provider, u.model || 'unknown', u.total, estimateCost(u.provider, u.total));
+  } catch (e) { console.warn('[USAGE] gagal mencatat token:', e.message); }
+};
 
 // Automation (scheduler + bulk email). Constructed here, started in startServer().
 const automation = initAutomation({ db: sqliteDb, aiManager });
@@ -1015,6 +1026,7 @@ app.use('/api/automation', createAutomationRouter({
 app.use('/api/worklog', createWorklogRouter({ worklog, rateLimiters }));
 app.use('/api/email-desk', createEmailDeskRouter({ emailDesk, rateLimiters }));
 app.use('/api/command-center', createCommandCenterRouter({ worklog, emailDesk, automation, briefing, rateLimiters }));
+app.use('/api/system-map', createSystemMapRouter({ aiManager, db, config, automation, emailDesk, companion, briefing, tools: () => getToolDefinitions(), rateLimiters }));
 
 app.get('/api/sessions/:id/messages', (req, res) => {
   const messages = db.getMessages(req.params.id);  res.json({ messages });
@@ -1253,10 +1265,19 @@ app.post('/api/chat/stream', rateLimiters.chat, asyncHandler(async (req, res) =>
   const inputChars = messages.reduce((s, m) => s + m.content.length, 0);
   const clientIP = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket.remoteAddress || 'unknown';
 
+  const lastUserText = [...messages].reverse().find((m) => m.role === 'user')?.content || '';
+  await traceHub.withTrace({
+    channel: 'web',
+    title: req.body.voice ? 'Obrolan suara (web)' : 'Chat web',
+    input: lastUserText,
+    meta: { session: sessionId ? String(sessionId).slice(0, 12) : null, provider: req.query.provider || req.body.provider || null, model: model || null, voice: Boolean(req.body.voice) },
+  }, async () => {
+  traceStep('receive', { channel: 'web', chars: lastUserText.length, history: messages.length - 1, rag: Boolean(ragEngine.enabled && ragEngine.initialized) });
   try {
     const stream = aiManager.chatWithTools(messages, {
       provider,
       model,
+      routeSource: req.query.provider || req.body.provider ? 'web-form' : 'default',
       systemPrompt,
       voiceMode: Boolean(req.body.voice),
       voice: Boolean(req.body.voice),
@@ -1293,9 +1314,9 @@ app.post('/api/chat/stream', rateLimiters.chat, asyncHandler(async (req, res) =>
     }
 
     if (!clientDisconnected) {
+      // Token usage is recorded per real model call by aiManager.onUsage (actual provider/model after failover).
       totalTokens = Math.round(fullContent.length * 1.3);
-      const date = new Date().toISOString().slice(0, 10);
-      db.recordTokenUsage(date, provider, model || 'unknown', totalTokens, estimateCost(provider, totalTokens));
+      traceStep('deliver', { channel: 'web', chars: fullContent.length, ok: true });
 
       if (sessionId && fullContent) {
         saveMessagesToDb(sessionId, messages, fullContent, totalTokens, provider, model);
@@ -1345,6 +1366,9 @@ app.post('/api/chat/stream', rateLimiters.chat, asyncHandler(async (req, res) =>
       }
     }
   }
+  if (clientDisconnected) traceStep('deliver', { channel: 'web', ok: false, note: 'browser menutup koneksi' });
+  return fullContent;
+  });
 }));
 
 app.get('/api/token-usage', (req, res) => {

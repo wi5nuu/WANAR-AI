@@ -226,7 +226,8 @@ export default class TogetherProvider extends BaseProvider {
             try {
               const parsed = JSON.parse(trimmed.slice(6));
               const delta = parsed.choices?.[0]?.delta;
-              
+              if (parsed.usage) yield { type: 'usage', usage: parsed.usage };
+
               if (delta?.content) {
                 totalTokens += this.estimateTokens(delta.content);
                 yield { type: 'content', content: delta.content };

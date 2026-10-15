@@ -27,6 +27,7 @@ import { suppressionKey } from './store.js';
 import { ErrorKind } from './mailer.js';
 import { collect } from './ai-compose.js';
 import { chunkText } from './channels/base.js';
+import { withTrace, traceStep } from '../observability/trace-hub.js';
 
 const escapeHtml = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -279,12 +280,22 @@ export class TelegramInbox extends EventEmitter {
 
     const plugin = this.ownerCommands.get(command);
     if (plugin && this.isOwner(chatId) && msg.chat.type === 'private') {
-      try {
-        const out = await plugin.run({ chatId, arg, text, person });
-        if (out) for (const part of chunkText(String(out), 3500)) await this._reply(chatId, escapeHtml(part));
-      } catch (e) {
-        await this._reply(chatId, escapeHtml(e?.expose ? e.message : `Gagal: ${e?.message || 'kesalahan tidak diketahui'}`.slice(0, 300)));
-      }
+      await withTrace({ channel: 'telegram', title: `Perintah /${command}`, input: text, meta: { chat: maskChat(chatId), kind: 'command' } }, async () => {
+        traceStep('receive', { channel: 'telegram', kind: 'command', command, chars: text.length });
+        traceStep('intent', { name: `command:/${command}`, detail: plugin.description || '', model: false });
+        let out = '';
+        try {
+          out = String((await plugin.run({ chatId, arg, text, person })) || '');
+          const parts = out ? chunkText(out, 3500) : [];
+          for (const part of parts) await this._reply(chatId, escapeHtml(part));
+          traceStep('deliver', { channel: 'telegram', parts: parts.length, chars: out.length, ok: true });
+        } catch (e) {
+          out = e?.expose ? e.message : `Gagal: ${e?.message || 'kesalahan tidak diketahui'}`.slice(0, 300);
+          traceStep('error', { error: out });
+          await this._reply(chatId, escapeHtml(out));
+        }
+        return out;
+      });
       return { action: 'command', command, chatId };
     }
 
@@ -317,6 +328,7 @@ export class TelegramInbox extends EventEmitter {
   noteOutgoing(chatId, text) {
     const t = String(text || '').slice(0, 4000);
     if (!t) return;
+    traceStep('deliver', { channel: 'telegram', kind: 'outgoing', chars: t.length, ok: true });
     this._remember(String(chatId), 'assistant', t);
     try { this.onOutgoing?.({ chatId: String(chatId), assistant: t }); } catch { /* best effort */ }
   }
@@ -353,9 +365,14 @@ export class TelegramInbox extends EventEmitter {
   }
 
   async _answer(chatId, text) {
+    return withTrace({ channel: 'telegram', title: 'Pesan Telegram', input: text, meta: { chat: maskChat(chatId), kind: 'chat' } }, () => this._answerTraced(chatId, text));
+  }
+
+  async _answerTraced(chatId, text) {
     try {
       await this.channel.sendAction?.(chatId, 'typing').catch(() => {});
       const history = this._historyFor(chatId).slice();
+      traceStep('receive', { channel: 'telegram', kind: 'chat', chars: text.length, history: history.length });
       const commands = [
         ...[...this.ownerCommands].map(([k, d]) => `/${k} — ${d.description || ''}`),
         '/help — daftar perintah', '/id — tampilkan Chat ID',
@@ -365,11 +382,18 @@ export class TelegramInbox extends EventEmitter {
       this._remember(chatId, 'user', text.slice(0, 4000));
       this._remember(chatId, 'assistant', answer.slice(0, 4000));
       try { this.onExchange?.({ chatId, user: text.slice(0, 4000), assistant: answer }); } catch { /* never block the reply */ }
-      for (const part of chunkText(answer, 3500)) await this._reply(chatId, escapeHtml(part));
+      const parts = chunkText(answer, 3500);
+      for (const part of parts) await this._reply(chatId, escapeHtml(part));
+      traceStep('deliver', { channel: 'telegram', parts: parts.length, chars: answer.length, ok: true });
       this.emit('ai_reply', { chatId });
+      return answer;
     } catch (e) {
       console.warn('[TELEGRAM-INBOX] jawaban AI gagal:', e.message);
-      await this._reply(chatId, 'Maaf, AI sedang tidak tersedia. Coba lagi sebentar ya.');
+      traceStep('error', { error: e.message });
+      const sorry = 'Maaf, AI sedang tidak tersedia. Coba lagi sebentar ya.';
+      await this._reply(chatId, sorry);
+      traceStep('deliver', { channel: 'telegram', parts: 1, chars: sorry.length, ok: true, fallback: true });
+      return sorry;
     }
   }
 
@@ -381,4 +405,10 @@ export class TelegramInbox extends EventEmitter {
       console.warn('[TELEGRAM-INBOX] balasan gagal:', e.message);
     }
   }
+}
+
+/** Chat ids are personal: show only the tail on the system map. */
+function maskChat(chatId) {
+  const s = String(chatId || '');
+  return s.length > 4 ? `…${s.slice(-4)}` : s;
 }

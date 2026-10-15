@@ -19,6 +19,7 @@ import { executeTool, getToolDefinitions } from './tools/registry.js';
 import { SmartFailover, classifyError, DEFAULT_STATE_PATH } from './ai-failover.js';
 import * as db from './database.js';
 import config from '../config/config.js';
+import { traceHub, traceStep, estimateTokens } from './observability/trace-hub.js';
 
 const WANAR_FORMAT_RULES_CLI = `FORMAT OUTPUT (WAJIB - OVERRIDE ATURAN LAIN):
 Kamu berjalan di terminal CLI, BUKAN web browser:
@@ -331,7 +332,97 @@ export class AIManager {
     }
   }
 
+  /**
+   * Runs an inner generator inside the active trace, or inside a new one when the
+   * caller did not open any (CLI, prompt lab, ad-hoc jobs): every model call is
+   * visible on the live system map, whoever made it.
+   */
+  async *_traced(options, messages, makeInner) {
+    if (traceHub.current()) { yield* makeInner(); return; }
+    const lastUser = [...(messages || [])].reverse().find((m) => m.role === 'user');
+    const trace = traceHub.start({
+      channel: options.traceChannel || 'system',
+      title: options.traceTitle || 'Panggilan AI internal',
+      input: typeof lastUser?.content === 'string' ? lastUser.content : '',
+    });
+    const it = traceHub.run(trace, () => makeInner());
+    let out = '';
+    let finished = false;
+    try {
+      while (true) {
+        const r = await traceHub.run(trace, () => it.next());
+        if (r.done) break;
+        if (r.value?.type === 'content') out += r.value.content || '';
+        yield r.value;
+      }
+      finished = true;
+      const failed = trace.events.some((e) => e.type === 'all_failed');
+      traceHub.finish(trace, { status: failed ? 'error' : 'ok', output: out, error: failed ? 'Semua provider gagal' : null });
+    } catch (e) {
+      finished = true;
+      traceHub.finish(trace, { status: 'error', output: out, error: e });
+      throw e;
+    } finally {
+      if (!finished) {
+        traceHub.finish(trace, { status: 'stopped', output: out });
+        try { await it.return?.(); } catch { /* closing */ }
+      }
+    }
+  }
+
+  _modelOf(provider, model) {
+    return model || this.providers[provider]?.defaultModel || null;
+  }
+
+  /** Records the routing decision: what was asked for, where it came from, and the candidate order. */
+  _traceRoute(provider, model, options, chain, messages, systemPrompt) {
+    if (!traceHub.current()) return;
+    const explicit = Boolean(options.provider);
+    const promptChars = String(systemPrompt || '').length
+      + (messages || []).reduce((n, m) => n + (typeof m.content === 'string' ? m.content.length : JSON.stringify(m.content || '').length), 0);
+    traceStep('context', {
+      messages: (messages || []).length,
+      systemChars: String(systemPrompt || '').length,
+      promptTokens: Math.round(promptChars / 3.6),
+      temperature: options.temperature ?? null,
+      maxTokens: options.maxTokens ?? null,
+    });
+    traceStep('route', {
+      requested: { provider, model: this._modelOf(provider, model) },
+      source: options.routeSource || (explicit ? 'request' : 'default'),
+      defaultProvider: this.currentProvider,
+      chain: chain.slice(0, 14).map((c, i) => ({
+        i,
+        provider: c.provider,
+        model: this._modelOf(c.provider, c.model),
+        reason: c.reason || (i === 0 ? 'primary' : 'failover'),
+        skip: i === 0 ? (this.failover.isProviderDown(c.provider) ? { why: 'auth' } : null) : this.failover.skipReason(c.provider, c.model),
+        available: typeof this.providers[c.provider]?.isAvailable === 'function' ? Boolean(this.providers[c.provider].isAvailable()) : true,
+      })),
+      total: chain.length,
+    });
+  }
+
+  /** One finished model call: success + token usage (real when the provider reported it). */
+  _traceUsage(cand, startedAt, text, usage, promptTokens) {
+    const model = this._modelOf(cand.provider, cand.model);
+    const real = usage && (usage.prompt_tokens != null || usage.completion_tokens != null);
+    const prompt = real ? Number(usage.prompt_tokens) || 0 : promptTokens;
+    const completion = real ? Number(usage.completion_tokens) || 0 : estimateTokens(text);
+    traceStep('success', { provider: cand.provider, model, ms: Date.now() - startedAt, chars: String(text || '').length });
+    traceStep('usage', { provider: cand.provider, model, prompt, completion, estimated: !real });
+    try { this.onUsage?.({ provider: cand.provider, model, prompt, completion, total: prompt + completion, estimated: !real, channel: traceHub.current()?.channel || 'system' }); } catch { /* accounting is best effort */ }
+  }
+
+  _promptTokens(messages, systemPrompt) {
+    return estimateTokens(String(systemPrompt || '') + JSON.stringify(messages || []));
+  }
+
   async *chatStream(messages, options = {}) {
+    yield* this._traced(options, messages, () => this._chatStreamCore(messages, options));
+  }
+
+  async *_chatStreamCore(messages, options = {}) {
     const provider = options.provider || this.currentProvider;
     const model = options.model;
     const systemPrompt = options.systemPrompt || this.systemPrompt;
@@ -342,54 +433,86 @@ export class AIManager {
 
     // Smart failover: coba kandidat berurutan, pindah otomatis bila gagal.
     const chain = this.failover.buildChain(provider, model);
+    this._traceRoute(provider, model, options, chain, truncatedMessages, systemPrompt);
     if (chain.length === 0) {
+      traceStep('all_failed', { error: 'Tidak ada provider tersedia' });
       yield { type: 'error', content: 'Tidak ada provider tersedia. Konfigurasikan minimal satu API key di .env.' };
       yield { type: 'done' };
       return;
     }
+    const promptTokens = this._promptTokens(truncatedMessages, systemPrompt);
 
     let lastError = null;
     for (let i = 0; i < chain.length; i++) {
       const cand = chain[i];
       const providerInstance = this.providers[cand.provider];
       if (!providerInstance) continue;
-      if (typeof providerInstance.isAvailable === 'function' && !providerInstance.isAvailable()) continue;
+      if (typeof providerInstance.isAvailable === 'function' && !providerInstance.isAvailable()) {
+        traceStep('skip', { provider: cand.provider, model: this._modelOf(cand.provider, cand.model), why: 'not_configured' });
+        continue;
+      }
       // Re-checked per candidate: earlier failures in THIS request may have
       // revealed a dead provider (bad key) or a rate-limited one.
       // The primary is also skipped when its credential is known-rejected: retrying
       // a dead key on every request only adds latency.
-      if ((i > 0 ? this.failover.shouldSkip(cand.provider, cand.model) : this.failover.isProviderDown(cand.provider))) continue;
+      if ((i > 0 ? this.failover.shouldSkip(cand.provider, cand.model) : this.failover.isProviderDown(cand.provider))) {
+        const sk = this.failover.skipReason(cand.provider, cand.model) || { why: 'cooldown' };
+        traceStep('skip', { provider: cand.provider, model: this._modelOf(cand.provider, cand.model), why: sk.why, until: sk.until });
+        continue;
+      }
 
       if (i > 0 || cand.provider !== provider) {
         yield { type: 'provider_switch', from: provider, to: cand.provider, model: cand.model, reason: cand.reason || 'failover', attempt: i, reset: true };
       }
 
+      const startedAt = Date.now();
+      traceStep('attempt', { provider: cand.provider, model: this._modelOf(cand.provider, cand.model), reason: cand.reason || (i === 0 ? 'primary' : 'failover'), index: i });
       let errored = null;
+      let text = '';
+      let usage = null;
+      let firstAt = 0;
       try {
         for await (const ev of providerInstance.chatStream(truncatedMessages, { ...options, model: cand.model })) {
           if (ev.type === 'error') { errored = ev.content || 'stream error'; break; }
+          if (ev.type === 'usage') { usage = ev.usage || usage; continue; }
+          if (ev.type === 'content' || ev.type === 'token') {
+            if (!firstAt) { firstAt = Date.now(); traceStep('first_token', { provider: cand.provider, ms: firstAt - startedAt }); }
+            text += ev.content || '';
+          }
+          if (ev.type === 'done') {
+            if (!text) { errored = 'empty response'; break; }
+            this._traceUsage(cand, startedAt, text, usage, promptTokens);
+            yield ev;
+            return;
+          }
           yield ev;
-          if (ev.type === 'done') return;
         }
       } catch (e) {
         errored = e.message;
       }
 
       if (errored) {
+        traceStep('fail', { provider: cand.provider, model: this._modelOf(cand.provider, cand.model), reason: classifyError(errored), error: String(errored).slice(0, 300), ms: Date.now() - startedAt });
         this._handleFailover(cand, errored);
         lastError = errored;
         continue;
       }
 
       this.failover.markSuccess(cand.provider, cand.model);
+      this._traceUsage(cand, startedAt, text, usage, promptTokens);
       return;
     }
 
+    traceStep('all_failed', { error: lastError ? String(lastError).slice(0, 300) : 'Tidak ada kandidat yang bisa dicoba' });
     yield { type: 'error', content: `Semua provider gagal.${lastError ? ` Error terakhir: ${lastError}` : ''}` };
     yield { type: 'done' };
   }
 
   async *chatWithTools(messages, options = {}) {
+    yield* this._traced({ traceChannel: 'web', traceTitle: 'Chat dengan tools', ...options }, messages, () => this._chatWithToolsCore(messages, options));
+  }
+
+  async *_chatWithToolsCore(messages, options = {}) {
     const provider = options.provider || this.currentProvider;
     const model = options.model;
     const userPrompt = options.systemPrompt || this.systemPrompt;
@@ -455,7 +578,11 @@ export class AIManager {
           if (name === 'browser_interact') args = { ...args, force_visible: true };
         }
         yield { type: 'tool_start', name, args };
+        const toolStarted = Date.now();
+        traceStep('tool_start', { name, args });
         const toolResult = await executeTool(name, args);
+        const toolFailed = Boolean(toolResult && typeof toolResult === 'object' && (toolResult.success === false || toolResult.error));
+        traceStep('tool_end', { name, ms: Date.now() - toolStarted, ok: !toolFailed, result: JSON.stringify(toolResult ?? null).slice(0, 2500) });
         yield { type: 'tool_end', name, result: toolResult };
         const resultStr = JSON.stringify(toolResult);
         currentMessages.push({
@@ -471,7 +598,9 @@ export class AIManager {
     const requestedProvider = options.provider || this.currentProvider;
     const requestedModel = model;
     let chain = this.failover.buildChain(requestedProvider, requestedModel);
+    this._traceRoute(requestedProvider, requestedModel, options, chain, truncatedMessages, systemPrompt);
     if (chain.length === 0) {
+      traceStep('all_failed', { error: 'Tidak ada provider tersedia' });
       yield { type: 'error', content: `Tidak ada provider yang tersedia. Konfigurasikan minimal satu API key di .env.` };
       yield { type: 'done' };
       return;
@@ -481,8 +610,10 @@ export class AIManager {
     let activeProvider = null;
     let activeModel = null;
     let lastError = null;
+    let round = 0;
 
     while (toolCallCount < maxToolCalls) {
+      round++;
       let progressed = false;
 
       // Coba setiap kandidat sampai satu berhasil untuk ronde ini.
@@ -493,11 +624,14 @@ export class AIManager {
         // Lewati provider yang tidak tersedia.
         if (!providerInstance) { chainIndex++; continue; }
         if (typeof providerInstance.isAvailable === 'function' && !providerInstance.isAvailable()) {
+          traceStep('skip', { provider: cand.provider, model: this._modelOf(cand.provider, cand.model), why: 'not_configured' });
           chainIndex++; continue;
         }
         // Skip candidates that earlier failures in this request have ruled out
         // (rejected key => whole provider; repeated 429 => circuit open).
         if ((chainIndex > 0 ? this.failover.shouldSkip(cand.provider, cand.model) : this.failover.isProviderDown(cand.provider))) {
+          const sk = this.failover.skipReason(cand.provider, cand.model) || { why: 'cooldown' };
+          traceStep('skip', { provider: cand.provider, model: this._modelOf(cand.provider, cand.model), why: sk.why, until: sk.until });
           chainIndex++; continue;
         }
 
@@ -515,19 +649,34 @@ export class AIManager {
           };
         }
 
+        const callStarted = Date.now();
+        const callPrompt = this._promptTokens(currentMessages, systemPrompt);
+        traceStep('attempt', {
+          provider: cand.provider, model: this._modelOf(cand.provider, cand.model),
+          reason: cand.reason || (chainIndex === 0 ? 'primary' : 'failover'), index: chainIndex, round,
+        });
+        const traceFail = (err) => traceStep('fail', {
+          provider: cand.provider, model: this._modelOf(cand.provider, cand.model),
+          reason: classifyError(err), error: String(err).slice(0, 300), ms: Date.now() - callStarted,
+        });
+
         if (providerInstance.supportsStreamingToolCalls) {
           // ===== Real streaming path =====
           let streamedText = '';
           let toolCalls = null;
           let errored = null;
+          let usage = null;
+          let firstAt = 0;
 
           try {
             const stream = providerInstance.chatStream(currentMessages, {
               ...options, model: cand.model, tools, systemPrompt,
             });
             for await (const ev of stream) {
+              if (ev.type === 'usage') { usage = ev.usage || usage; continue; }
               if (ev.type === 'content') {
                 if (toolCalls) continue; // abaikan content setelah tool calls
+                if (!firstAt) { firstAt = Date.now(); traceStep('first_token', { provider: cand.provider, ms: firstAt - callStarted }); }
                 streamedText += ev.content;
                 yield ev;
               } else if (ev.type === 'tool_calls') {
@@ -544,6 +693,7 @@ export class AIManager {
           }
 
           if (errored) {
+            traceFail(errored);
             this._handleFailover(cand, errored);
             lastError = { provider: cand.provider, model: cand.model, error: errored };
             chainIndex++;
@@ -553,9 +703,13 @@ export class AIManager {
           this.failover.markSuccess(cand.provider, cand.model);
           activeProvider = cand.provider;
           activeModel = cand.model;
+          if (streamedText || toolCalls?.length) {
+            this._traceUsage(cand, callStarted, streamedText + (toolCalls ? JSON.stringify(toolCalls) : ''), usage, callPrompt);
+          }
 
           if (toolCalls && toolCalls.length > 0) {
             toolCallCount++;
+            traceStep('tool_plan', { provider: cand.provider, tools: toolCalls.map((t) => t.function?.name).filter(Boolean) });
             yield* executeToolCalls(toolCalls, streamedText || null);
             progressed = true;
             break; // ulangi ronde berikutnya dengan kandidat yang sama
@@ -567,6 +721,7 @@ export class AIManager {
           }
 
           // Model balas kosong → anggap gagal, coba kandidat berikutnya.
+          traceFail('empty response');
           this._handleFailover(cand, 'empty response');
           lastError = { provider: cand.provider, model: cand.model, error: 'empty response' };
           chainIndex++;
@@ -580,6 +735,7 @@ export class AIManager {
 
         if (!result || !result.success) {
           const err = result?.error || 'unknown error';
+          traceFail(err);
           this._handleFailover(cand, err);
           lastError = { provider: cand.provider, model: cand.model, error: err };
           chainIndex++;
@@ -589,9 +745,11 @@ export class AIManager {
         this.failover.markSuccess(cand.provider, cand.model);
         activeProvider = cand.provider;
         activeModel = cand.model;
+        this._traceUsage(cand, callStarted, (result.content || '') + (result.tool_calls ? JSON.stringify(result.tool_calls) : ''), result.usage, callPrompt);
 
         if (result.tool_calls && result.tool_calls.length > 0) {
           toolCallCount++;
+          traceStep('tool_plan', { provider: cand.provider, tools: result.tool_calls.map((t) => t.function?.name).filter(Boolean) });
           yield* executeToolCalls(result.tool_calls, result.content || null);
           progressed = true;
           break;
@@ -610,12 +768,14 @@ export class AIManager {
         const detail = lastError
           ? ` (terakhir ${lastError.provider}/${lastError.model}: ${lastError.error})`
           : '';
+        traceStep('all_failed', { error: lastError ? `${lastError.provider}/${lastError.model}: ${lastError.error}`.slice(0, 300) : 'Tidak ada kandidat yang bisa dicoba' });
         yield { type: 'error', content: `Semua provider gagal${detail}. Periksa API key/quota di .env.` };
         yield { type: 'done' };
         return;
       }
     }
-    yield { type: 'error', content: 'Tool call limit tercapai (25)' };
+    traceStep('all_failed', { error: `Batas pemanggilan tool tercapai (${maxToolCalls})` });
+    yield { type: 'error', content: `Tool call limit tercapai (${maxToolCalls})` };
     yield { type: 'done' };
   }
 

@@ -97,6 +97,8 @@ const COOLDOWN_MS = {
   [FailReason.UNKNOWN]: 30 * 1000,
 };
 
+export { PROVIDER_TIER };
+
 export class SmartFailover {
   /**
    * @param {object} providers  map nama → instance provider (AIManager.providers)
@@ -115,6 +117,10 @@ export class SmartFailover {
     this.providerDown = new Map();
     /** @type {Map<string, {fails:number, openedAt:number}>} sirkuit per provider */
     this.circuit = new Map();
+    /** @type {Map<string, {reason:string, at:number, until:number}>} last failure per provider::model */
+    this.lastFailure = new Map();
+    /** @type {Map<string, number>} last success per provider::model */
+    this.lastSuccess = new Map();
     this.history = [];
     this.maxHistory = 200;
     this.circuitThreshold = 4;      // gagal beruntun sebelum provider "dibuka"
@@ -132,6 +138,7 @@ export class SmartFailover {
         if (v && v.until > now && PERSIST_REASONS.has(v.reason)) {
           this.cooldown.set(key, v.until);
           this._persisted.set(key, v);
+          this.lastFailure.set(key, { reason: v.reason, at: v.until - (COOLDOWN_MS[v.reason] || 0), until: v.until });
         }
       }
     } catch { /* first run or unreadable file: start clean */ }
@@ -196,6 +203,7 @@ export class SmartFailover {
     const cd = COOLDOWN_MS[reason] || COOLDOWN_MS[FailReason.UNKNOWN];
     const key = this._key(provider, model);
     this.cooldown.set(key, Date.now() + cd);
+    this.lastFailure.set(key, { reason, at: Date.now(), until: Date.now() + cd });
     // A bad/placeholder API key is a property of the provider, not of one model.
     if (reason === FailReason.AUTH) this.providerDown.set(provider, Date.now() + cd);
     if (PERSIST_REASONS.has(reason)) {
@@ -210,6 +218,8 @@ export class SmartFailover {
   }
 
   markSuccess(provider, model) {
+    this.lastSuccess.set(this._key(provider, model), Date.now());
+    this.lastFailure.delete(this._key(provider, model));
     this.cooldown.delete(this._key(provider, model));
     this.providerDown.delete(provider);
     if (this._persisted.delete(this._key(provider, model))) this._scheduleSave();
@@ -258,8 +268,13 @@ export class SmartFailover {
       chain.push({ provider, model, reason });
     };
 
-    // 1) Kandidat awal
-    if (this._isAvailable(primaryProvider)) push(primaryProvider, primaryModel, 'primary');
+    // 1) Kandidat awal. Without an explicit model the provider would use its default one:
+    // name it, so it is not tried a second time as "another model".
+    // Resolving it here also makes cooldowns land on the real model name, so the
+    // next request knows that exact model is out of quota.
+    if (this._isAvailable(primaryProvider)) {
+      push(primaryProvider, primaryModel || this.providers[primaryProvider]?.defaultModel, 'primary');
+    }
 
     // 2) Model lain di provider yang sama (skip yang cooldown)
     for (const m of this._modelsFor(primaryProvider)) {
@@ -292,6 +307,40 @@ export class SmartFailover {
     }
 
     return chain;
+  }
+
+  /**
+   * Why a candidate would be skipped right now (null = usable). Read-only:
+   * unlike isCircuitOpen() it never half-opens a circuit as a side effect.
+   */
+  skipReason(provider, model) {
+    const now = Date.now();
+    const down = this.providerDown.get(provider);
+    if (down && down > now) return { why: 'auth', until: down };
+    const c = this.circuit.get(provider);
+    if (c?.openedAt && now - c.openedAt <= this.circuitOpenMs) return { why: 'circuit', until: c.openedAt + this.circuitOpenMs };
+    const until = this.cooldown.get(this._key(provider, model));
+    if (until && until > now) return { why: this.lastFailure.get(this._key(provider, model))?.reason || 'cooldown', until };
+    return null;
+  }
+
+  /** Health of one provider (and its known models) for dashboards. */
+  providerState(provider) {
+    const now = Date.now();
+    const models = {};
+    const prefix = `${provider}::`;
+    for (const [k, f] of this.lastFailure) if (k.startsWith(prefix)) models[k.slice(prefix.length)] = { ...(models[k.slice(prefix.length)] || {}), lastFailure: f, coolingDown: f.until > now };
+    for (const [k, at] of this.lastSuccess) if (k.startsWith(prefix)) models[k.slice(prefix.length)] = { ...(models[k.slice(prefix.length)] || {}), lastSuccess: at };
+    const c = this.circuit.get(provider);
+    const down = this.providerDown.get(provider);
+    return {
+      tier: PROVIDER_TIER[provider] ?? 5,
+      down: Boolean(down && down > now),
+      downUntil: down && down > now ? down : null,
+      circuitOpen: Boolean(c?.openedAt && now - c.openedAt <= this.circuitOpenMs),
+      consecutiveFails: c?.fails || 0,
+      models,
+    };
   }
 
   record(entry) {

@@ -366,6 +366,7 @@ export default class OpenAgenticProvider {
             }
             if (parsed.usage) {
               this.stats.totalTokens += parsed.usage.total_tokens || 0;
+              yield { type: 'usage', usage: parsed.usage };
             }
           } catch { /* skip malformed SSE */ }
         }
