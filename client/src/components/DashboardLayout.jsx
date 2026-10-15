@@ -4,8 +4,8 @@ import Header from './Header';
 
 import AuroraBackground from './AuroraBackground';
 import {
-  IconChat, IconVoice, IconBolt, IconWorklog, IconChart, IconShield, IconTarget,
-  IconFlask, IconSettings, IconUser, IconRadar,
+  IconChat, IconVoice, IconBolt, IconWorklog, IconChart,
+  IconSettings, IconUser, IconRadar, IconGalaxy,
 } from './icons';
 
 export default function DashboardLayout({ children }) {
@@ -25,13 +25,11 @@ export default function DashboardLayout({ children }) {
   const menuItems = [
     { path: '/', label: 'Chat', icon: IconChat },
     { path: '/command-center', label: 'Pusat Kendali', icon: IconRadar },
+    { path: '/system-map', label: 'Peta Sistem', icon: IconGalaxy },
     { path: '/worklog', label: 'Jurnal Kerja', icon: IconWorklog },
     { path: '/automation', label: 'Otomasi', icon: IconBolt },
     { path: '/voice', label: 'Voice Talk', icon: IconVoice },
     { path: '/dashboard', label: 'Analytics', icon: IconChart },
-    { path: '/security', label: 'Security', icon: IconShield },
-    { path: '/security/professional', label: 'Pentest', icon: IconTarget },
-    { path: '/prompt-lab', label: 'Rule Lab', icon: IconFlask },
     { path: '/settings', label: 'Settings', icon: IconSettings },
     { path: '/profile', label: 'Profile', icon: IconUser },
   ];

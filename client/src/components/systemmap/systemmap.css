@@ -342,3 +342,14 @@
 .sm-label-channel small, .sm-label-provider small, .sm-label-tools small { display: none; }
 .sm-label:hover small, .sm-label:focus-visible small { display: block; }
 .sm-label:hover { z-index: 4; }
+
+/* ── full page ─────────────────────────────────────────── */
+.sm-page { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.sm-page-bar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; padding: 0.7rem clamp(1rem, 2.4vw, 2.5rem); border-bottom: 1px solid var(--border-primary); background: var(--bg-secondary); }
+.sm-page-bar h1 { margin: 0; font-size: 1.15rem; }
+.sm-page-bar p { margin: 0.1rem 0 0; font-size: 0.82rem; color: var(--text-secondary); }
+.sm-page-actions { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+.sm-hud-btn.solid { background: var(--brand-primary, #f97316); color: #fff; border-color: transparent; font-weight: 600; cursor: pointer; }
+.sm-page-body { flex: 1; min-height: 0; }
+.sm-page-body .sm-root { height: 100%; }
+@media (max-width: 900px) { .sm-page-body .sm-root { height: auto; min-height: 100%; } .sm-page-body { overflow-y: auto; } }

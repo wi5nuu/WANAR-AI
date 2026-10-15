@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react';
 import { Routes, Route } from 'react-router-dom';
 import { useConfig } from './hooks/useConfig';
 import { useSessions } from './hooks/useSessions';
@@ -13,16 +13,14 @@ import Settings from './components/Settings';
 import AnalyticsPageNew from './components/AnalyticsPageNew';
 import JobAgent from './components/JobAgent';
 import Profile from './components/Profile';
-import SecurityTesting from './components/SecurityTesting';
-import ProfessionalAttack from './components/ProfessionalAttack';
-import Generator from './components/Generator';
 import VoiceTalk from './components/VoiceTalk';
-import PromptLab from './components/PromptLab';
 import AgentFlow, { AgentLiveBar } from './components/AgentFlow';
 import AuroraBackground from './components/AuroraBackground';
 import Automation from './components/Automation';
 import Worklog from './components/Worklog';
 import CommandCenter from './components/CommandCenter';
+// three.js is large: the map page is fetched only when opened
+const SystemMapPage = lazy(() => import('./components/SystemMapPage'));
 import UpdateBanner from './components/UpdateBanner';
 
 function ChatLayout() {
@@ -234,15 +232,12 @@ export default function App() {
       <Route path="/dashboard" element={<AnalyticsPageNew />} />
       <Route path="/analytics" element={<AnalyticsPageNew />} />
       <Route path="/profile" element={<Profile />} />
-      <Route path="/security" element={<SecurityTesting />} />
-      <Route path="/security/professional" element={<ProfessionalAttack />} />
       <Route path="/job-agent" element={<JobAgent />} />
-      <Route path="/generator" element={<Generator />} />
       <Route path="/voice" element={<VoiceTalk />} />
-      <Route path="/prompt-lab" element={<PromptLab />} />
       <Route path="/automation" element={<Automation />} />
       <Route path="/worklog" element={<Worklog />} />
       <Route path="/command-center" element={<CommandCenter />} />
+      <Route path="/system-map" element={<Suspense fallback={<div style={{ padding: 24 }}>Memuat peta 3D…</div>}><SystemMapPage /></Suspense>} />
     </Routes>
     </>
   );

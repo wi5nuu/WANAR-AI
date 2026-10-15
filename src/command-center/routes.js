@@ -118,6 +118,15 @@ export function createCommandCenterRouter({ worklog, emailDesk = null, automatio
   }));
   router.post('/email/check', wrap(async () => ({ processed: watcher ? await watcher.check() : 0 })));
 
+  // People close to the owner (pasangan/keluarga/sahabat): answered personally and automatically.
+  router.get('/email/contacts', wrap(async () => ({ contacts: desk.contactsList() })));
+  router.post('/email/contacts', wrap(async (req) => {
+    const { address, relation, name, call, notes } = req.body || {};
+    const c = desk.setContact({ address, relation, name: name || null, call: call || null, notes: notes || null, autoReply: true });
+    return { contact: c, contacts: desk.contactsList() };
+  }));
+  router.delete('/email/contacts/:address', wrap(async (req) => ({ removed: desk.removeContact(req.params.address), contacts: desk.contactsList() })));
+
   router.post('/briefing/send', wrap(async () => {
     const chat = String(env.TELEGRAM_AI_CHAT_IDS || '').split(',')[0]?.trim();
     const tg = automation?.channels?.has?.('telegram') ? automation.channels.get('telegram') : null;

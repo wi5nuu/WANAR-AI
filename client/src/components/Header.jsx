@@ -6,8 +6,8 @@
 import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  IconWorklog, IconBolt, IconChart, IconVoice, IconSparkles, IconBriefcase,
-  IconUser, IconShield, IconFlask, IconSettings, IconDots, IconRadar, IconRefresh,
+  IconWorklog, IconBolt, IconChart, IconVoice, IconBriefcase,
+  IconUser, IconSettings, IconDots, IconRadar, IconRefresh, IconGalaxy,
 } from './icons';
 import { hardRefresh } from '../lib/refresh.js';
 
@@ -16,19 +16,17 @@ import { hardRefresh } from '../lib/refresh.js';
 const APPS_MENU = [
   { group: 'Kerja', items: [
     { path: '/command-center', label: 'Pusat Kendali', desc: 'Semua aktivitas agent, realtime', Icon: IconRadar },
+    { path: '/system-map', label: 'Peta Sistem', desc: 'Alur pesan, model & kuota — 3D realtime', Icon: IconGalaxy },
     { path: '/worklog', label: 'Jurnal Kerja', desc: 'Jam kerja, tugas, keuangan, laporan', Icon: IconWorklog },
     { path: '/automation', label: 'Otomasi', desc: 'Jadwal & kirim pesan multi-kanal', Icon: IconBolt },
     { path: '/dashboard', label: 'Analytics', desc: 'Statistik pemakaian AI', Icon: IconChart },
   ] },
   { group: 'AI', items: [
     { path: '/voice', label: 'Voice Talk', desc: 'Ngobrol suara dengan AI', Icon: IconVoice },
-    { path: '/generator', label: 'Project Generator', desc: 'Generate project dengan AI', Icon: IconSparkles },
-    { path: '/prompt-lab', label: 'Rule Lab', desc: 'Uji rule set / system prompt', Icon: IconFlask },
     { path: '/job-agent', label: 'Job Agent', desc: 'Scan & apply lowongan', Icon: IconBriefcase },
   ] },
   { group: 'Akun & keamanan', items: [
     { path: '/profile', label: 'Profil', desc: 'Data diri & lamaran', Icon: IconUser },
-    { path: '/security', label: 'Security Testing', desc: 'Uji keamanan web', Icon: IconShield },
     { path: '/settings', label: 'Settings', desc: 'Pengaturan', Icon: IconSettings },
   ] },
 ];

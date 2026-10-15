@@ -141,7 +141,7 @@ footer{display:flex;align-items:center;gap:8px;padding:4px 16px;border-top:1px s
 .st-header{display:flex;align-items:center;padding:12px 24px;border-bottom:1px solid var(--bd);background:var(--cv);gap:12px}
 .st-header h1{font-size:18px;font-weight:700}
 .st-back{text-decoration:none;color:var(--ac);font-size:13px;display:flex;align-items:center;gap:4px}
-.st-content{max-width:800px;width:100%;margin:24px auto;padding:0 20px}
+.st-content{max-width:none;width:100%;margin:24px auto;padding:0 clamp(16px,2.4vw,56px)}
 .st-section{background:var(--cv);border:1px solid var(--bd);border-radius:var(--r);padding:20px;margin-bottom:16px}
 .st-section h2{font-size:16px;margin-bottom:4px}
 .st-section h3{font-size:14px;margin-bottom:8px}
@@ -226,9 +226,9 @@ footer{display:flex;align-items:center;gap:8px;padding:4px 16px;border-top:1px s
 }
 
 /* ===== Dashboard v2 ===== */
-.dash-page .st-content{max-width:1200px;padding:0}
+.dash-page .st-content{max-width:none;padding:0 clamp(16px,2.4vw,56px)}
 .dash-hero{background:linear-gradient(135deg,#1a1a2e,#16213e,#0f3460);padding:0;border-bottom:1px solid var(--bd)}
-.dash-hero-inner{max-width:1200px;margin:0 auto;padding:20px 24px}
+.dash-hero-inner{max-width:none;margin:0 auto;padding:20px clamp(16px,2.4vw,56px)}
 .dash-period-btn{background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.2);border-radius:6px;padding:5px 14px;font-size:12px;cursor:pointer;color:rgba(255,255,255,.8);white-space:nowrap;transition:all .15s}
 .dash-period-btn:hover{background:rgba(255,255,255,.2)}
 .dash-period-btn.active{background:var(--ac);border-color:var(--ac);color:#fff;font-weight:600}

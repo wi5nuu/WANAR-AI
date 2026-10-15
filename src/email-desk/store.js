@@ -66,6 +66,18 @@ export function createEmailDeskStore(db, { now = () => Date.now() } = {}) {
     CREATE INDEX IF NOT EXISTS idx_ed_drafts_status ON ed_drafts(status, created_at);
 
     CREATE TABLE IF NOT EXISTS ed_meta (key TEXT PRIMARY KEY, value TEXT);
+
+    -- People the owner told the assistant about ("dia pasangan saya"): drives the tone of replies.
+    CREATE TABLE IF NOT EXISTS ed_contacts (
+      address TEXT PRIMARY KEY,
+      relation TEXT NOT NULL,
+      display_name TEXT,
+      call_name TEXT,
+      notes TEXT,
+      auto_reply INTEGER NOT NULL DEFAULT 1,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
   `);
 
   // Additive migrations (safe on existing databases).
@@ -161,5 +173,24 @@ export function createEmailDeskStore(db, { now = () => Date.now() } = {}) {
     set: (k, v) => db.prepare('INSERT INTO ed_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(k, String(v)),
   };
 
-  return { threads, messages, drafts, meta, newBatchId: () => id('bat') };
+  const contacts = {
+    get: (addr) => db.prepare('SELECT * FROM ed_contacts WHERE address = ?').get(String(addr || '').toLowerCase()) || null,
+    list: () => db.prepare('SELECT * FROM ed_contacts ORDER BY updated_at DESC').all(),
+    upsert({ address, relation, displayName = null, callName = null, notes = null, autoReply = true }) {
+      const a = String(address).toLowerCase();
+      const cur = contacts.get(a);
+      if (cur) {
+        db.prepare(`UPDATE ed_contacts SET relation = ?, display_name = COALESCE(?, display_name), call_name = COALESCE(?, call_name),
+          notes = COALESCE(?, notes), auto_reply = ?, updated_at = ? WHERE address = ?`)
+          .run(relation, displayName, callName, notes, autoReply ? 1 : 0, now(), a);
+      } else {
+        db.prepare(`INSERT INTO ed_contacts (address, relation, display_name, call_name, notes, auto_reply, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(a, relation, displayName, callName, notes, autoReply ? 1 : 0, now(), now());
+      }
+      return contacts.get(a);
+    },
+    remove: (addr) => db.prepare('DELETE FROM ed_contacts WHERE address = ?').run(String(addr || '').toLowerCase()).changes > 0,
+  };
+
+  return { threads, messages, drafts, meta, contacts, newBatchId: () => id('bat') };
 }

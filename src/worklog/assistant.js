@@ -23,7 +23,7 @@ import { collect, collectParsed } from '../automation/ai-compose.js';
 import { companionIntent } from '../companion.js';
 import { localDate, localTime, addDays, atTime, formatDateId, formatRupiah } from './time.js';
 import { parseAmount, parseQuick } from './parse.js';
-import { EMAIL_ACTION_TYPES, emailPromptLines, quickEmailReply, quickDelegate, quickPolicy, runEmailActions, emailFallback } from '../email-desk/assistant-actions.js';
+import { EMAIL_ACTION_TYPES, emailPromptLines, quickContact, quickEmailReply, quickDelegate, quickPolicy, runEmailActions, emailFallback } from '../email-desk/assistant-actions.js';
 import { traceStep } from '../observability/trace-hub.js';
 
 const MAX_ACTIONS = 8;
@@ -294,6 +294,8 @@ export function makeAssistantResponder({ aiManager, worklog, emailDesk = null, b
     }
     // "kirim" / "batal" while an email draft waits: handled by code, instantly.
     if (emailDesk) {
+      const person = await quickContact(emailDesk, text);
+      if (person) { traceStep('intent', { name: 'email-contact', detail: 'Mencatat hubungan dengan seseorang (mis. pasangan) — dijalankan kode', model: false }); return person; }
       const quick = await quickEmailReply(emailDesk, text);
       if (quick) { traceStep('intent', { name: 'email-confirm', detail: 'Konfirmasi draf email (kirim/batal) — dijalankan kode', model: false }); return quick; }
       const delegated = await quickDelegate(emailDesk, text);

@@ -63,6 +63,56 @@ const POLICY = [
   ['notify', 'Kabari saja', 'Hanya memberi tahu kamu; tidak ada balasan dibuat.'],
 ];
 
+const RELATION_LABEL = { partner: 'Pasangan', family: 'Keluarga', friend: 'Sahabat' };
+const RELATION_HINT = {
+  partner: 'dibalas hangat, manis, peka — bahasa sehari-hari',
+  family: 'dibalas hangat dan santun',
+  friend: 'dibalas santai dan akrab',
+};
+
+/** People the owner marked as close: answered personally and automatically. */
+function CloseCircle({ email, busy, act }) {
+  const [form, setForm] = useState({ address: '', relation: 'partner', call: '', notes: '' });
+  const people = email.contacts || [];
+  const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
+  const add = (e) => {
+    e.preventDefault();
+    if (!form.address.trim()) return;
+    act('contact', () => api('/email/contacts', { method: 'POST', body: { address: form.address.trim(), relation: form.relation, call: form.call.trim() || null, notes: form.notes.trim() || null } }),
+      'Tersimpan. Email dari dia sekarang dibalas dengan gaya pribadi.').then((r) => { if (r) setForm({ address: '', relation: form.relation, call: '', notes: '' }); });
+  };
+  return (
+    <div className="au-card cc-gap">
+      <h3><span className="cc-title">Orang dekat</span><small>dibalas pribadi & otomatis — bisa juga lewat Telegram: "dia pasangan saya"</small></h3>
+      {people.length === 0 && <div className="au-muted">Belum ada. Di Telegram cukup tulis: "azzahra@gmail.com adalah pasangan saya, panggil dia sayang".</div>}
+      <div className="au-list">
+        {people.map((p) => (
+          <div key={p.address} className="au-item">
+            <div className="cc-ellipsis">
+              <div className="t">{p.name || p.address} <span className="au-chip brand">{RELATION_LABEL[p.relation] || p.label}</span>{p.call && <span className="au-chip info">panggilan: {p.call}</span>}</div>
+              <div className="au-muted">{p.address} · {RELATION_HINT[p.relation]}{p.notes ? ` · ${p.notes}` : ''}</div>
+            </div>
+            <div className="au-actions">
+              <button className="au-btn sm danger" disabled={!!busy} onClick={() => act(`rm${p.address}`, () => api(`/email/contacts/${encodeURIComponent(p.address)}`, { method: 'DELETE' }), 'Dihapus dari orang dekat')}>Hapus</button>
+            </div>
+          </div>
+        ))}
+      </div>
+      <form className="cc-contactform" onSubmit={add}>
+        <input className="au-input" type="email" placeholder="alamat email" value={form.address} onChange={set('address')} required />
+        <select className="au-input" value={form.relation} onChange={set('relation')} aria-label="Hubungan">
+          <option value="partner">Pasangan</option>
+          <option value="family">Keluarga</option>
+          <option value="friend">Sahabat</option>
+        </select>
+        <input className="au-input" placeholder="panggilan (mis. sayang)" value={form.call} onChange={set('call')} />
+        <input className="au-input grow" placeholder="catatan untuk AI (mis. suka dipanggil yang, lagi skripsi)" value={form.notes} onChange={set('notes')} />
+        <button className="au-btn primary" type="submit" disabled={!!busy}>Simpan</button>
+      </form>
+    </div>
+  );
+}
+
 export default function CommandCenter() {
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
@@ -215,6 +265,8 @@ export default function CommandCenter() {
                 </div>
               </div>
             )}
+
+            {email && <CloseCircle email={email} busy={busy} act={act} />}
 
             <div className="au-grid cols-2 cc-gap">
               {/* Action queue */}

@@ -4,9 +4,9 @@
    ============================================================ */
 
 .au-page {
-  max-width: 1180px;
+  max-width: none;
   margin: 0 auto;
-  padding: var(--space-lg, 1.5rem) var(--space-lg, 1.5rem) 4rem;
+  padding: var(--space-lg, 1.5rem) clamp(1rem, 2.4vw, 3.5rem) 4rem;
   color: var(--text-primary);
   animation: au-fade-up 0.35s ease both;
 }
@@ -71,7 +71,7 @@
 /* ---------- cards & grids ---------- */
 .au-grid { display: grid; gap: 1rem; }
 .au-grid.cols-4 { grid-template-columns: repeat(auto-fit, minmax(min(210px, 100%), 1fr)); }
-.au-grid.cols-2 { grid-template-columns: repeat(auto-fit, minmax(min(340px, 100%), 1fr)); }
+.au-grid.cols-2 { grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr)); }
 
 .au-card {
   min-width: 0;

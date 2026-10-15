@@ -86,3 +86,14 @@
 .cc-seg-btn:disabled { opacity: 0.6; cursor: wait; }
 .cc-policy-note { margin-top: 0.6rem; }
 @media (max-width: 520px) { .cc-seg-btn { font-size: 0.82rem; padding: 0 4px; } }
+
+/* contacts form */
+.cc-contactform { display: grid; gap: 0.5rem; margin-top: 0.8rem; grid-template-columns: minmax(0, 1.4fr) minmax(0, 0.8fr) minmax(0, 1fr) auto; }
+.cc-contactform .grow { grid-column: 1 / -2; }
+.cc-contactform .au-input { min-width: 0; width: 100%; box-sizing: border-box; }
+@media (max-width: 720px) { .cc-contactform { grid-template-columns: 1fr 1fr; } .cc-contactform .grow { grid-column: 1 / -1; } }
+
+/* wide desktops: stat cards stay readable, content uses the whole width */
+@media (min-width: 1600px) {
+  .cc-page .au-grid.cols-4 { grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr)); }
+}

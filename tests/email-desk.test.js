@@ -807,3 +807,65 @@ describe('bulk greeting is personal; "konfirmasi" in the content is not a reply 
     expect(drafts.find((d) => d.to_addr === 'info@toko.id').body).toMatch(/^Kepada Bapak\/Ibu,/);
   });
 });
+
+describe('Email Desk: orang dekat (pasangan)', () => {
+  const loveMail = (over = {}) => ({
+    messageId: `<in${Math.random()}@gmail.com>`, inReplyTo: null, references: [],
+    from: { address: 'azzahra@gmail.com', name: 'Azzahra' }, subject: 'kangen',
+    text: 'huft, ditinggal kamu lagi, aku jadi sendiri, sedih tauuu', headers: {}, ...over,
+  });
+
+  it('"dia pasangan saya" is saved by code and switches to personal automatic replies', async () => {
+    const { quickContact } = await import('../src/email-desk/assistant-actions.js');
+    const w = build({ ai: aiReturning({ body: 'Sayang, maaf ya aku lagi sibuk. Aku juga kangen kamu.' }) });
+    await w.desk.handleInbound(loveMail()); // first mail from a new sender creates a thread
+    const out = await quickContact(w.desk, 'azzahra@gmail.com adalah pasangan saya, panggil dia sayang');
+    expect(out).toMatch(/pasangan/);
+    expect(w.desk.contactOf('azzahra@gmail.com')).toMatchObject({ relation: 'partner', call_name: 'sayang', auto_reply: 1 });
+    const t = w.desk.threads(5)[0];
+    expect(w.desk.modeOf(t)).toBe('auto');
+  });
+
+  it('is not triggered by a request to write an email', async () => {
+    const { quickContact } = await import('../src/email-desk/assistant-actions.js');
+    const w = build({ ai: aiReturning({ body: 'x' }) });
+    expect(await quickContact(w.desk, 'kirim email ke pasangan saya azzahra@gmail.com, itu pacar saya')).toBeNull();
+    expect(w.desk.contactOf('azzahra@gmail.com')).toBeNull();
+  });
+
+  it('writes the reply with the partner persona: warm, no formal signature, no invented plans', async () => {
+    const ai = aiReturning({ body: 'Aww sayang, sini peluk dulu. Kamu lagi kepikiran apa? Cerita ya.', tell_owner: 'Dia kangen' });
+    const w = build({ ai });
+    w.desk.setContact({ address: 'azzahra@gmail.com', relation: 'partner', call: 'sayang', name: 'Azzahra', notes: 'suka dipanggil sayang' });
+    const r = await w.desk.handleInbound(loveMail());
+    expect(r.action).toBe('auto_replied');
+    const system = ai.calls.at(-1).opts.systemPrompt;
+    expect(system).toMatch(/PASANGANNYA/);
+    expect(system).toMatch(/bucin/i);
+    expect(system).toMatch(/Panggil dia "sayang"/);
+    expect(system).toMatch(/JANGAN mengarang/);
+    expect(system).not.toContain(w.desk.signature); // no formal signature for a loved one
+    expect(w.sent[0].text).toMatch(/peluk/);
+    expect(w.sent[0].text).not.toMatch(/Salam,|Anda\b/);
+    expect(w.told.at(-1).t).toMatch(/Catatan untukmu: Dia kangen/);
+  });
+
+  it('a sensitive message to a partner gets a warm holding reply, not the corporate one', async () => {
+    const w = build({ ai: aiReturning({ escalate: true, reason: 'minta transfer uang' }) });
+    w.desk.setContact({ address: 'azzahra@gmail.com', relation: 'partner', call: 'sayang' });
+    const r = await w.desk.handleInbound(loveMail({ text: 'sayang tolong transfer 2 juta ya' }));
+    expect(r.action).toBe('auto_replied');
+    expect(w.sent[0].text).not.toMatch(/Anda sudah kami terima|kami terima/);
+    expect(w.sent[0].text).toMatch(/aku udah baca/i);
+    expect(w.told.at(-1).t).toMatch(/transfer/);
+  });
+
+  it('removal: "dia bukan pasangan saya lagi"', async () => {
+    const { quickContact } = await import('../src/email-desk/assistant-actions.js');
+    const w = build({ ai: aiReturning({ body: 'x' }) });
+    w.desk.setContact({ address: 'azzahra@gmail.com', relation: 'partner' });
+    const out = await quickContact(w.desk, 'azzahra@gmail.com bukan pasangan saya lagi');
+    expect(out).toMatch(/tidak lagi/);
+    expect(w.desk.contactOf('azzahra@gmail.com')).toBeNull();
+  });
+});
