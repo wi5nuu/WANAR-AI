@@ -15,7 +15,7 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     emptyOutDir: true,
-    chunkSizeWarningLimit: 600,
+    chunkSizeWarningLimit: 900, // the lazy 3D map chunk (three.js) is ~600 kB by design
     rollupOptions: {
       output: {
         manualChunks: {
