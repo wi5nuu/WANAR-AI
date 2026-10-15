@@ -145,6 +145,7 @@ export default class HuggingFaceProvider extends BaseProvider {
       this.updateStats(true, tokens, latency);
 
       return {
+        success: true,
         content,
         role: 'assistant',
         tool_calls: [],

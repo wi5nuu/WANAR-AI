@@ -21,10 +21,10 @@ import * as db from './database.js';
 import config from '../config/config.js';
 import { traceHub, traceStep, estimateTokens } from './observability/trace-hub.js';
 
-const FIRST_TOKEN_MS = Math.max(100, parseInt(process.env.AI_FIRST_TOKEN_MS || '30000', 10) || 30000);
-const LATE_FIRST_TOKEN_MS = Math.max(FIRST_TOKEN_MS, parseInt(process.env.AI_LATE_FIRST_TOKEN_MS || '50000', 10) || 50000);
+const FIRST_TOKEN_MS = Math.max(100, parseInt(process.env.AI_FIRST_TOKEN_MS || '45000', 10) || 45000);
+const LATE_FIRST_TOKEN_MS = Math.max(FIRST_TOKEN_MS, parseInt(process.env.AI_LATE_FIRST_TOKEN_MS || '60000', 10) || 60000);
 const IDLE_MS = Math.max(100, parseInt(process.env.AI_STREAM_IDLE_MS || '30000', 10) || 30000);
-const CALL_MS = Math.max(100, parseInt(process.env.AI_CALL_TIMEOUT_MS || '60000', 10) || 60000);
+const CALL_MS = Math.max(100, parseInt(process.env.AI_CALL_TIMEOUT_MS || '120000', 10) || 120000);
 
 /**
  * Wraps a provider stream with a watchdog: no first token within `firstMs`, or silence longer
@@ -323,7 +323,11 @@ export class AIManager {
         ...options
       });
 
-      if (response && response.success) {
+      const isSuccess = Boolean(
+        response &&
+        (response.success === true || (response.success !== false && !response.error && response.content !== undefined))
+      );
+      if (isSuccess) {
         this.contextManager.addTurn('user', userMessage);
         this.contextManager.addTurn('assistant', response.content);
         if (this.contextManager.getHistoryLength() > 40) {
@@ -800,7 +804,12 @@ export class AIManager {
           result = { success: false, error: e.message };
         }
 
-        if (!result || !result.success) {
+        const isSuccess = Boolean(
+          result &&
+          (result.success === true || (result.success !== false && !result.error && (result.content !== undefined || (Array.isArray(result.tool_calls) && result.tool_calls.length > 0))))
+        );
+
+        if (!isSuccess) {
           const err = result?.error || 'unknown error';
           traceFail(err);
           this._handleFailover(cand, err);

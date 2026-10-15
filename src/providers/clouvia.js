@@ -25,7 +25,7 @@ export default class ClouviaProvider extends TogetherProvider {
     this.maxTokens = parseInt(process.env.CLOUVIA_MAX_TOKENS || '8192', 10);
     this.maxContextTokens = parseInt(process.env.CLOUVIA_MAX_CONTEXT_TOKENS || '128000', 10);
     this.timeout = 120_000;
-    this.supportsStreamingToolCalls = false;
+    this.supportsStreamingToolCalls = true;
 
     const configured = String(process.env.CLOUVIA_MODELS || '').split(',').map((s) => s.trim()).filter(Boolean);
     this.allowedModels = configured.length ? configured : FREE_DEFAULT;
@@ -48,7 +48,8 @@ export default class ClouviaProvider extends TogetherProvider {
 
   async chat(messages, options = {}) {
     try {
-      return await super.chat(messages, { ...options, model: this.guardModel(options.model) });
+      const res = await super.chat(messages, { ...options, model: this.guardModel(options.model) });
+      return { success: true, ...res };
     } catch (e) {
       throw new Error(String(e.message).replace(/^Together AI API error:/, 'Clouvia API error:'));
     }

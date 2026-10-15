@@ -150,6 +150,7 @@ export default class SambaNovaProvider extends BaseProvider {
       this.updateStats(true, usage.total_tokens || 0, latency);
 
       return {
+        success: true,
         content: response.data.choices[0].message.content,
         role: 'assistant',
         tool_calls: response.data.choices[0].message.tool_calls || [],

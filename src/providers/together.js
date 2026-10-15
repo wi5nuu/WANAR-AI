@@ -31,6 +31,8 @@ export default class TogetherProvider extends BaseProvider {
       premiumModels: true,
     };
 
+    this.supportsStreamingToolCalls = true;
+
     if (!this.apiKey) {
       console.warn('Together AI API key not configured. Get free $25 credit at: https://api.together.xyz/');
     }
@@ -153,6 +155,7 @@ export default class TogetherProvider extends BaseProvider {
       this.updateStats(true, usage.total_tokens || 0, latency);
 
       return {
+        success: true,
         content: response.data.choices[0].message.content,
         role: 'assistant',
         tool_calls: response.data.choices[0].message.tool_calls || [],
@@ -206,6 +209,13 @@ export default class TogetherProvider extends BaseProvider {
 
       let buffer = '';
       let totalTokens = 0;
+      const pendingToolCalls = new Map();
+
+      const flushToolCalls = function* () {
+        if (pendingToolCalls.size > 0) {
+          yield { type: 'tool_calls', tool_calls: Array.from(pendingToolCalls.values()) };
+        }
+      };
 
       for await (const chunk of response.data) {
         buffer += chunk.toString();
@@ -218,7 +228,9 @@ export default class TogetherProvider extends BaseProvider {
             if (trimmed === 'data: [DONE]') {
               const latency = Date.now() - startTime;
               this.updateStats(true, totalTokens, latency);
+              yield* flushToolCalls();
               yield { type: 'done' };
+              return;
             }
             continue;
           }
@@ -235,7 +247,20 @@ export default class TogetherProvider extends BaseProvider {
               }
               
               if (delta?.tool_calls) {
-                yield { type: 'tool_calls', tool_calls: delta.tool_calls };
+                for (const tc of delta.tool_calls) {
+                  const idx = tc.index ?? 0;
+                  if (!pendingToolCalls.has(idx)) {
+                    pendingToolCalls.set(idx, {
+                      id: tc.id || `call_${idx}`,
+                      type: 'function',
+                      function: { name: '', arguments: '' },
+                    });
+                  }
+                  const acc = pendingToolCalls.get(idx);
+                  if (tc.id) acc.id = tc.id;
+                  if (tc.function?.name) acc.function.name += tc.function.name;
+                  if (tc.function?.arguments) acc.function.arguments += tc.function.arguments;
+                }
               }
               
               if (parsed.choices?.[0]?.finish_reason) {
@@ -248,6 +273,9 @@ export default class TogetherProvider extends BaseProvider {
         }
       }
 
+      const latency = Date.now() - startTime;
+      this.updateStats(true, totalTokens, latency);
+      yield* flushToolCalls();
       yield { type: 'done' };
     } catch (error) {
       this.updateStats(false, 0, Date.now() - startTime);

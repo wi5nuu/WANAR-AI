@@ -36,10 +36,34 @@ describe('Clouvia provider (OpenAI-compatible gateway)', () => {
     post.mockResolvedValue({ data: { model: 'deepseek-v4.1-flash', choices: [{ message: { content: 'Halo!' }, finish_reason: 'stop' }], usage: { total_tokens: 12 } } });
     const r = await p.chat([{ role: 'user', content: 'Halo AI' }], { model: 'gpt-luna-6.0' });
     expect(r.content).toBe('Halo!');
+    expect(r.success).toBe(true);
     const [url, payload, cfg] = post.mock.calls[0];
     expect(url).toBe('https://router.clouvia.id/v1/chat/completions');
     expect(payload.model).toBe('deepseek-v4.1-flash'); // requested paid model replaced by the allowed default
     expect(cfg.headers.Authorization).toBe('Bearer clv_live_k');
+  });
+
+  it('accumulates streaming tool calls into complete tool_calls events', async () => {
+    const p = await make({ CLOUVIA_API_KEY: 'clv_live_k' });
+    const sseChunks = [
+      'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"calc","arguments":"{\\"x\\":"}}]}}]}\n\n',
+      'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"42}"}}]}}]}\n\n',
+      'data: [DONE]\n\n',
+    ];
+    post.mockResolvedValue({
+      data: (async function* () {
+        for (const chunk of sseChunks) yield Buffer.from(chunk);
+      })(),
+    });
+    const events = [];
+    for await (const ev of p.chatStream([{ role: 'user', content: 'hitung' }])) {
+      events.push(ev);
+    }
+    const tcEvent = events.find((e) => e.type === 'tool_calls');
+    expect(tcEvent).toBeDefined();
+    expect(tcEvent.tool_calls[0].id).toBe('call_1');
+    expect(tcEvent.tool_calls[0].function.name).toBe('calc');
+    expect(tcEvent.tool_calls[0].function.arguments).toBe('{"x":42}');
   });
 
   it('errors are labelled Clouvia, not Together', async () => {
