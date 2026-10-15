@@ -136,11 +136,15 @@ describe('POST /api/chat: status ketika upstream gagal', () => {
   let app;
   const originalChat = OpenRouterProvider.prototype.chat;
 
+  let fetchSpy;
   beforeAll(async () => {
+    // Providers that use fetch (NVIDIA) are not covered by the http-client mock: cut the real
+    // network so "everything upstream failed" is what this test really exercises.
+    fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('network disabled in test'));
     const mod = await import('../src/server.js');
     app = mod.default;
   });
-  afterAll(() => { OpenRouterProvider.prototype.chat = originalChat; });
+  afterAll(() => { OpenRouterProvider.prototype.chat = originalChat; fetchSpy?.mockRestore(); });
 
   it('kuota harian habis → 429 dengan pesan ramah', async () => {
     OpenRouterProvider.prototype.chat = async () => ({

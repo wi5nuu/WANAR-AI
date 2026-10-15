@@ -56,6 +56,8 @@ import { createWorklogRouter } from './worklog/routes.js';
 import { initEmailDesk } from './email-desk/index.js';
 import { createEmailDeskRouter } from './email-desk/routes.js';
 import { createBriefing } from './briefing.js';
+import { createIntelService } from './command-center/intel.js';
+import { createNightlyLearning } from './command-center/nightly-learning.js';
 import { createCompanion } from './companion.js';
 import { createCommandCenterRouter } from './command-center/routes.js';
 import { createOwnerContext, createTelegramTranscript } from './memory/owner-context.js';
@@ -63,6 +65,7 @@ import { makeAssistantResponder } from './worklog/assistant.js';
 import { traceHub, traceStep } from './observability/trace-hub.js';
 import { installHeaderCapture } from './observability/quota.js';
 import { createSystemMapRouter } from './observability/routes.js';
+import { securityMonitor } from './observability/security-monitor.js';
 
 const coordinator = new DistributedCoordinator();
 
@@ -105,6 +108,20 @@ const briefing = createBriefing({
     : null,
 });
 automation.inbox.registerCommands(briefing.commands());
+// Live FX / economy / tech intel + nightly 00:00 self-learning for the Pusat Kendali.
+const intel = createIntelService();
+const learning = createNightlyLearning({
+  db: sqliteDb,
+  meta: worklog.service.store.meta,
+  enabled: process.env.WANAR_NIGHTLY_LEARNING !== 'false',
+  notify: automation.channels.has('telegram')
+    ? async (text) => {
+      const chat = String(process.env.TELEGRAM_AI_CHAT_IDS || '').split(',')[0]?.trim();
+      const tg = automation.channels.get('telegram');
+      if (chat && tg.mode === 'live') await tg.send({ to: chat, text });
+    }
+    : null,
+});
 // "Peka": occasional, state-driven check-ins ("capek ya?", "ada yang ingin diceritakan?").
 const companion = createCompanion({
   worklog: worklog.service,
@@ -597,6 +614,9 @@ async function extractFileContentDetailed(buffer, mimetype, originalname) {
   return { content: `[File: ${originalname}, tipe: ${mime || ext || 'unknown'}, ukuran: ${kb}KB. Format biner — konten tidak bisa diekstrak sebagai teks.]`, pages: null, truncated: false, charCount: 0, engine: 'none' };
 }
 
+// Realtime security view: observes 401/403/429 and scanner-like requests (never alters responses).
+app.use(securityMonitor.middleware());
+app.use(securityMonitor.guard());
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
@@ -1025,8 +1045,8 @@ app.use('/api/automation', createAutomationRouter({
 // ==================== WORK JOURNAL ====================
 app.use('/api/worklog', createWorklogRouter({ worklog, rateLimiters }));
 app.use('/api/email-desk', createEmailDeskRouter({ emailDesk, rateLimiters }));
-app.use('/api/command-center', createCommandCenterRouter({ worklog, emailDesk, automation, briefing, rateLimiters }));
-app.use('/api/system-map', createSystemMapRouter({ aiManager, db, config, automation, emailDesk, companion, briefing, tools: () => getToolDefinitions(), rateLimiters }));
+app.use('/api/command-center', createCommandCenterRouter({ worklog, emailDesk, automation, briefing, intel, learning, rateLimiters }));
+app.use('/api/system-map', createSystemMapRouter({ aiManager, db, config, automation, emailDesk, companion, briefing, envFile: path.join(process.cwd(), '.env'), tools: () => getToolDefinitions(), rateLimiters }));
 
 app.get('/api/sessions/:id/messages', (req, res) => {
   const messages = db.getMessages(req.params.id);  res.json({ messages });
@@ -1062,7 +1082,7 @@ app.post('/api/chat', rateLimiters.chat, asyncHandler(async (req, res) => {
   } catch (_) {}
 
   const { messages: truncatedMessages } = ctxManager.getTruncatedMessages(
-    messages, model, WANAR_SYSTEM_PROMPT_WEB + tokenContext
+    messages, model, WANAR_SYSTEM_PROMPT_WEB + learning.promptBlock() + tokenContext
   );
 
   const cacheKey = `chat:${provider}:${model || 'default'}:${truncatedMessages.slice(-2).map(m => m.content.slice(0, 100)).join('|')}`;
@@ -1074,7 +1094,7 @@ app.post('/api/chat', rateLimiters.chat, asyncHandler(async (req, res) => {
   const tools = getToolDefinitions();
   let result;
   if (provider === 'openagentic') {
-    result = await aiManager.openagenticProvider.chat(truncatedMessages, { model, tools, systemPrompt: WANAR_SYSTEM_PROMPT_WEB + tokenContext });
+    result = await aiManager.openagenticProvider.chat(truncatedMessages, { model, tools, systemPrompt: WANAR_SYSTEM_PROMPT_WEB + learning.promptBlock() + tokenContext });
   } else if (provider === 'nvidia') {
     result = await aiManager.nvidiaProvider.chat(truncatedMessages, { model, tools, top_p: req.body.top_p ?? 1, seed: req.body.seed });
   } else if (provider === 'vector') {
@@ -1105,7 +1125,9 @@ app.post('/api/chat', rateLimiters.chat, asyncHandler(async (req, res) => {
       const inst = aiManager.providers[cand.provider];
       if (!inst?.chat || (typeof inst.isAvailable === 'function' && !inst.isAvailable())) continue;
       tries++;
-      const alt = await inst.chat(truncatedMessages, { model: cand.model, tools, systemPrompt: WANAR_SYSTEM_PROMPT_WEB + tokenContext });
+      // A provider that throws (network down) is just a failed candidate, never a 500.
+      const alt = await Promise.resolve(inst.chat(truncatedMessages, { model: cand.model, tools, systemPrompt: WANAR_SYSTEM_PROMPT_WEB + learning.promptBlock() + tokenContext }))
+        .catch((e) => ({ success: false, error: e?.message || 'provider error' }));
       if (alt?.success) {
         aiManager.failover.markSuccess(cand.provider, cand.model);
         result = alt;
@@ -1150,11 +1172,11 @@ app.post('/api/chat', rateLimiters.chat, asyncHandler(async (req, res) => {
         }
 
         const providerCall = async (msgs) => {
-          if (provider === 'openagentic') return aiManager.openagenticProvider.chat(msgs, { model, tools, systemPrompt: WANAR_SYSTEM_PROMPT_WEB + tokenContext });
+          if (provider === 'openagentic') return aiManager.openagenticProvider.chat(msgs, { model, tools, systemPrompt: WANAR_SYSTEM_PROMPT_WEB + learning.promptBlock() + tokenContext });
           if (provider === 'nvidia') return aiManager.nvidiaProvider.chat(msgs, { model, tools, top_p: req.body.top_p ?? 1, seed: req.body.seed });
           if (provider === 'vector') return aiManager.vectorProvider.chat(msgs, { model, tools });
           if (provider === 'openrouter') return aiManager.openrouterProvider.chat(msgs, { model, tools });
-          if (aiManager.providers[provider]?.chat) return aiManager.providers[provider].chat(msgs, { model, tools, systemPrompt: WANAR_SYSTEM_PROMPT_WEB + tokenContext });
+          if (aiManager.providers[provider]?.chat) return aiManager.providers[provider].chat(msgs, { model, tools, systemPrompt: WANAR_SYSTEM_PROMPT_WEB + learning.promptBlock() + tokenContext });
           const cp = providerRegistry.createDynamicProvider(provider);
           if (cp) return cp.chat(msgs, { model, tools, ...req.body });
           return null;
@@ -1209,7 +1231,7 @@ app.post('/api/chat/stream', rateLimiters.chat, asyncHandler(async (req, res) =>
   const messages = req.body.messages.map(m => ({ role: m.role, content: sanitize(m.content) }));
   const sessionId = req.body.session_id || null;
 
-  let systemPrompt = req.body.voice ? WANAR_VOICE_PROMPT : WANAR_SYSTEM_PROMPT_WEB;
+  let systemPrompt = req.body.voice ? WANAR_VOICE_PROMPT : WANAR_SYSTEM_PROMPT_WEB + learning.promptBlock();
 
   if (ragEngine.enabled && ragEngine.initialized) {
     const lastUserMsg = messages.filter(m => m.role === 'user').pop();
@@ -2865,6 +2887,7 @@ async function startServer() {
       console.log('Worklog    : jurnal kerja aktif (laporan Telegram terjadwal)');
       emailDesk.desk.start(); // follow-up checks
       if (companion.start()) console.log('Peka       : sapaan peduli aktif (maks ' + companion.config.maxPerDay + '/hari, /peka untuk mengatur)');
+      if (learning.start()) console.log('Belajar    : pembelajaran otomatis tiap 00:00 (pelajaran disuntik ke prompt)');
       if (briefing.start()) console.log('Briefing   : briefing pagi otomatis di hari kerja (/brief kapan saja)');
       console.log(emailDesk.watcher.start()
         ? 'Email Desk : memantau balasan email (IMAP IDLE, realtime)'
@@ -2876,7 +2899,7 @@ async function startServer() {
   }
   for (const sig of ['SIGINT', 'SIGTERM']) {
     process.once(sig, () => {
-      try { automation.scheduler.stop(); automation.inbox.stop(); worklog.service.stop(); emailDesk.watcher.stop(); emailDesk.desk.stop(); briefing.stop(); companion.stop(); automation.channels.closeAll(); } catch { /* ignore */ }
+      try { automation.scheduler.stop(); automation.inbox.stop(); worklog.service.stop(); emailDesk.watcher.stop(); emailDesk.desk.stop(); briefing.stop(); learning.stop(); companion.stop(); automation.channels.closeAll(); } catch { /* ignore */ }
       process.exit(0);
     });
   }

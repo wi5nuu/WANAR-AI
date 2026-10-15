@@ -19,7 +19,9 @@
 
 import express from 'express';
 import { createAccessGuard } from '../automation/routes.js';
-import { traceHub as defaultHub, CHANNELS, summary } from './trace-hub.js';
+import { traceHub as defaultHub, CHANNELS, summary, redactionCount } from './trace-hub.js';
+import { securityMonitor as defaultMonitor, securityPosture } from './security-monitor.js';
+import { runtimeSnapshot } from './runtime.js';
 import { headerQuotaFor, providerApiQuota } from './quota.js';
 import { PROVIDER_TIER } from '../ai-failover.js';
 
@@ -107,7 +109,7 @@ function channelStats(hub) {
 
 export function createSystemMapRouter({
   aiManager, db = null, config = {}, automation = null, emailDesk = null, companion = null, briefing = null,
-  tools = [], hub = defaultHub, env = process.env, rateLimiters = {},
+  tools = [], hub = defaultHub, monitor = defaultMonitor, envFile = null, env = process.env, rateLimiters = {},
 }) {
   const router = express.Router();
   router.use(createAccessGuard(env));
@@ -154,6 +156,19 @@ export function createSystemMapRouter({
     ];
   };
 
+  const securityBlock = () => ({
+    level: monitor.level(),
+    window: monitor.window(60),
+    totals: monitor.totals,
+    series: monitor.series(30),
+    sources: monitor.topSources(6),
+    redactions: redactionCount(),
+    posture: securityPosture({ env, monitor, envFile, config }),
+    recent: monitor.recent(25),
+  });
+
+  router.get('/security', wrap(async () => ({ security: securityBlock() })));
+
   router.get('/overview', wrap(async (req) => {
     const { providers, usage } = await describeProviders({ aiManager, db, refresh: req.query.refresh === '1' });
     const limit = Number(config.tokens?.dailyLimit) || null;
@@ -175,6 +190,9 @@ export function createSystemMapRouter({
       },
       providers,
       tools: { count: toolList.length, groups },
+      latency: hub.latency(),
+      runtime: runtimeSnapshot({ sseClients: hub.listenerCount('trace') }),
+      security: securityBlock(),
       usage: {
         date: today(),
         total: usage.total || 0,
@@ -214,9 +232,13 @@ export function createSystemMapRouter({
     const onTrace = (e) => {
       try { res.write(`event: trace\ndata: ${JSON.stringify(e)}\n\n`); } catch { /* closed */ }
     };
+    const onSecurity = (ev) => {
+      try { res.write(`event: security\ndata: ${JSON.stringify(ev)}\n\n`); } catch { /* closed */ }
+    };
     hub.on('trace', onTrace);
+    monitor.on('event', onSecurity);
     const hb = setInterval(() => { try { res.write(': ping\n\n'); } catch { /* closed */ } }, 20_000);
-    req.on('close', () => { clearInterval(hb); hub.off('trace', onTrace); });
+    req.on('close', () => { clearInterval(hb); hub.off('trace', onTrace); monitor.off('event', onSecurity); });
   });
 
   return router;

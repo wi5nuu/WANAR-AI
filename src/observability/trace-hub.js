@@ -48,12 +48,16 @@ const SECRET_PATTERNS = [
   /((?:password|passwd|pass|token|api[_-]?key|secret)\s*[:=]\s*)\S+/gi,
 ];
 
+let redactions = 0;
+/** How many credentials were masked since start (shown on the security panel). */
+export const redactionCount = () => redactions;
+
 /** Masks credentials and caps length. Exported for tests. */
 export function redact(value, max = MAX_TEXT) {
   if (value == null) return value;
   let s = typeof value === 'string' ? value : safeJson(value);
   for (const re of SECRET_PATTERNS) {
-    s = s.replace(re, (m, keep) => (typeof keep === 'string' && m.startsWith(keep) ? `${keep}••••` : '••••'));
+    s = s.replace(re, (m, keep) => { redactions += 1; return typeof keep === 'string' && m.startsWith(keep) ? `${keep}••••` : '••••'; });
   }
   return s.length > max ? `${s.slice(0, max)}… (+${s.length - max} karakter)` : s;
 }
@@ -77,6 +81,32 @@ export class TraceHub extends EventEmitter {
     this.als = new AsyncLocalStorage();
     /** @type {Map<string, object>} insertion-ordered: oldest first */
     this.traces = new Map();
+    /** provider -> {n, ms:[], ttft:[], models: Map(model -> ms[]) } real latency of finished calls */
+    this.lat = new Map();
+  }
+
+  _lat(provider) {
+    let l = this.lat.get(provider);
+    if (!l) { l = { n: 0, fails: 0, ms: [], ttft: [], models: new Map(), lastAt: 0 }; this.lat.set(provider, l); }
+    return l;
+  }
+
+  /** Real latency per provider/model from finished calls (rolling window of 60). */
+  latency() {
+    const pct = (arr, p) => {
+      if (!arr.length) return null;
+      const a = [...arr].sort((x, y) => x - y);
+      return a[Math.min(a.length - 1, Math.floor((p / 100) * a.length))];
+    };
+    const avg = (arr) => (arr.length ? Math.round(arr.reduce((a, b) => a + b, 0) / arr.length) : null);
+    const out = {};
+    for (const [prov, l] of this.lat) {
+      out[prov] = {
+        n: l.n, fails: l.fails, avgMs: avg(l.ms), p50Ms: pct(l.ms, 50), p95Ms: pct(l.ms, 95), ttftMs: avg(l.ttft), lastAt: l.lastAt,
+        models: Object.fromEntries([...l.models].map(([m, v]) => [m, { n: v.length, avgMs: avg(v), p50Ms: pct(v, 50) }])),
+      };
+    }
+    return out;
   }
 
   current() {
@@ -130,6 +160,18 @@ export class TraceHub extends EventEmitter {
       if (data.provider) trace.provider = data.provider;
       if (data.model) trace.model = data.model;
     }
+    if (type === 'success' && data.provider && Number.isFinite(data.ms)) {
+      const l = this._lat(data.provider);
+      l.n += 1; l.lastAt = at; l.ms.push(data.ms); if (l.ms.length > 60) l.ms.shift();
+      const mv = l.models.get(data.model) || [];
+      mv.push(data.ms); if (mv.length > 30) mv.shift();
+      l.models.set(data.model, mv);
+    }
+    if (type === 'first_token' && data.provider && Number.isFinite(data.ms)) {
+      const l = this._lat(data.provider);
+      l.ttft.push(data.ms); if (l.ttft.length > 60) l.ttft.shift();
+    }
+    if (type === 'fail' && data.provider) this._lat(data.provider).fails += 1;
     if (type === 'usage') {
       trace.tokens.prompt += Number(data.prompt) || 0;
       trace.tokens.completion += Number(data.completion) || 0;

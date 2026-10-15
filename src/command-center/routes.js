@@ -19,7 +19,7 @@ import { localDate } from '../worklog/time.js';
 
 const STARTED = Date.now();
 
-export function createCommandCenterRouter({ worklog, emailDesk = null, automation = null, briefing = null, env = process.env, rateLimiters = {} }) {
+export function createCommandCenterRouter({ worklog, emailDesk = null, automation = null, briefing = null, intel = null, learning = null, env = process.env, rateLimiters = {} }) {
   const svc = worklog.service;
   const desk = emailDesk?.desk || null;
   const watcher = emailDesk?.watcher || null;
@@ -136,6 +136,26 @@ export function createCommandCenterRouter({ worklog, emailDesk = null, automatio
   }));
 
   // --------------------------------------------------------------- realtime
+
+  // Live market / economy / tech intel (cached server-side; safe to poll)
+  router.get('/intel', wrap(async (req) => {
+    if (!intel) return { enabled: false };
+    const force = req.query.refresh === '1';
+    return { enabled: true, ...(await intel.all({ force })) };
+  }));
+  router.get('/intel/:section', wrap(async (req) => {
+    const fn = intel && ['fx', 'economy', 'tech'].includes(req.params.section) ? intel[req.params.section] : null;
+    if (!fn) { const e = new Error('Bagian tidak dikenal'); e.code = 'not_found'; throw e; }
+    return { data: await fn({ force: req.query.refresh === '1' }) };
+  }));
+
+  // Nightly self-learning: status + lessons, and a manual run
+  router.get('/learning', wrap(async () => (learning ? { enabled: true, ...learning.status() } : { enabled: false })));
+  router.post('/learning/run', wrap(async () => {
+    if (!learning) return { enabled: false };
+    const entry = await learning.run({ manual: true });
+    return { enabled: true, entry, ...learning.status() };
+  }));
 
   router.get('/events', (req, res) => {
     res.setHeader('Content-Type', 'text/event-stream');

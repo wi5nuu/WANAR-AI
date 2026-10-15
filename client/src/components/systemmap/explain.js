@@ -179,9 +179,28 @@ export function whyThisModel(trace) {
     return `Memakai ${used} karena itu ${src} dan dalam keadaan sehat — langsung berhasil di percobaan pertama.`;
   }
   const parts = [];
-  for (const f of fails) parts.push(`${f.provider}/${f.model} gagal (${FAIL_REASON[f.reason] || f.reason})`);
-  for (const s of skips.slice(0, 4)) parts.push(`${s.provider}/${s.model} dilewati (${FAIL_REASON[s.why] || s.why})`);
-  return `Diminta ${req} (${src}), tetapi ${parts.join(', ')}. Router lalu memakai ${used} — kandidat berikutnya yang sehat menurut urutan tier.`;
+  // group by provider so a long failover chain stays readable
+  const failBy = new Map();
+  for (const f of fails) {
+    const k = `${f.provider}|${FAIL_REASON[f.reason] || f.reason}`;
+    failBy.set(k, (failBy.get(k) || 0) + 1);
+  }
+  for (const [k, n] of failBy) {
+    const [prov, why] = k.split('|');
+    parts.push(n > 1 ? `${prov} gagal ${n}× (${why})` : `${prov} gagal (${why})`);
+  }
+  const skipBy = new Map();
+  for (const sk of skips) {
+    const k = `${sk.provider}|${FAIL_REASON[sk.why] || sk.why}`;
+    skipBy.set(k, (skipBy.get(k) || 0) + 1);
+  }
+  for (const [k, n] of skipBy) {
+    const [prov, why] = k.split('|');
+    parts.push(`${prov} dilewati${n > 1 ? ` (${n} model)` : ''} — ${why}`);
+  }
+  const shown = parts.slice(0, 5).join('; ');
+  const more = parts.length > 5 ? `; dan ${parts.length - 5} kejadian lain` : '';
+  return `Diminta ${req} (${src}), tetapi ${shown}${more}. Router lalu memakai ${used} — kandidat sehat berikutnya menurut urutan tier.`;
 }
 
 /** Provider health → { tone, text } */

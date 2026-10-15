@@ -10,6 +10,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { openStream, getAutomationToken } from '../lib/stream.js';
 import DashboardLayout from './DashboardLayout';
+import CommandIntel from './CommandIntel';
 import './automation.css';
 import './worklog.css';
 import './command-center.css';
@@ -265,6 +266,8 @@ export default function CommandCenter() {
                 </div>
               </div>
             )}
+
+            <CommandIntel api={api} />
 
             {email && <CloseCircle email={email} busy={busy} act={act} />}
 

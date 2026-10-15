@@ -86,6 +86,12 @@ const PROVIDER_TIER = {
 // model must be usable immediately.
 const PERSIST_REASONS = new Set([FailReason.QUOTA, FailReason.TOKEN]);
 
+/** The provider's whole free tier / daily allowance is used up. */
+const DAILY_LIMIT = /(free-models-per-day|per[- ]day|daily (?:limit|quota|request)|requests? per day|kuota harian)/i;
+
+/** Phrases that mean the whole ACCOUNT is out of quota/credit (not one model's daily allowance). */
+const ACCOUNT_QUOTA = /(user quota|insufficient (?:credit|balance|quota|funds)|payment required|\b402\b|out of credits|no credits|credit balance|saldo|balance (?:is )?(?:too )?low|account (?:has )?no (?:credit|quota))/i;
+
 const COOLDOWN_MS = {
   [FailReason.QUOTA]: 10 * 60 * 1000,
   [FailReason.AUTH]: 10 * 60 * 1000,
@@ -123,7 +129,7 @@ export class SmartFailover {
     this.lastSuccess = new Map();
     this.history = [];
     this.maxHistory = 200;
-    this.circuitThreshold = 4;      // gagal beruntun sebelum provider "dibuka"
+    this.circuitThreshold = 3;      // gagal beruntun sebelum provider "dibuka"
     this.circuitOpenMs = 60 * 1000; // lama provider didiamkan
     this._loadState();
   }
@@ -136,6 +142,7 @@ export class SmartFailover {
       const now = Date.now();
       for (const [key, v] of Object.entries(raw.cooldown || {})) {
         if (v && v.until > now && PERSIST_REASONS.has(v.reason)) {
+          if (key.endsWith('::*')) this.providerDown.set(key.slice(0, -3), v.until); // whole provider
           this.cooldown.set(key, v.until);
           this._persisted.set(key, v);
           this.lastFailure.set(key, { reason: v.reason, at: v.until - (COOLDOWN_MS[v.reason] || 0), until: v.until });
@@ -199,13 +206,26 @@ export class SmartFailover {
     return true;
   }
 
-  markFailure(provider, model, reason = FailReason.UNKNOWN) {
+  markFailure(provider, model, reason = FailReason.UNKNOWN, message = '') {
     const cd = COOLDOWN_MS[reason] || COOLDOWN_MS[FailReason.UNKNOWN];
     const key = this._key(provider, model);
     this.cooldown.set(key, Date.now() + cd);
     this.lastFailure.set(key, { reason, at: Date.now(), until: Date.now() + cd });
     // A bad/placeholder API key is a property of the provider, not of one model.
     if (reason === FailReason.AUTH) this.providerDown.set(provider, Date.now() + cd);
+    // An ACCOUNT-level quota ("user quota is not enough", no credit) fails every model of the
+    // provider: skip the whole provider at once instead of burning seconds on each model.
+    const accountLevel = reason === FailReason.QUOTA && ACCOUNT_QUOTA.test(String(message));
+    // "free-models-per-day" and similar: the allowance of the whole free tier is spent, so every
+    // other free model of that provider fails the same way — skip the provider for a while.
+    const dailyLimit = (reason === FailReason.QUOTA || reason === FailReason.RATE) && DAILY_LIMIT.test(String(message));
+    if (accountLevel || dailyLimit) {
+      const until = Date.now() + COOLDOWN_MS[FailReason.QUOTA];
+      this.providerDown.set(provider, until);
+      this._persisted.set(this._key(provider, '*'), { until, reason: FailReason.QUOTA });
+      this.lastFailure.set(this._key(provider, '*'), { reason: FailReason.QUOTA, at: Date.now(), until });
+      this._scheduleSave();
+    }
     if (PERSIST_REASONS.has(reason)) {
       this._persisted.set(key, { until: Date.now() + cd, reason });
       this._scheduleSave();
@@ -316,7 +336,7 @@ export class SmartFailover {
   skipReason(provider, model) {
     const now = Date.now();
     const down = this.providerDown.get(provider);
-    if (down && down > now) return { why: 'auth', until: down };
+    if (down && down > now) return { why: this.lastFailure.get(this._key(provider, '*'))?.reason || 'auth', until: down };
     const c = this.circuit.get(provider);
     if (c?.openedAt && now - c.openedAt <= this.circuitOpenMs) return { why: 'circuit', until: c.openedAt + this.circuitOpenMs };
     const until = this.cooldown.get(this._key(provider, model));

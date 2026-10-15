@@ -133,12 +133,24 @@ describe('AIManager tracing', () => {
   });
 
   it('never tries the default model twice when no model was requested', async () => {
-    const a = { ...streamProvider({ name: 'a', fail: 'user quota is not enough' }), getAvailableModels: () => [{ id: 'm1' }, { id: 'm2' }] };
+    const a = { ...streamProvider({ name: 'a', fail: 'Rate limit exceeded for this model' }), getAvailableModels: () => [{ id: 'm1' }, { id: 'm2' }] };
     const m = managerWith({ a, b: streamProvider({ name: 'b', text: 'ok', defaultModel: 'b1' }) }, 'a');
     const trace = traceHub.start({ channel: 'web' });
     await traceHub.run(trace, () => drain(m.chatStream([{ role: 'user', content: 'hai' }], { provider: 'a' })));
     const tried = trace.events.filter((e) => e.type === 'attempt').map((e) => `${e.provider}/${e.model}`);
     expect(tried).toEqual(['a/m1', 'a/m2', 'b/b1']);
+  });
+
+  it('an account-level quota failure skips the whole provider at once (no model-by-model retries)', async () => {
+    const a = { ...streamProvider({ name: 'a', fail: 'user quota is not enough' }), getAvailableModels: () => [{ id: 'm1' }, { id: 'm2' }, { id: 'm3' }] };
+    const m = managerWith({ a, b: streamProvider({ name: 'b', text: 'ok', defaultModel: 'b1' }) }, 'a');
+    const t1 = traceHub.start({ channel: 'web' });
+    await traceHub.run(t1, () => drain(m.chatStream([{ role: 'user', content: 'hai' }], { provider: 'a' })));
+    expect(t1.events.filter((e) => e.type === 'attempt').map((e) => e.provider)).toEqual(['a', 'b']);
+    const t2 = traceHub.start({ channel: 'web' });
+    await traceHub.run(t2, () => drain(m.chatStream([{ role: 'user', content: 'lagi' }], { provider: 'a' })));
+    expect(t2.events.filter((e) => e.type === 'attempt').map((e) => e.provider)).toEqual(['b']);
+    expect(t2.events.find((e) => e.type === 'skip')).toMatchObject({ provider: 'a', why: 'quota' });
   });
 
   it('an empty answer fails over instead of returning nothing', async () => {
@@ -286,5 +298,88 @@ describe('Telegram path on the map', () => {
     expect(t.events.find((e) => e.type === 'intent')).toMatchObject({ model: false });
     expect(t.events.at(-1)).toMatchObject({ type: 'deliver', ok: true, parts: 1 });
     expect(t.output).toBe('Agenda hari ini kosong');
+  });
+});
+
+describe('security monitor and latency book', () => {
+  it('records 401/403/429 and scanner probes from real responses, masks addresses, never stores bodies', async () => {
+    const { SecurityMonitor, maskIp, securityPosture } = await import('../src/observability/security-monitor.js');
+    const mon = new SecurityMonitor();
+    const app = express();
+    app.use(mon.middleware());
+    app.get('/ok', (req, res) => res.json({ ok: true }));
+    app.get('/secret', (req, res) => res.status(401).json({ error: 'no' }));
+    app.get('/nope', (req, res) => res.status(403).end());
+    app.get('/slow', (req, res) => res.status(429).end());
+    await request(app).get('/ok');
+    await request(app).get('/secret').set('X-Forwarded-For', '203.0.113.77');
+    await request(app).get('/nope');
+    await request(app).get('/slow');
+    await request(app).get('/wp-login.php'); // 404 + scanner pattern
+    expect(mon.totals).toMatchObject({ auth: 1, forbidden: 1, ratelimit: 1, probe: 1 });
+    const ev = mon.recent(10).find((e) => e.kind === 'auth');
+    expect(ev.ip).toBe('203.0.113.x');
+    expect(JSON.stringify(mon.recent(10))).not.toMatch(/Bearer|password/i);
+    expect(mon.level().level).toBe('medium');
+    expect(maskIp('::ffff:10.1.2.3')).toBe('10.1.2.x');
+    const posture = securityPosture({ env: { AUTOMATION_TOKEN: 'x', WANAR_BIND: '127.0.0.1', TELEGRAM_AI_CHAT_IDS: '1' }, monitor: mon, config: { tokens: { dailyLimit: 1000 } } });
+    expect(posture.items.find((i) => i.id === 'panel-token').ok).toBe(true);
+    expect(posture.items.find((i) => i.id === 'bind').ok).toBe(true);
+    expect(JSON.stringify(posture)).not.toContain('"x"'); // values are never returned
+  });
+
+  it('keeps real latency per provider and model, plus first-token time', () => {
+    const hub = new TraceHub();
+    const t = hub.start({ channel: 'web' });
+    for (const ms of [800, 1000, 1200]) hub.step('success', { provider: 'a', model: 'm1', ms }, t);
+    hub.step('first_token', { provider: 'a', ms: 300 }, t);
+    hub.step('fail', { provider: 'a', model: 'm1', reason: 'rate', ms: 50 }, t);
+    const l = hub.latency().a;
+    expect(l).toMatchObject({ n: 3, fails: 1, avgMs: 1000, p50Ms: 1000, ttftMs: 300 });
+    expect(l.models.m1).toMatchObject({ n: 3, avgMs: 1000 });
+  });
+
+  it('overview includes latency, runtime and the security block', async () => {
+    const hub = new TraceHub();
+    const m = managerWith({ a: streamProvider({ name: 'a' }) }, 'a');
+    const x = express();
+    x.use('/api/system-map', createSystemMapRouter({ aiManager: m, db: null, config: {}, hub, env: { AUTOMATION_TOKEN: 't' }, tools: [] }));
+    const res = await request(x).get('/api/system-map/overview').set('X-Automation-Token', 't');
+    expect(res.body.runtime.loopLagMs).toHaveProperty('p99');
+    expect(res.body.security.posture.items.length).toBeGreaterThan(5);
+    expect(res.body).toHaveProperty('latency');
+  });
+});
+
+describe('perimeter guard', () => {
+  it('answers scanner paths with 404 before any route or SPA fallback, and counts them', async () => {
+    const { SecurityMonitor } = await import('../src/observability/security-monitor.js');
+    const mon = new SecurityMonitor();
+    const app = express();
+    app.use(mon.middleware());
+    app.use(mon.guard());
+    app.get('*', (req, res) => res.send('<html>spa</html>'));
+    expect((await request(app).get('/dashboard')).status).toBe(200);
+    for (const p of ['/.env', '/wp-login.php', '/.git/config', '/a/%2e%2e/%2e%2e/etc/passwd']) {
+      const r = await request(app).get(p);
+      expect(r.status).toBe(404);
+      expect(r.text).toBe('Not found');
+    }
+    expect(mon.totals.probe).toBe(4);
+  });
+});
+
+describe('router speed: daily limit and account quota skip the provider at once', () => {
+  it('"free-models-per-day" disables the provider; the next request goes straight to the next one', async () => {
+    const mk = (id) => ({ id });
+    const a = { ...streamProvider({ name: 'a', fail: 'Rate limit exceeded: free-models-per-day. Add 10 credits' }), getAvailableModels: () => [mk('m1'), mk('m2'), mk('m3'), mk('m4')] };
+    const m = managerWith({ a, b: streamProvider({ name: 'b', text: 'ok', defaultModel: 'b1' }) }, 'a');
+    traceHub.clear();
+    const t1 = traceHub.start({ channel: 'web' });
+    await traceHub.run(t1, () => drain(m.chatStream([{ role: 'user', content: 'hai' }], { provider: 'a' })));
+    expect(t1.events.filter((e) => e.type === 'attempt').map((e) => e.provider)).toEqual(['a', 'b']);
+    const t2 = traceHub.start({ channel: 'web' });
+    await traceHub.run(t2, () => drain(m.chatStream([{ role: 'user', content: 'lagi' }], { provider: 'a' })));
+    expect(t2.events.filter((e) => e.type === 'attempt').map((e) => e.provider)).toEqual(['b']);
   });
 });

@@ -18,6 +18,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { CHANNEL_META, FAIL_REASON } from './explain.js';
+import { sfx } from './sfx.js';
 
 export const COLORS = {
   in: 0x38bdf8,
@@ -126,6 +127,56 @@ void main() {
   gl_FragColor = vec4(col * (1.0 + uHeat * 1.2), a);
 }`;
 
+const STAR_FRAG = `
+uniform float uTime;
+uniform vec3 uA;
+uniform vec3 uB;
+varying vec3 vPos;
+varying vec3 vNormal;
+float hash(vec3 p){ p = fract(p * 0.3183099 + .1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
+float noise(vec3 x){
+  vec3 i = floor(x); vec3 f = fract(x); f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(mix(hash(i + vec3(0,0,0)), hash(i + vec3(1,0,0)), f.x), mix(hash(i + vec3(0,1,0)), hash(i + vec3(1,1,0)), f.x), f.y),
+             mix(mix(hash(i + vec3(0,0,1)), hash(i + vec3(1,0,1)), f.x), mix(hash(i + vec3(0,1,1)), hash(i + vec3(1,1,1)), f.x), f.y), f.z);
+}
+void main() {
+  vec3 p = normalize(vPos) * 3.2;
+  float n = noise(p + uTime * 0.35) * 0.55 + noise(p * 2.3 - uTime * 0.5) * 0.3 + noise(p * 5.1 + uTime * 0.8) * 0.15;
+  float rim = pow(1.0 - abs(dot(normalize(vNormal), vec3(0.0, 0.0, 1.0))), 2.0);
+  vec3 col = mix(uA, uB, n) + rim * 0.6;
+  gl_FragColor = vec4(col * (1.0 + n * 0.8), 1.0);
+}`;
+
+const STAR_VERT = `
+varying vec3 vPos;
+varying vec3 vNormal;
+void main() {
+  vPos = position;
+  vNormal = normalize(normalMatrix * normal);
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+}`;
+
+const ATMO_VERT = `
+varying vec3 vN;
+varying vec3 vV;
+void main() {
+  vec4 mv = modelViewMatrix * vec4(position, 1.0);
+  vN = normalize(normalMatrix * normal);
+  vV = normalize(-mv.xyz);
+  gl_Position = projectionMatrix * mv;
+}`;
+
+const ATMO_FRAG = `
+uniform vec3 uColor;
+uniform float uPower;
+uniform float uBoost;
+varying vec3 vN;
+varying vec3 vV;
+void main() {
+  float f = pow(1.0 - max(dot(vN, vV), 0.0), uPower);
+  gl_FragColor = vec4(uColor * (1.0 + uBoost), f * (0.85 + uBoost));
+}`;
+
 function shortNum(n) {
   const v = Number(n || 0);
   if (v >= 1e6) return `${(v / 1e6).toFixed(1)}jt`;
@@ -166,6 +217,11 @@ export class MapScene {
     this.time = 0;
     this.glowTex = glowTexture();
     this.textures = [];
+    this.bolts = [];
+    this.rings = [];
+    this.bursts = [];
+    this.shake = 0;
+    this.speed = Number(opts.speed) || 2;
 
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
@@ -176,6 +232,9 @@ export class MapScene {
     this.labelLayer = document.createElement('div');
     this.labelLayer.className = 'sm-labels';
     host.appendChild(this.labelLayer);
+    this.flashEl = document.createElement('div');
+    this.flashEl.className = 'sm-flash';
+    host.appendChild(this.flashEl);
 
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(50, 1, 0.1, 900);
@@ -195,6 +254,7 @@ export class MapScene {
     this.scene.add(this.coreLight);
 
     this._universe();
+    this._shield();
 
     this.raycaster = new THREE.Raycaster();
     this.pointer = new THREE.Vector2();
@@ -400,7 +460,11 @@ export class MapScene {
       const group = new THREE.Group();
       let mesh;
       if (spec.kind === 'core') {
-        mesh = new THREE.Mesh(new THREE.SphereGeometry(spec.size, 48, 48), new THREE.MeshBasicMaterial({ map: this._tex(starTexture()), color: 0xe0f2fe }));
+        this.coreMat = new THREE.ShaderMaterial({
+          vertexShader: STAR_VERT, fragmentShader: STAR_FRAG,
+          uniforms: { uTime: { value: 0 }, uA: { value: new THREE.Color(0x1d4ed8) }, uB: { value: new THREE.Color(0xe0f2fe) } },
+        });
+        mesh = new THREE.Mesh(new THREE.SphereGeometry(spec.size, 64, 64), this.coreMat);
         const shell = new THREE.Mesh(new THREE.IcosahedronGeometry(spec.size * 1.45, 1), new THREE.MeshBasicMaterial({ color: COLORS.core, wireframe: true, transparent: true, opacity: 0.22 }));
         group.add(shell);
         group.userData.shell = shell;
@@ -444,6 +508,16 @@ export class MapScene {
       const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.glowTex, color: spec.color, transparent: true, opacity: spec.kind === 'core' ? 0 : 0.4, blending: THREE.AdditiveBlending, depthWrite: false }));
       glow.scale.setScalar(spec.size * 4.5);
       group.add(glow);
+
+      if (spec.kind === 'provider' || spec.kind === 'channel') {
+        const atmoMat = new THREE.ShaderMaterial({
+          vertexShader: ATMO_VERT, fragmentShader: ATMO_FRAG, transparent: true, depthWrite: false, side: THREE.BackSide, blending: THREE.AdditiveBlending,
+          uniforms: { uColor: { value: spec.color.clone() }, uPower: { value: 2.4 }, uBoost: { value: 0 } },
+        });
+        const atmo = new THREE.Mesh(new THREE.SphereGeometry(spec.size * 1.32, 32, 32), atmoMat);
+        group.add(atmo);
+        group.userData.atmo = atmoMat;
+      }
 
       const halo = new THREE.Mesh(
         new THREE.TorusGeometry(spec.size * 1.5, Math.max(0.03, spec.size * 0.045), 8, 64),
@@ -578,7 +652,7 @@ export class MapScene {
 
   _hopMs(a, b) {
     const d = this.nodes.get(a).pos.distanceTo(this.nodes.get(b).pos);
-    return Math.min(3200, Math.max(1100, 700 + d * 55)) * (this.reduced ? 1.5 : 1);
+    return (Math.min(2400, Math.max(360, 240 + d * 24)) / this.speed) * (this.reduced ? 1.5 : 1);
   }
 
   _startHop(p) {
@@ -587,6 +661,9 @@ export class MapScene {
     p.t0 = performance.now();
     const e = this._edge(a, b);
     if (e) { e.heat = 1; e.mat.uniforms.uHot.value.copy(p.color); }
+    const na = this.nodes.get(a);
+    const nb = this.nodes.get(b);
+    if (na && nb) this._bolt(na.pos, nb.pos, p.color, { life: 0.28 / Math.sqrt(this.speed), width: 0.1 });
   }
 
   _kill(p) {
@@ -601,6 +678,7 @@ export class MapScene {
       const t = msg.trace;
       const ch = `c:${t.channel}`;
       this.pulse(ch, COLORS.in);
+      sfx.play('in', 1);
       this.spawn([ch, 'core'], { color: COLORS.in, traceId: t.id, text: t.input || t.title, icon: CHANNEL_META[t.channel]?.icon || '📥' });
       this.traceState.set(t.id, { channel: t.channel });
       return;
@@ -631,6 +709,7 @@ export class MapScene {
         this.pulse(mNode(ev.provider, ev.model), COLORS.warn);
         break;
       case 'attempt':
+        sfx.play('route', 0.8);
         st.provider = ev.provider; st.model = ev.model;
         this.spawn(['core', pNode(ev.provider), mNode(ev.provider, ev.model)], { color: COLORS.route, traceId: id, text: `${ev.provider} / ${ev.model}`, icon: '🚀', size: 1.9 });
         break;
@@ -638,19 +717,24 @@ export class MapScene {
         this.pulse(mNode(st.provider || ev.provider, st.model), COLORS.ok);
         break;
       case 'fail':
+        sfx.play('fail', 1);
+        this._flash(COLORS.err, 0.08);
         this.pulse(mNode(ev.provider, ev.model), COLORS.err);
         this.spawn([mNode(ev.provider, ev.model), pNode(ev.provider), 'core'], { color: COLORS.err, traceId: id, text: `gagal: ${FAIL_REASON[ev.reason] || ev.reason}`, icon: '💥', size: 1.8 });
         break;
       case 'success':
+        sfx.play('ok', 1);
         this.spawn([mNode(ev.provider, ev.model), pNode(ev.provider), 'core'], { color: COLORS.ok, traceId: id, text: ev.preview || `jawaban ${ev.chars} karakter`, icon: '💬', size: 2.1 });
         break;
       case 'tool_start':
+        sfx.play('tool', 0.9);
         this.spawn(['core', 'tools'], { color: COLORS.tool, traceId: id, text: ev.name, icon: '🔧', size: 1.6 });
         break;
       case 'tool_end':
         this.spawn(['tools', 'core'], { color: ev.ok ? COLORS.tool : COLORS.err, traceId: id, text: `${ev.name} ${ev.ok ? 'selesai' : 'gagal'}`, icon: ev.ok ? '🔩' : '⚠️', size: 1.5 });
         break;
       case 'deliver':
+        sfx.play(ev.ok === false ? 'fail' : 'out', 1);
         this.spawn(['core', `c:${ev.channel || st.channel}`], {
           color: ev.ok === false ? COLORS.err : COLORS.out, traceId: id,
           text: ev.ok === false ? 'gagal terkirim' : (ev.preview || `terkirim · ${ev.chars} karakter`), icon: ev.ok === false ? '📭' : '📤', size: 2.2,
@@ -710,6 +794,188 @@ export class MapScene {
     this.controls.autoRotate = !this.reduced;
     this._fit();
   }
+
+  // ------------------------------------------------------------- effects
+
+  /** Jagged lightning between two points (midpoint displacement), with a bright core and a side branch. */
+  _jagged(a, b, roughness, levels = 4) {
+    let pts = [a.clone(), b.clone()];
+    let amp = a.distanceTo(b) * roughness;
+    for (let l = 0; l < levels; l++) {
+      const next = [pts[0]];
+      for (let i = 0; i < pts.length - 1; i++) {
+        const m = pts[i].clone().add(pts[i + 1]).multiplyScalar(0.5);
+        m.add(new THREE.Vector3((Math.random() - 0.5) * amp, (Math.random() - 0.5) * amp, (Math.random() - 0.5) * amp));
+        next.push(m, pts[i + 1]);
+      }
+      pts = next;
+      amp *= 0.55;
+    }
+    return pts;
+  }
+
+  _bolt(a, b, color, { life = 0.3, width = 0.12, branches = 1 } = {}) {
+    if (this.bolts.length > 26) return;
+    const group = new THREE.Group();
+    const mats = [];
+    const mk = (pts, radius, c, opacity) => {
+      const curve = new THREE.CatmullRomCurve3(pts, false, 'catmullrom', 0.2);
+      const geo = new THREE.TubeGeometry(curve, Math.max(8, pts.length * 2), radius, 5, false);
+      const mat = new THREE.MeshBasicMaterial({ color: c, transparent: true, opacity, blending: THREE.AdditiveBlending, depthWrite: false });
+      group.add(new THREE.Mesh(geo, mat));
+      mats.push({ mat, base: opacity });
+    };
+    const main = this._jagged(a, b, 0.16);
+    mk(main, width * 2.6, color, 0.35); // glow
+    mk(main, width, 0xffffff, 0.95);    // white-hot core
+    for (let i = 0; i < branches; i++) {
+      const at = main[Math.floor(main.length * (0.25 + Math.random() * 0.5))];
+      const dir = new THREE.Vector3((Math.random() - 0.5), (Math.random() - 0.5), (Math.random() - 0.5)).normalize().multiplyScalar(a.distanceTo(b) * 0.25);
+      mk(this._jagged(at, at.clone().add(dir), 0.2, 3), width * 0.6, color, 0.7);
+    }
+    this.scene.add(group);
+    this.bolts.push({ group, mats, t0: performance.now(), life: life * 1000 });
+  }
+
+  /** Expanding ring + sparks + a brief glow at a node (a message landed there). */
+  _impact(nodeId, color, big = false) {
+    const n = this.nodes.get(nodeId);
+    if (!n) return;
+    const col = new THREE.Color(color);
+    if (this.rings.length < 18) {
+      const ring = new THREE.Mesh(
+        new THREE.RingGeometry(0.92, 1.0, 64),
+        new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.9, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending })
+      );
+      ring.position.copy(n.pos);
+      ring.lookAt(this.camera.position);
+      this.scene.add(ring);
+      this.rings.push({ ring, t0: performance.now(), life: big ? 900 : 650, base: n.base * (big ? 1.6 : 1.2), grow: big ? 7 : 4.5 });
+    }
+    if (this.bursts.length < 10) {
+      const count = big ? 46 : 24;
+      const pos = new Float32Array(count * 3);
+      const vel = [];
+      for (let i = 0; i < count; i++) {
+        pos.set([n.pos.x, n.pos.y, n.pos.z], i * 3);
+        const d = new THREE.Vector3((Math.random() - 0.5), (Math.random() - 0.5), (Math.random() - 0.5)).normalize().multiplyScalar((big ? 7 : 4) * (0.4 + Math.random()));
+        vel.push(d);
+      }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+      const m = new THREE.PointsMaterial({ color: col, size: big ? 0.9 : 0.6, map: this.glowTex, transparent: true, opacity: 1, depthWrite: false, blending: THREE.AdditiveBlending });
+      const pts = new THREE.Points(g, m);
+      this.scene.add(pts);
+      this.bursts.push({ pts, vel, t0: performance.now(), life: 750 });
+    }
+    if (nodeId === 'core' || big) {
+      this.shake = Math.min(0.9, this.shake + (nodeId === 'core' ? 0.35 : 0.18));
+      this._flash(col, nodeId === 'core' ? 0.16 : 0.09);
+    }
+    if (n.group.userData.atmo) n.atmoBoost = 1;
+  }
+
+  _flash(color, alpha = 0.12) {
+    if (this.reduced || !this.flashEl?.animate) return;
+    const c = `#${new THREE.Color(color).getHexString()}`;
+    this.flashEl.style.background = `radial-gradient(ellipse at 50% 45%, ${c}00 0%, ${c} 140%)`;
+    this.flashEl.animate([{ opacity: alpha }, { opacity: 0 }], { duration: 380, easing: 'ease-out' });
+  }
+
+  /** Translucent hex shield around the system: where outside probes hit. */
+  _shield() {
+    const r = 62;
+    const geo = new THREE.IcosahedronGeometry(r, 2);
+    this.shieldWire = new THREE.LineSegments(
+      new THREE.WireframeGeometry(geo),
+      new THREE.LineBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.05, depthWrite: false, blending: THREE.AdditiveBlending })
+    );
+    this.shieldWire.userData.r = r;
+    this.scene.add(this.shieldWire);
+    this.shieldFlash = 0;
+  }
+
+  /** A real security event: an attacker bolt from outside hits the shield and is blocked. */
+  handleSecurity(ev) {
+    if (!ev) return;
+    const r = this.shieldWire?.userData.r || 62;
+    let h = 0;
+    for (const ch of String(ev.ip || ev.id)) h = (h * 31 + ch.charCodeAt(0)) | 0;
+    const th = ((h % 628) / 100);
+    const ph = (((h >> 8) % 314) / 100);
+    const dir = new THREE.Vector3(Math.sin(ph) * Math.cos(th), Math.cos(ph) * 0.6, Math.sin(ph) * Math.sin(th)).normalize();
+    const from = dir.clone().multiplyScalar(r + 55);
+    const hit = dir.clone().multiplyScalar(r);
+    const color = ev.severity === 'high' ? 0xf43f5e : ev.severity === 'medium' ? 0xfb923c : 0xfacc15;
+    this._bolt(from, hit, color, { life: 0.55, width: 0.18, branches: 2 });
+    setTimeout(() => {
+      const fake = { pos: hit, base: 3 };
+      const ring = new THREE.Mesh(
+        new THREE.RingGeometry(0.9, 1.0, 48),
+        new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.95, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending })
+      );
+      ring.position.copy(fake.pos);
+      ring.lookAt(new THREE.Vector3(0, 0, 0));
+      this.scene.add(ring);
+      this.rings.push({ ring, t0: performance.now(), life: 900, base: 3, grow: 6 });
+      this.shieldFlash = 1;
+      this._flash(color, 0.07);
+      sfx.play('shield', ev.severity === 'high' ? 1.2 : 0.8);
+    }, 220);
+  }
+
+  _updateEffects(now, dt) {
+    for (let i = this.bolts.length - 1; i >= 0; i--) {
+      const b = this.bolts[i];
+      const k = (now - b.t0) / b.life;
+      if (k >= 1) {
+        this.scene.remove(b.group);
+        b.group.traverse((o) => { o.geometry?.dispose?.(); o.material?.dispose?.(); });
+        this.bolts.splice(i, 1);
+        continue;
+      }
+      const flicker = 0.55 + Math.random() * 0.45;
+      for (const m of b.mats) m.mat.opacity = m.base * (1 - k) * flicker;
+    }
+    for (let i = this.rings.length - 1; i >= 0; i--) {
+      const r = this.rings[i];
+      const k = (now - r.t0) / r.life;
+      if (k >= 1) { this.scene.remove(r.ring); r.ring.geometry.dispose(); r.ring.material.dispose(); this.rings.splice(i, 1); continue; }
+      const e = 1 - Math.pow(1 - k, 3);
+      r.ring.scale.setScalar(r.base * (1 + e * r.grow));
+      r.ring.material.opacity = 0.9 * (1 - k);
+      if (r.ring.userData.face !== false) r.ring.lookAt(this.camera.position);
+    }
+    for (let i = this.bursts.length - 1; i >= 0; i--) {
+      const b = this.bursts[i];
+      const k = (now - b.t0) / b.life;
+      if (k >= 1) { this.scene.remove(b.pts); b.pts.geometry.dispose(); b.pts.material.dispose(); this.bursts.splice(i, 1); continue; }
+      const arr = b.pts.geometry.attributes.position.array;
+      for (let j = 0; j < b.vel.length; j++) {
+        arr[j * 3] += b.vel[j].x * dt;
+        arr[j * 3 + 1] += b.vel[j].y * dt;
+        arr[j * 3 + 2] += b.vel[j].z * dt;
+        b.vel[j].multiplyScalar(0.94);
+      }
+      b.pts.geometry.attributes.position.needsUpdate = true;
+      b.pts.material.opacity = 1 - k;
+    }
+    if (this.shieldWire) {
+      this.shieldFlash = Math.max(0, this.shieldFlash - dt * 1.4);
+      this.shieldWire.material.opacity = 0.05 + this.shieldFlash * 0.35;
+      this.shieldWire.rotation.y += dt * 0.01;
+    }
+    for (const n of this.nodes.values()) {
+      const m = n.group.userData.atmo;
+      if (!m) continue;
+      n.atmoBoost = Math.max(0, (n.atmoBoost || 0) - dt * 1.6);
+      m.uniforms.uBoost.value = n.atmoBoost * 1.4;
+    }
+    if (this.coreMat) this.coreMat.uniforms.uTime.value = this.time;
+    this.shake = Math.max(0, this.shake - dt * 2.4);
+  }
+
+  setSpeed(v) { this.speed = Math.min(6, Math.max(0.5, Number(v) || 2)); }
 
   // --------------------------------------------------------------- loop
 
@@ -793,6 +1059,7 @@ export class MapScene {
       let k = (now - p.t0) / p.hopMs;
       if (k >= 1) {
         this.pulse(p.hops[p.hop][1], p.color.getHex());
+        this._impact(p.hops[p.hop][1], p.color, p.hop === p.hops.length - 1);
         p.hop += 1;
         if (p.hop >= p.hops.length) { this._kill(p); this.particles.splice(i, 1); continue; }
         this._startHop(p);
@@ -810,7 +1077,16 @@ export class MapScene {
       p.trail.forEach((s, j) => s.position.copy(curve.getPoint(Math.max(0, ease - (j + 1) * 0.018))));
     }
 
+    this._updateEffects(now, dt);
+    // micro camera shake when something lands on the core
+    let sx = 0; let sy = 0;
+    if (this.shake > 0.01 && !this.reduced) {
+      sx = (Math.random() - 0.5) * this.shake * 0.35;
+      sy = (Math.random() - 0.5) * this.shake * 0.35;
+      this.camera.position.x += sx; this.camera.position.y += sy;
+    }
     this.renderer.render(this.scene, this.camera);
+    if (sx || sy) { this.camera.position.x -= sx; this.camera.position.y -= sy; }
     this._labels(now);
   }
 
@@ -874,6 +1150,7 @@ export class MapScene {
     this.renderer.domElement.removeEventListener('pointermove', this._onMove);
     for (const p of this.particles) this._kill(p);
     this.particles = [];
+    this.flashEl?.remove();
     for (const [id, n] of this.nodes) this._removeNode(id, n);
     for (const e of this.edges.values()) { e.mesh.geometry.dispose(); e.mat.dispose(); }
     this.edges.clear();

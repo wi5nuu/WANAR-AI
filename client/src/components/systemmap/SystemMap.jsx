@@ -11,6 +11,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { openStream, getAutomationToken } from '../../lib/stream.js';
 import { MapScene, webglAvailable } from './scene.js';
+import { sfx } from './sfx.js';
+import { EnginePanel, SecurityPanel, Waterfall } from './TechPanels.jsx';
 import {
   CHANNEL_META, STATUS_LABEL, explainStep, whyThisModel, providerStatus, skipText,
   fmtMs, fmtNum, fmtClock, untilText, FAIL_REASON,
@@ -88,9 +90,17 @@ export default function SystemMap({ mode = 'simple', demoTick = 0 }) {
   const [filter, setFilter] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
   const [follow, setFollow] = useState(false);
+  const [soundOn, setSoundOn] = useState(() => sfx.on);
+  const [volume, setVolume] = useState(() => sfx.volume);
+  const [speed, setSpeed] = useState(() => {
+    try { return Number(localStorage.getItem('wanarMapSpeed')) || 2; } catch { return 2; }
+  });
+  const [sec, setSec] = useState(null);
   const demoRef = useRef(new Map());
   const selectedRef = useRef(null);
   selectedRef.current = selected;
+
+  useEffect(() => { if (!tech && panel === 'engine') setPanel('live'); }, [tech, panel]);
 
   const reduced = useMemo(() => {
     try { return window.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch { return false; }
@@ -100,6 +110,7 @@ export default function SystemMap({ mode = 'simple', demoTick = 0 }) {
     try {
       const d = await api(`/overview${refresh ? '?refresh=1' : ''}`);
       setOverview(d);
+      if (d.security) setSec(d.security);
       setTraces((prev) => mergeTraces(d.traces || [], prev));
       setError('');
       sceneRef.current?.setGraph(d);
@@ -135,7 +146,7 @@ export default function SystemMap({ mode = 'simple', demoTick = 0 }) {
   // 3D scene lifecycle
   useEffect(() => {
     if (!gl || !hostRef.current) return undefined;
-    const sc = new MapScene(hostRef.current, { reducedMotion: reduced, onSelectNode: openNode, onSelectTrace: openTrace });
+    const sc = new MapScene(hostRef.current, { reducedMotion: reduced, onSelectNode: openNode, onSelectTrace: openTrace, speed });
     sceneRef.current = sc;
     if (overview) sc.setGraph(overview);
     return () => { sc.dispose(); sceneRef.current = null; };
@@ -156,6 +167,19 @@ export default function SystemMap({ mode = 'simple', demoTick = 0 }) {
       onOpen: () => setConnected(true),
       onDown: () => setConnected(false),
       events: {
+        security: (e) => {
+          let ev;
+          try { ev = JSON.parse(e.data); } catch { return; }
+          sceneRef.current?.handleSecurity(ev);
+          if (ev.severity === 'high') sfx.play('alert', 1);
+          setSec((cur) => {
+            if (!cur) return cur;
+            const w = { ...cur.window, [ev.kind]: (cur.window?.[ev.kind] || 0) + 1 };
+            const lvl = (w.probe >= 5 || w.auth >= 15) ? { level: 'high', label: 'Waspada tinggi', why: 'banyak percobaan masuk/pemindaian barusan' }
+              : (w.probe > 0 || w.auth >= 3 || w.forbidden >= 5) ? { level: 'medium', label: 'Waspada', why: 'ada percobaan akses yang ditolak' } : cur.level;
+            return { ...cur, window: w, level: lvl, recent: [ev, ...(cur.recent || [])].slice(0, 25) };
+          });
+        },
         trace: (e) => {
           let msg;
           try { msg = JSON.parse(e.data); } catch { return; }
@@ -219,6 +243,31 @@ export default function SystemMap({ mode = 'simple', demoTick = 0 }) {
             </span>
           )}
           <span className="sm-chip">⭐ default: {overview?.router?.defaultProvider || '-'}</span>
+          {sec && (
+            <button type="button" className={`sm-chip sm-chip-btn sec-${sec.level.level}`} onClick={() => setPanel('security')} title={sec.level.why}>
+              🛡️ {sec.level.label}
+            </button>
+          )}
+          <button type="button" className={`sm-hud-btn ${soundOn ? 'on' : ''}`} aria-pressed={soundOn}
+            title={soundOn ? 'Matikan suara petir' : 'Nyalakan suara petir'}
+            onClick={() => { const v = !soundOn; setSoundOn(v); sfx.setOn(v); }}>
+            {soundOn ? '🔊' : '🔇'} Suara
+          </button>
+          {soundOn && (
+            <input className="sm-vol" type="range" min="0" max="1" step="0.05" value={volume} aria-label="Volume"
+              onChange={(e) => { const v = Number(e.target.value); setVolume(v); sfx.setVolume(v); }} />
+          )}
+          {gl && (
+            <label className="sm-hud-btn sm-speed" title="Kecepatan animasi pesan">
+              ⚡
+              <select value={speed} aria-label="Kecepatan animasi"
+                onChange={(e) => { const v = Number(e.target.value); setSpeed(v); sceneRef.current?.setSpeed(v); try { localStorage.setItem('wanarMapSpeed', String(v)); } catch { /* private mode */ } }}>
+                <option value="1">1× santai</option>
+                <option value="2">2× cepat</option>
+                <option value="4">4× kilat</option>
+              </select>
+            </label>
+          )}
           {gl && (
             <button type="button" className={`sm-hud-btn ${follow ? 'on' : ''}`} aria-pressed={follow}
               title="Kamera terbang mengikuti komet pesan terbaru"
@@ -236,7 +285,9 @@ export default function SystemMap({ mode = 'simple', demoTick = 0 }) {
         <div className="sm-tabs" role="tablist">
           <button role="tab" aria-selected={panel === 'live'} className={panel === 'live' ? 'on' : ''} onClick={() => setPanel('live')}>📡 Jejak live</button>
           <button role="tab" aria-selected={panel === 'detail'} className={panel === 'detail' ? 'on' : ''} onClick={() => setPanel('detail')} disabled={!selected}>🔍 Detail</button>
-          <button role="tab" aria-selected={panel === 'quota'} className={panel === 'quota' ? 'on' : ''} onClick={() => setPanel('quota')}>🪙 Kuota & token</button>
+          <button role="tab" aria-selected={panel === 'quota'} className={panel === 'quota' ? 'on' : ''} onClick={() => setPanel('quota')}>🪙 Kuota</button>
+          <button role="tab" aria-selected={panel === 'security'} className={panel === 'security' ? 'on' : ''} onClick={() => setPanel('security')}>🛡️ Keamanan</button>
+          {tech && <button role="tab" aria-selected={panel === 'engine'} className={panel === 'engine' ? 'on' : ''} onClick={() => setPanel('engine')}>🖥 Mesin</button>}
         </div>
 
         <div className="sm-panel-body">
@@ -253,6 +304,8 @@ export default function SystemMap({ mode = 'simple', demoTick = 0 }) {
           {panel === 'quota' && (
             <QuotaPanel overview={overview} tech={tech} refreshing={refreshing} onRefresh={async () => { setRefreshing(true); await loadOverview(true); setRefreshing(false); }} onOpenProvider={(p) => openNode({ type: 'provider', ...p })} />
           )}
+          {panel === 'security' && <SecurityPanel security={sec} tech={tech} />}
+          {panel === 'engine' && tech && <EnginePanel overview={overview} tech={tech} />}
           {panel === 'help' && <HelpPanel />}
         </div>
       </aside>
@@ -383,6 +436,8 @@ function TraceDetail({ trace, error, tech, onReplay }) {
 
       <h4>📥 Pesan masuk</h4>
       <div className="sm-msg in">{trace.input || <em>(kosong)</em>}</div>
+
+      {tech && <Waterfall trace={trace} />}
 
       <h4>🧩 Proses langkah demi langkah ({events.length})</h4>
       <ol className="sm-timeline">

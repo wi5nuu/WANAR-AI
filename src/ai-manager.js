@@ -782,7 +782,7 @@ export class AIManager {
   /** Catat kegagalan + klasifikasi penyebabnya untuk failover. */
   _handleFailover(cand, errorMessage) {
     const reason = classifyError(errorMessage);
-    this.failover.markFailure(cand.provider, cand.model, reason);
+    this.failover.markFailure(cand.provider, cand.model, reason, errorMessage);
     this.failover.record({ provider: cand.provider, model: cand.model, reason, error: String(errorMessage).slice(0, 300) });
     console.warn(`[FAILOVER] ${cand.provider}/${cand.model} gagal (${reason}): ${String(errorMessage).slice(0, 160)}`);
   }
