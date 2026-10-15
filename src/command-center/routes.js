@@ -15,7 +15,7 @@
 import os from 'os';
 import express from 'express';
 import { createAccessGuard } from '../automation/routes.js';
-import { localDate } from '../worklog/time.js';
+import { localDate, atTime, addDays } from '../worklog/time.js';
 
 const STARTED = Date.now();
 
@@ -50,6 +50,7 @@ export function createCommandCenterRouter({ worklog, emailDesk = null, automatio
         today: { workedMin: today.workedMin, breakMin: today.breakMin, targetMin: today.targetMin, achievement: today.achievement, tasks: today.tasks, money: today.money },
         schedule: { workStart: s.workStart, workEnd: s.workEnd, breakStart: s.breakStart, breakEnd: s.breakEnd, workdays: s.workdays, autoStart: s.autoStart, followSchedule: s.followSchedule },
         reminders: svc.listReminders(30).map((r) => ({ id: r.id, at: r.at, text: r.text, source: r.source })),
+        alarms: svc.alarms ? { active: svc.alarms.list(), ringing: svc.alarms.ringing(), recent: svc.alarms.recent(4), ntfy: Boolean(svc.alarms.config.ntfy) } : null,
         week: (() => {
           const w = svc.week(status.date);
           return { summary: w.summary, days: w.days.map((d) => ({ date: d.date, workedMin: d.workedMin, tasksDone: d.tasks.done, net: d.money.net })) };
@@ -83,6 +84,26 @@ export function createCommandCenterRouter({ worklog, emailDesk = null, automatio
     return { reminder: svc.addReminder({ at: `${date} ${String(time).replace('.', ':')}`, text, source: 'web' }) };
   }));
   router.delete('/reminders/:id', wrap(async (req) => ({ cancelled: svc.cancelReminder(req.params.id) })));
+
+  // Alarms: ring repeatedly until acknowledged (Telegram + optional ntfy), shown live here too.
+  const needAlarms = () => {
+    if (!svc.alarms) throw Object.assign(new Error('Alarm belum aktif'), { expose: true });
+    return svc.alarms;
+  };
+  router.post('/alarms', wrap(async (req) => {
+    const { date = localDate(Date.now()), time, label } = req.body || {};
+    if (!/^\d{1,2}[:.]\d{2}$/.test(String(time || ''))) throw Object.assign(new Error('Jam tidak valid (HH:MM)'), { expose: true });
+    const [h, m] = String(time).replace('.', ':').split(':');
+    const hhmm = `${h.padStart(2, '0')}:${m}`;
+    let when = atTime(date, hhmm);
+    if (!req.body?.date && when <= Date.now()) when = atTime(addDays(date, 1), hhmm); // earlier today = tomorrow
+    try {
+      return { alarm: needAlarms().add({ at: when, label: String(label || 'Bangun').slice(0, 80), source: 'web' }) };
+    } catch (e) { throw Object.assign(e, { expose: true }); }
+  }));
+  router.post('/alarms/ack', wrap(async () => ({ acknowledged: needAlarms().ack() })));
+  router.post('/alarms/snooze', wrap(async (req) => needAlarms().snooze(Number(req.body?.minutes) || 5)));
+  router.delete('/alarms/:id', wrap(async (req) => ({ cancelled: needAlarms().cancel(req.params.id) })));
 
   router.post('/email/drafts/:id/send', wrap(async (req) => {
     const d = desk.findDraft(req.params.id);

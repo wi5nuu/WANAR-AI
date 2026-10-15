@@ -25,6 +25,7 @@ import { localDate, localTime, addDays, atTime, formatDateId, formatRupiah } fro
 import { parseAmount, parseQuick } from './parse.js';
 import { EMAIL_ACTION_TYPES, emailPromptLines, quickContact, quickEmailReply, quickDelegate, quickPolicy, runEmailActions, emailFallback } from '../email-desk/assistant-actions.js';
 import { traceStep } from '../observability/trace-hub.js';
+import { quickAlarm } from './quick-alarm.js';
 
 const MAX_ACTIONS = 8;
 const ACTION_TYPES = ['reminder', 'cancel_reminder', 'task', 'finance', 'clock', 'schedule', 'report', ...EMAIL_ACTION_TYPES];
@@ -263,7 +264,7 @@ export function fallbackPlan(text, now = Date.now()) {
       actions.push({ type: 'reminder', at: `${date} ${hhmm(total)}`, text: label });
     }
   }
-  const cancel = /^(?:tolongs+)?(?:batalkan|batal|hapus|cancel)s+(?:pengingat|reminder)?s*(.+)$/i.exec(src);
+  const cancel = /^(?:tolong\s+)?(?:batalkan|batal|hapus|cancel)\s+(?:pengingat|reminder)?\s*(.+)$/i.exec(src);
   if (cancel) actions.push({ type: 'cancel_reminder', match: cancel[1] });
   try {
     for (const f of parseQuick(src.replace(/\s+(?:sama|dan|&)\s+/gi, ', ')).finance) actions.push({ type: 'finance', kind: f.type, amount: f.amount, note: f.note, category: f.category });
@@ -287,6 +288,9 @@ export function makeAssistantResponder({ aiManager, worklog, emailDesk = null, b
       const said = companionIntent(companion, text, call);
       if (said) { traceStep('intent', { name: 'peka-control', detail: 'Mengatur sapaan peka (jeda/lanjut) — dijawab kode, tanpa AI', model: false }); return said; }
     }
+    // Alarms: arming, acknowledging and cancelling are handled by code, instantly.
+    const alarmReply = quickAlarm(worklog, text, typeof worklog.now === 'function' ? worklog.now() : Date.now());
+    if (alarmReply) { traceStep('intent', { name: 'alarm', detail: 'Mengatur/mematikan alarm — dijalankan kode, tanpa AI', model: false }); return alarmReply; }
     // "agenda hari ini" / "briefing": answered from data, instantly and for free.
     if (briefing && BRIEFING_ASK.test(String(text || '').trim())) {
       traceStep('intent', { name: 'briefing', detail: 'Agenda/briefing disusun dari data jurnal, pengingat & email — tanpa AI, 0 token', model: false });

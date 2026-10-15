@@ -9,6 +9,7 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { openStream, getAutomationToken } from '../lib/stream.js';
+import { sfx } from './systemmap/sfx.js';
 import DashboardLayout from './DashboardLayout';
 import CommandIntel from './CommandIntel';
 import './automation.css';
@@ -240,6 +241,9 @@ export default function CommandCenter() {
               </div>
             </div>
 
+            <div className="cc-masonry">
+            <AlarmCard alarms={work.alarms} busy={busy} act={act} />
+
             {email && (
               <div className="au-card cc-gap cc-policy">
                 <h3><span className="cc-title">Balasan email</span><small>satu pengaturan untuk semua email</small></h3>
@@ -271,7 +275,7 @@ export default function CommandCenter() {
 
             {email && <CloseCircle email={email} busy={busy} act={act} />}
 
-            <div className="au-grid cols-2 cc-gap">
+            <div className="cc-flat">
               {/* Action queue */}
               <div className="au-card">
                 <h3><span className="cc-title">Perlu tindakan</span><small>{draftCount + (email?.awaitingYou.length || 0)} item</small></h3>
@@ -383,6 +387,7 @@ export default function CommandCenter() {
                 <pre className="cc-brief">{data.briefing}</pre>
               </div>
             )}
+            </div>
           </>
         )}
       </div>
@@ -393,6 +398,97 @@ export default function CommandCenter() {
         {toasts.map((t) => <div key={t.id} className={`au-toast ${t.kind}`}>{t.text}</div>)}
       </div>
     </DashboardLayout>
+  );
+}
+
+const fmtCountdown = (ms) => {
+  if (ms <= 0) return 'sekarang';
+  const m = Math.round(ms / 60000);
+  if (m < 60) return `${m} mnt lagi`;
+  const h = Math.floor(m / 60);
+  return `${h} j ${m % 60} mnt lagi`;
+};
+
+/** Alarm: arm from here or from Telegram; rings (siren + notification) until you stop it. */
+function AlarmCard({ alarms, busy, act }) {
+  const [time, setTime] = useState('04:00');
+  const [label, setLabel] = useState('Shalat Subuh');
+  const [now, setNow] = useState(Date.now());
+  const [perm, setPerm] = useState(() => (typeof Notification === 'undefined' ? 'unsupported' : Notification.permission));
+  const [sirenOn, setSirenOn] = useState(false);
+  const ringing = alarms?.ringing || [];
+  const ringKey = ringing.map((r) => `${r.id}:${r.status}`).join(',');
+
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 15000);
+    return () => clearInterval(t);
+  }, []);
+
+  // Siren + notification + flashing title while something rings
+  useEffect(() => {
+    if (!ringing.length) { sfx.stopSiren(); setSirenOn(false); return undefined; }
+    setSirenOn(sfx.startSiren());
+    const title = document.title;
+    let flip = false;
+    const blink = setInterval(() => { flip = !flip; document.title = flip ? `⏰ ALARM — ${ringing[0].label}` : '🔔 BANGUN!'; }, 700);
+    try {
+      if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+        new Notification(`⏰ ALARM — ${ringing[0].label}`, { body: 'Buka untuk mematikan alarm.', requireInteraction: true, tag: 'wanar-alarm' });
+      }
+    } catch { /* notifications unavailable */ }
+    return () => { clearInterval(blink); document.title = title; sfx.stopSiren(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ringKey]);
+
+  if (!alarms) return null;
+  const armed = alarms.active.filter((a) => a.status === 'armed');
+  const add = (e) => {
+    e.preventDefault();
+    act('alarm', () => api('/alarms', { method: 'POST', body: { time, label } }), 'Alarm terpasang');
+  };
+  return (
+    <div className={`au-card cc-gap cc-alarm ${ringing.length ? 'ringing' : ''}`}>
+      <h3>
+        <span className="cc-title">⏰ Alarm</span>
+        <small>{alarms.ntfy ? 'Telegram + ntfy darurat' : 'Telegram + sirene di halaman ini'} · coba: "bunyikan alarm jam 4 subuh"</small>
+      </h3>
+
+      {ringing.map((r) => (
+        <div key={r.id} className="cc-ring">
+          <div>
+            <b>BERBUNYI — {r.label}</b>
+            <div className="au-muted">ke-{r.fires} kali · {sirenOn ? 'sirene di halaman ini aktif' : 'ketuk halaman sekali agar sirene bisa bunyi'}</div>
+          </div>
+          <div className="au-actions">
+            <button className="au-btn primary" disabled={!!busy} onClick={() => act('ack', () => api('/alarms/ack', { method: 'POST' }), 'Alarm dimatikan. Selamat pagi!')}>Saya sudah bangun</button>
+            <button className="au-btn" disabled={!!busy} onClick={() => act('snooze', () => api('/alarms/snooze', { method: 'POST', body: { minutes: 5 } }), 'Ditunda 5 menit')}>Tunda 5 mnt</button>
+          </div>
+        </div>
+      ))}
+
+      {armed.length === 0 && !ringing.length && <div className="au-muted">Tidak ada alarm aktif.</div>}
+      <div className="au-list">
+        {armed.map((a) => (
+          <div key={a.id} className="au-item">
+            <div className="cc-ellipsis">
+              <div className="t">{new Date(a.at).toLocaleString('id-ID', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Jakarta' })} <span className="au-chip info">{a.label}</span></div>
+              <div className="au-muted">{fmtCountdown(a.at - now)}{a.snoozes ? ` · ditunda ${a.snoozes}×` : ''}</div>
+            </div>
+            <div className="au-actions"><button className="au-btn sm danger" disabled={!!busy} onClick={() => act(`a${a.id}`, () => api(`/alarms/${a.id}`, { method: 'DELETE' }), 'Alarm dibatalkan')}>Batal</button></div>
+          </div>
+        ))}
+      </div>
+
+      <form className="cc-alarmform" onSubmit={add}>
+        <input className="au-input" type="time" value={time} onChange={(e) => setTime(e.target.value)} required aria-label="Jam alarm" />
+        <input className="au-input grow" value={label} onChange={(e) => setLabel(e.target.value)} placeholder="label (mis. Shalat Subuh)" maxLength={60} />
+        <button className="au-btn primary" type="submit" disabled={!!busy}>Pasang alarm</button>
+      </form>
+      {perm === 'default' && (
+        <button type="button" className="au-btn sm cc-notifbtn" onClick={() => Notification.requestPermission().then(setPerm)}>🔔 Izinkan notifikasi browser untuk alarm</button>
+      )}
+      <div className="au-tiny">Bot tidak bisa menembus mode senyap HP: atur nada keras untuk chat Telegram ini (dan izinkan lewat "Jangan Ganggu"). Untuk bunyi darurat sungguhan, pasang aplikasi ntfy dan isi NTFY_TOPIC di server.</div>
+    </div>
   );
 }
 

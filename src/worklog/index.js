@@ -9,6 +9,8 @@
 import { createWorklogStore } from './store.js';
 import { WorklogService } from './service.js';
 import { worklogTelegramCommands } from './telegram.js';
+import { createAlarms } from './alarms.js';
+import { quickAlarm } from './quick-alarm.js';
 
 let instance = null;
 
@@ -39,8 +41,29 @@ export function createWorklog({ db, aiManager = null, automation = null, env = p
       : null,
   });
 
+  // Alarms ("bangunkan saya jam 4 subuh"): ring repeatedly until the owner answers.
+  service.alarms = createAlarms({
+    db,
+    notify: service.notify,
+    chatId: () => service._chatId(),
+    now: () => service.now(),
+    env,
+    onChange: () => { try { service._changed(service.today(), 'alarm'); } catch { /* realtime is best effort */ } },
+    call: `Mas ${String(env.OWNER_NAME || 'Wisnu Alfian Nur Ashar').split(/\s+/)[0]}`,
+  });
+
   if (automation?.inbox?.registerCommands) {
     automation.inbox.registerCommands(worklogTelegramCommands(service));
+    automation.inbox.registerCommands({
+      alarm: {
+        description: 'alarm bangun: /alarm 04:00 subuh · /alarm (daftar) · /alarm stop',
+        run: async ({ arg }) => {
+          const a = String(arg || '').trim();
+          const text = !a ? 'alarm apa saja' : /^(stop|mati|matikan|off|batal)$/i.test(a) ? 'matikan alarm' : `alarm ${a}`;
+          return quickAlarm(service, text, service.now(), env) || 'Format: /alarm 04:00 subuh';
+        },
+      },
+    });
   }
   return { store, service };
 }

@@ -920,11 +920,13 @@ export class WorklogService extends EventEmitter {
     if (this._timer) return;
     this._timer = setInterval(() => { this.tick().catch(() => {}); }, 30_000);
     this._timer.unref?.();
+    this.alarms?.start();
   }
 
   stop() {
     if (this._timer) clearInterval(this._timer);
     this._timer = null;
+    this.alarms?.stop();
   }
 
   /** Short context for the AI chat ("berapa jam saya kerja hari ini?"). */

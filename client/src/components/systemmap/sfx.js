@@ -76,6 +76,48 @@ class Sfx {
     this._save();
   }
 
+  /**
+   * Loud two-tone siren for a ringing alarm (independent of the effects on/off switch:
+   * the owner asked for an alarm). Needs one tap on the page first (browser autoplay rule).
+   * @returns {boolean} true when it is actually sounding
+   */
+  startSiren() {
+    this.unlock();
+    if (!this.ctx || this.ctx.state !== 'running') return false;
+    if (this._siren) return true;
+    const t = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    osc.type = 'square';
+    osc.frequency.value = 880;
+    const lfo = this.ctx.createOscillator();
+    lfo.type = 'square';
+    lfo.frequency.value = 2.2; // two-tone wail
+    const depth = this.ctx.createGain();
+    depth.gain.value = 260;
+    lfo.connect(depth).connect(osc.frequency);
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.5, t + 0.15);
+    osc.connect(g).connect(this.master);
+    osc.start(t);
+    lfo.start(t);
+    this._siren = { osc, lfo, g };
+    return true;
+  }
+
+  stopSiren() {
+    const s = this._siren;
+    if (!s) return;
+    this._siren = null;
+    try {
+      const t = this.ctx.currentTime;
+      s.g.gain.cancelScheduledValues(t);
+      s.g.gain.exponentialRampToValueAtTime(0.0001, t + 0.1);
+      s.osc.stop(t + 0.15);
+      s.lfo.stop(t + 0.15);
+    } catch { /* already stopped */ }
+  }
+
   /** Short filtered noise burst — the crackle of a spark. */
   _crack(t, { dur = 0.12, f0 = 2500, f1 = 7000, q = 1.2, gain = 0.5, type = 'bandpass' } = {}) {
     const src = this.ctx.createBufferSource();
