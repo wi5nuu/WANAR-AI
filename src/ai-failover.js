@@ -32,11 +32,13 @@ export const FailReason = {
   SERVER: 'server',     // 5xx / overloaded
   NETWORK: 'network',   // timeout / koneksi
   EMPTY: 'empty',       // model balas kosong
+  GONE: 'gone',         // model dicabut/tidak ada (410/404)
   UNKNOWN: 'unknown',
 };
 
 const PATTERNS = [
   [FailReason.QUOTA, /(quota|kuota|telah habis|sudah habis|kredit habis|saldo|insufficient|credit|balance|billing|payment required|402|exceeded your current quota|out of credits|no credits)/i],
+  [FailReason.GONE, /(\b410\b|\bgone\b|model[^a-z]{0,3}not[^a-z]{0,3}found|does not exist|no longer available|has been (?:retired|deprecated|removed)|\b404\b.*model)/i],
   [FailReason.RATE, /(rate ?limit|too many requests|429|tokens per minute|\btpm\b|requests per minute|\brpm\b|overloaded)/i],
   [FailReason.TOKEN, /(context length|maximum context|context window|max.?tokens|token limit|too long|reduce the length)/i],
   [FailReason.AUTH, /(401|403|unauthorized|invalid api key|invalid_api_key|forbidden|authentication|api key not valid|permission)/i],
@@ -84,7 +86,7 @@ const PROVIDER_TIER = {
 // Only cooldowns that are expensive to re-discover are persisted. AUTH is
 // deliberately excluded: after the operator fixes an API key and restarts, the
 // model must be usable immediately.
-const PERSIST_REASONS = new Set([FailReason.QUOTA, FailReason.TOKEN]);
+const PERSIST_REASONS = new Set([FailReason.QUOTA, FailReason.TOKEN, FailReason.GONE]);
 
 /** The provider's whole free tier / daily allowance is used up. */
 const DAILY_LIMIT = /(free-models-per-day|per[- ]day|daily (?:limit|quota|request)|requests? per day|kuota harian)/i;
@@ -99,7 +101,8 @@ const COOLDOWN_MS = {
   [FailReason.SERVER]: 45 * 1000,
   [FailReason.NETWORK]: 20 * 1000,
   [FailReason.TOKEN]: 5 * 60 * 1000,
-  [FailReason.EMPTY]: 30 * 1000,
+  [FailReason.EMPTY]: 2 * 60 * 1000,
+  [FailReason.GONE]: 6 * 60 * 60 * 1000,
   [FailReason.UNKNOWN]: 30 * 1000,
 };
 
@@ -307,6 +310,11 @@ export class SmartFailover {
     const others = Object.keys(this.providers)
       .filter(p => p !== primaryProvider && this._isAvailable(p) && !this.isCircuitOpen(p))
       .sort((a, b) => {
+        // A provider that really answered in the last 20 minutes beats an untested one:
+        // after the primary fails, go straight to what is known to work.
+        const ra = this._recentSuccess(a) ? 0 : 1;
+        const rb = this._recentSuccess(b) ? 0 : 1;
+        if (ra !== rb) return ra - rb;
         const ta = PROVIDER_TIER[a] ?? 5;
         const tb = PROVIDER_TIER[b] ?? 5;
         if (ta !== tb) return ta - tb;
@@ -361,6 +369,14 @@ export class SmartFailover {
       consecutiveFails: c?.fails || 0,
       models,
     };
+  }
+
+  /** Did any model of this provider answer successfully within `withinMs`? */
+  _recentSuccess(provider, withinMs = 20 * 60 * 1000) {
+    const prefix = `${provider}::`;
+    const since = Date.now() - withinMs;
+    for (const [k, at] of this.lastSuccess) if (k.startsWith(prefix) && at >= since) return true;
+    return false;
   }
 
   record(entry) {

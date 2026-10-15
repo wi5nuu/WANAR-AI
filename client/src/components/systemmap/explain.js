@@ -24,6 +24,7 @@ export const FAIL_REASON = {
   server: 'server provider sedang bermasalah',
   network: 'koneksi ke provider putus / timeout',
   empty: 'model menjawab kosong',
+  gone: 'model sudah dicabut oleh provider',
   unknown: 'error lain',
   circuit: 'provider sedang dikarantina karena gagal beruntun',
   cooldown: 'masih masa jeda setelah gagal',

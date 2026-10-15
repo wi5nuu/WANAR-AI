@@ -21,6 +21,46 @@ import * as db from './database.js';
 import config from '../config/config.js';
 import { traceHub, traceStep, estimateTokens } from './observability/trace-hub.js';
 
+const FIRST_TOKEN_MS = Math.max(100, parseInt(process.env.AI_FIRST_TOKEN_MS || '30000', 10) || 30000);
+const LATE_FIRST_TOKEN_MS = Math.max(FIRST_TOKEN_MS, parseInt(process.env.AI_LATE_FIRST_TOKEN_MS || '50000', 10) || 50000);
+const IDLE_MS = Math.max(100, parseInt(process.env.AI_STREAM_IDLE_MS || '30000', 10) || 30000);
+const CALL_MS = Math.max(100, parseInt(process.env.AI_CALL_TIMEOUT_MS || '60000', 10) || 60000);
+
+/**
+ * Wraps a provider stream with a watchdog: no first token within `firstMs`, or silence longer
+ * than `idleMs`, aborts the attempt with a timeout so the router moves on instead of the owner
+ * waiting minutes on a model that is stuck or returns nothing.
+ */
+async function* guardedStream(iterable, { firstMs = FIRST_TOKEN_MS, idleMs = IDLE_MS } = {}) {
+  const it = iterable[Symbol.asyncIterator]();
+  let started = false;
+  try {
+    while (true) {
+      const limit = started ? idleMs : firstMs;
+      let timer;
+      const timeout = new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(started
+          ? `timeout: stream terhenti ${Math.round(limit / 1000)} detik`
+          : `timeout: tidak ada token pertama dalam ${Math.round(limit / 1000)} detik`)), limit);
+      });
+      let r;
+      try { r = await Promise.race([it.next(), timeout]); } finally { clearTimeout(timer); }
+      if (r.done) return;
+      if (['content', 'token', 'tool_calls', 'done', 'error'].includes(r.value?.type)) started = true;
+      yield r.value;
+    }
+  } finally {
+    try { it.return?.(); } catch { /* best effort abort */ }
+  }
+}
+
+/** Promise.race against a deadline (non-streaming provider calls). */
+function withDeadline(promise, ms, label = 'panggilan') {
+  let timer;
+  const timeout = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`timeout: ${label} melebihi ${Math.round(ms / 1000)} detik`)), ms); });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 const WANAR_FORMAT_RULES_CLI = `FORMAT OUTPUT (WAJIB - OVERRIDE ATURAN LAIN):
 Kamu berjalan di terminal CLI, BUKAN web browser:
 - Plain text saja: TANPA markdown (**bold**, *italic*, header #), TANPA emoji/unicode dekoratif, TANPA horizontal rule (---, ***)
@@ -472,7 +512,7 @@ export class AIManager {
       let usage = null;
       let firstAt = 0;
       try {
-        for await (const ev of providerInstance.chatStream(truncatedMessages, { ...options, model: cand.model })) {
+        for await (const ev of guardedStream(providerInstance.chatStream(truncatedMessages, { ...options, model: cand.model }), { firstMs: i < 2 ? FIRST_TOKEN_MS : LATE_FIRST_TOKEN_MS })) {
           if (ev.type === 'error') { errored = ev.content || 'stream error'; break; }
           if (ev.type === 'usage') { usage = ev.usage || usage; continue; }
           if (ev.type === 'content' || ev.type === 'token') {
@@ -669,9 +709,9 @@ export class AIManager {
           let firstAt = 0;
 
           try {
-            const stream = providerInstance.chatStream(currentMessages, {
+            const stream = guardedStream(providerInstance.chatStream(currentMessages, {
               ...options, model: cand.model, tools, systemPrompt,
-            });
+            }), { firstMs: chainIndex < 2 ? FIRST_TOKEN_MS : LATE_FIRST_TOKEN_MS });
             for await (const ev of stream) {
               if (ev.type === 'usage') { usage = ev.usage || usage; continue; }
               if (ev.type === 'content') {
@@ -729,9 +769,14 @@ export class AIManager {
         }
 
         // ===== Non-streaming path =====
-        const result = await providerInstance.chat(currentMessages, {
-          ...options, model: cand.model, tools, systemPrompt,
-        });
+        let result;
+        try {
+          result = await withDeadline(providerInstance.chat(currentMessages, {
+            ...options, model: cand.model, tools, systemPrompt,
+          }), CALL_MS);
+        } catch (e) {
+          result = { success: false, error: e.message };
+        }
 
         if (!result || !result.success) {
           const err = result?.error || 'unknown error';

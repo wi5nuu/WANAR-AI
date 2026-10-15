@@ -377,7 +377,20 @@ export class TelegramInbox extends EventEmitter {
         ...[...this.ownerCommands].map(([k, d]) => `/${k} — ${d.description || ''}`),
         '/help — daftar perintah', '/id — tampilkan Chat ID',
       ];
-      const answer = String(await this.responder({ chatId, text: text.slice(0, 4000), history, commands }) || '').trim();
+      // Slow model? Say so once, instead of leaving the owner staring at silence.
+      let waited = false;
+      const ackTimer = setTimeout(() => {
+        waited = true;
+        this.channel.sendAction?.(chatId, 'typing').catch(() => {});
+        this._reply(chatId, escapeHtml(process.env.AI_SLOW_NOTICE || 'Sebentar ya, saya masih menyiapkan jawabannya…')).catch(() => {});
+      }, Math.max(5000, parseInt(process.env.AI_SLOW_NOTICE_MS || '15000', 10) || 15000));
+      let answer;
+      try {
+        answer = String(await this.responder({ chatId, text: text.slice(0, 4000), history, commands }) || '').trim();
+      } finally {
+        clearTimeout(ackTimer);
+      }
+      void waited;
       if (!answer) throw new Error('empty');
       this._remember(chatId, 'user', text.slice(0, 4000));
       this._remember(chatId, 'assistant', answer.slice(0, 4000));
