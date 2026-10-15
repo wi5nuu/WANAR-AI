@@ -96,6 +96,10 @@ export default function SystemMap({ mode = 'simple', demoTick = 0 }) {
     try { return Number(localStorage.getItem('wanarMapSpeed')) || 2; } catch { return 2; }
   });
   const [sec, setSec] = useState(null);
+  const [skyInfo, setSkyInfo] = useState(null);
+  const [skyMode, setSkyModeState] = useState(() => {
+    try { return localStorage.getItem('wanarSkyMode') || 'auto'; } catch { return 'auto'; }
+  });
   const demoRef = useRef(new Map());
   const selectedRef = useRef(null);
   selectedRef.current = selected;
@@ -146,7 +150,7 @@ export default function SystemMap({ mode = 'simple', demoTick = 0 }) {
   // 3D scene lifecycle
   useEffect(() => {
     if (!gl || !hostRef.current) return undefined;
-    const sc = new MapScene(hostRef.current, { reducedMotion: reduced, onSelectNode: openNode, onSelectTrace: openTrace, speed });
+    const sc = new MapScene(hostRef.current, { reducedMotion: reduced, onSelectNode: openNode, onSelectTrace: openTrace, speed, onSky: setSkyInfo });
     sceneRef.current = sc;
     if (overview) sc.setGraph(overview);
     return () => { sc.dispose(); sceneRef.current = null; };
@@ -256,6 +260,24 @@ export default function SystemMap({ mode = 'simple', demoTick = 0 }) {
           {soundOn && (
             <input className="sm-vol" type="range" min="0" max="1" step="0.05" value={volume} aria-label="Volume"
               onChange={(e) => { const v = Number(e.target.value); setVolume(v); sfx.setVolume(v); }} />
+          )}
+          {gl && skyInfo && (
+            <span className="sm-chip sm-sky" title={`Langit mengikuti jam WIB (Jakarta). ${skyInfo.moonName}, ${skyInfo.moonPct}% tersinari.`}>
+              {skyInfo.icon} {skyInfo.label} · {skyInfo.clock} WIB{skyInfo.night ? ` · 🌙 ${skyInfo.moonPct}%` : ''}
+            </span>
+          )}
+          {gl && (
+            <label className="sm-hud-btn sm-speed" title="Langit: otomatis mengikuti jam WIB, atau pratinjau waktu lain">
+              🌌
+              <select value={skyMode} aria-label="Waktu langit"
+                onChange={(e) => { const v = e.target.value; setSkyModeState(v); sceneRef.current?.setSkyMode(v); }}>
+                <option value="auto">Otomatis (WIB)</option>
+                <option value="pagi">Pagi</option>
+                <option value="siang">Siang</option>
+                <option value="sore">Sore</option>
+                <option value="malam">Malam</option>
+              </select>
+            </label>
           )}
           {gl && (
             <label className="sm-hud-btn sm-speed" title="Kecepatan animasi pesan">

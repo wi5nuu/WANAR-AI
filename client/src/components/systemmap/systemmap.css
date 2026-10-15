@@ -427,3 +427,6 @@
 .sm-sec-time { color: var(--sm-faint); font-size: 10.5px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .sm-sec-detail { color: var(--sm-dim); font-size: 10.5px; word-break: break-all; }
 .sm-tabs button { padding-left: 4px; padding-right: 4px; }
+
+/* sky chip */
+.sm-sky { white-space: nowrap; }

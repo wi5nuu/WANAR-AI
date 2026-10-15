@@ -108,9 +108,161 @@ function starTexture() {
 
 // ------------------------------------------------------------------ shaders
 
+/**
+ * Light streams are camera-facing ribbons whose curve is computed on the GPU from the two
+ * node positions (uniforms), so they follow planets that orbit nonstop at no CPU cost.
+ */
 const STREAM_VERT = `
+attribute float aT;
+attribute float aSide;
+uniform vec3 uA;
+uniform vec3 uB;
+uniform float uWidth;
 varying vec2 vUv;
-void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
+vec3 bez(float t) {
+  vec3 m = (uA + uB) * 0.5;
+  m.y += distance(uA, uB) * 0.22;
+  float u = 1.0 - t;
+  return u * u * uA + 2.0 * u * t * m + t * t * uB;
+}
+void main() {
+  vec3 p = bez(aT);
+  vec3 q = bez(min(aT + 0.01, 1.0));
+  vec3 tang = normalize(q - p + vec3(0.00001));
+  vec3 toCam = normalize(cameraPosition - p);
+  vec3 side = normalize(cross(tang, toCam) + vec3(0.00001));
+  vUv = vec2(aT, aSide);
+  gl_Position = projectionMatrix * viewMatrix * vec4(p + side * aSide * uWidth, 1.0);
+}`;
+
+/** Full-screen sky: gradient, sun, moon with real phase, rotating stars, milky way, clouds. */
+const SKY_VERT = `
+varying vec2 vUv;
+void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`;
+
+const SKY_FRAG = `
+precision highp float;
+uniform vec2 uRes;
+uniform float uTime;
+uniform vec3 uTop;
+uniform vec3 uHor;
+uniform vec2 uSun;
+uniform vec3 uSunCol;
+uniform float uSunVis;
+uniform vec2 uMoon;
+uniform float uMoonVis;
+uniform float uPhase;
+uniform float uNight;
+uniform float uDay;
+uniform float uGlow;
+varying vec2 vUv;
+float hash(vec2 p) { p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
+float noise(vec2 p) {
+  vec2 i = floor(p); vec2 f = fract(p); f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x), mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y);
+}
+float fbm(vec2 p) {
+  float v = 0.0; float a = 0.5;
+  for (int i = 0; i < 5; i++) { v += a * noise(p); p *= 2.03; a *= 0.5; }
+  return v;
+}
+void main() {
+  vec2 uv = vUv;
+  float asp = uRes.x / uRes.y;
+  vec2 p = (uv - 0.5) * vec2(asp, 1.0);
+
+  // sky gradient
+  float h = smoothstep(0.0, 1.0, uv.y);
+  vec3 col = mix(uHor, uTop, pow(h, 0.8));
+
+  // sun: scattering, disc, corona
+  vec2 sp = (uSun - 0.5) * vec2(asp, 1.0);
+  float ds = length(p - sp);
+  col += uSunCol * (0.35 * exp(-ds * 2.2) + 0.5 * exp(-ds * 7.0)) * uSunVis * (0.5 + uGlow);
+  col += uSunCol * exp(-ds * 18.0) * 0.9 * uSunVis;
+  col = mix(col, uSunCol * 1.7, (1.0 - smoothstep(0.034, 0.045, ds)) * uSunVis);
+
+  // stars turn slowly around a celestial pole below the screen (nonstop rotation)
+  float ang = uTime * 0.0045;
+  mat2 rot = mat2(cos(ang), -sin(ang), sin(ang), cos(ang));
+  vec2 q2 = rot * (p - vec2(0.0, -0.7));
+  float stars = 0.0;
+  for (int k = 0; k < 3; k++) {
+    float sc = 38.0 + float(k) * 52.0;
+    vec2 g = q2 * sc;
+    vec2 id = floor(g);
+    vec2 f = fract(g) - 0.5;
+    float r = hash(id + float(k) * 7.7);
+    vec2 o = vec2(hash(id + 3.1), hash(id + 9.7)) - 0.5;
+    float dstar = length(f - o * 0.7);
+    float tw = 0.6 + 0.4 * sin(uTime * (1.5 + r * 3.0) + r * 60.0);
+    float sv = (1.0 - smoothstep(0.0, 0.07, dstar)) * step(0.86, r) * tw;
+    stars += sv * (1.0 - 0.25 * float(k));
+  }
+  col += vec3(0.85, 0.9, 1.0) * stars * uNight * smoothstep(0.0, 0.35, uv.y + 0.1);
+
+  // milky way band
+  float band = exp(-pow((q2.y * 0.8 - q2.x * 0.45 + 0.1) * 3.0, 2.0));
+  col += vec3(0.28, 0.33, 0.55) * fbm(q2 * 6.0) * band * 0.55 * uNight;
+
+  // shooting star every few seconds at night
+  float cyc = floor(uTime / 9.0);
+  float ph = fract(uTime / 9.0);
+  vec2 head = vec2(hash(vec2(cyc, 1.0)) * 1.4 - 0.7, 0.2 + hash(vec2(cyc, 2.0)) * 0.3);
+  vec2 dir = normalize(vec2(1.0, -0.45));
+  head += dir * ph * 0.9;
+  vec2 rel = p - head;
+  float along = dot(rel, -dir);
+  float perp = abs(dot(rel, vec2(-dir.y, dir.x)));
+  float streak = (1.0 - smoothstep(0.0, 0.003, perp)) * step(0.0, along) * (1.0 - smoothstep(0.0, 0.16, along));
+  streak *= smoothstep(0.0, 0.08, ph) * (1.0 - smoothstep(0.3, 0.45, ph)) * step(0.45, hash(vec2(cyc, 3.0)));
+  col += vec3(0.9, 0.95, 1.0) * streak * uNight * 1.2;
+
+  // moon with real phase and craters
+  vec2 mp = (uMoon - 0.5) * vec2(asp, 1.0);
+  vec2 d = p - mp;
+  float dm = length(d);
+  float R = 0.04;
+  col += vec3(0.7, 0.8, 1.0) * exp(-dm * 13.0) * 0.4 * uMoonVis * (0.25 + 0.75 * abs(sin(uPhase * 0.5)));
+  if (dm < R * 1.05) {
+    vec2 q = d / R;
+    float z = sqrt(max(0.0, 1.0 - dot(q, q)));
+    vec3 n = vec3(q, z);
+    vec3 L = normalize(vec3(sin(uPhase), 0.0, -cos(uPhase)));
+    float lit = smoothstep(-0.03, 0.14, dot(n, L));
+    float cr = fbm(q * 4.2 + 3.0);
+    vec3 mc = mix(vec3(0.58, 0.6, 0.67), vec3(0.95, 0.94, 0.88), cr);
+    vec3 shade = mc * (0.07 + 0.93 * lit);
+    col = mix(col, shade, (1.0 - smoothstep(R * 0.94, R, dm)) * uMoonVis);
+  }
+
+  // clouds drift by day, tinted by the low sun at dawn and dusk
+  vec2 cp = vec2(p.x * 1.2 + uTime * 0.006, p.y * 2.2);
+  float c = smoothstep(0.52, 0.8, fbm(cp * 2.4)) * smoothstep(0.05, 0.5, uv.y);
+  vec3 cc = mix(vec3(1.0), uSunCol * 1.25, clamp(uGlow, 0.0, 1.0) * 0.85);
+  col = mix(col, cc, c * (uDay * 0.55 + 0.1 * (1.0 - uNight)));
+
+  col *= 1.0 - 0.7 * dot(uv - 0.5, uv - 0.5);
+  gl_FragColor = vec4(col, 1.0);
+}`;
+
+/** Sky colours by hour (WIB): [hour, top, horizon]. */
+const SKY_KEYS = [
+  [0.0, 0x02030a, 0x0a1130],
+  [4.3, 0x03061a, 0x111a42],
+  [5.1, 0x0c1238, 0x45306a],
+  [5.8, 0x23336b, 0xf08a5d],
+  [6.6, 0x3d73bd, 0xffc58a],
+  [8.0, 0x1f70d4, 0x8fcaff],
+  [12.0, 0x1766c8, 0x7fc2ff],
+  [15.5, 0x2269bf, 0x9bd0ff],
+  [16.9, 0x30579f, 0xffd29a],
+  [17.8, 0x3a4a95, 0xff9a4d],
+  [18.5, 0x1b1f4d, 0xc2477a],
+  [19.2, 0x0a0d28, 0x3a2a6a],
+  [20.5, 0x03051a, 0x0d1536],
+  [24.0, 0x02030a, 0x0a1130],
+];
 
 const STREAM_FRAG = `
 uniform vec3 uColor;
@@ -226,6 +378,7 @@ export class MapScene {
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     this.renderer.setClearColor(0x02030a, 1);
+    this.renderer.autoClear = false; // sky backdrop first, then the universe on top
     this.renderer.domElement.className = 'sm-canvas';
     host.appendChild(this.renderer.domElement);
 
@@ -247,7 +400,14 @@ export class MapScene {
     this.controls.maxDistance = 220;
     this.controls.autoRotate = !this.reduced;
     this.controls.autoRotateSpeed = 0.22;
-    this.controls.addEventListener('start', () => { this.controls.autoRotate = false; this.userMoved = true; this.flyTo = null; });
+    this.controls.addEventListener('start', () => { this.controls.autoRotate = false; this.userMoved = true; this.flyTo = null; clearTimeout(this._resumeTimer); });
+    // nonstop: the camera drifts around again a few seconds after you let go
+    this.controls.addEventListener('end', () => {
+      clearTimeout(this._resumeTimer);
+      this._resumeTimer = setTimeout(() => {
+        if (!this.disposed && !this.follow && !this.focus && !this.flyTo) this.controls.autoRotate = !this.reduced;
+      }, 6000);
+    });
 
     this.scene.add(new THREE.AmbientLight(0x6677aa, 0.35));
     this.coreLight = new THREE.PointLight(0xbfe3ff, 3.2, 160, 1.2);
@@ -255,6 +415,7 @@ export class MapScene {
 
     this._universe();
     this._shield();
+    this._initSky();
 
     this.raycaster = new THREE.Raycaster();
     this.pointer = new THREE.Vector2();
@@ -439,6 +600,16 @@ export class MapScene {
       });
     });
 
+    // Everything revolves around the Core nonstop: channels fast, providers slower, idle stars slowest.
+    const ofKind = (k) => [...want.values()].filter((v) => v.kind === k);
+    const chs = ofKind('channel');
+    chs.forEach((v, i) => { v.helio = { r: R_CHANNELS, a0: Math.PI * 0.85 + (i / chs.length) * Math.PI * 2, speed: 0.045, tilt: 0.28, wobble: 2.5, i }; });
+    const pvs = ofKind('provider');
+    pvs.forEach((v, i) => { v.helio = { r: R_PROVIDERS, a0: Math.PI * 0.12 + (i / pvs.length) * Math.PI * 2, speed: 0.016, tilt: -0.16, wobble: 7, i }; });
+    ofKind('tools').forEach((v) => { v.helio = { r: 12, a0: 1.2, speed: 0.1, tilt: 0.9, wobble: 1, i: 0 }; });
+    const ids = ofKind('idle');
+    ids.forEach((v, i) => { v.helio = { r: R_IDLE, a0: 0.4 + (i / Math.max(1, ids.length)) * Math.PI * 2, speed: 0.006, tilt: 0.3, wobble: 4, i }; });
+
     for (const [id, n] of this.nodes) if (!want.has(id)) this._removeNode(id, n);
     for (const [id, spec] of want) this._upsertNode(id, spec);
 
@@ -545,7 +716,8 @@ export class MapScene {
     }
     n.info = spec.info;
     n.orbit = spec.orbit || null;
-    if (!n.orbit) { n.pos.copy(spec.pos); n.group.position.copy(spec.pos); }
+    n.helio = spec.helio || null;
+    if (!n.orbit && !n.helio) { n.pos.copy(spec.pos); n.group.position.copy(spec.pos); }
     n.halo.material.color.setHex(STATUS_RING[spec.ring] || STATUS_RING.off);
     n.baseGlow = spec.color.clone();
     n.glow.material.color.copy(spec.color);
@@ -576,20 +748,36 @@ export class MapScene {
     const na = this.nodes.get(a);
     const nb = this.nodes.get(b);
     if (!na || !nb) return;
-    const geo = new THREE.TubeGeometry(this._curve(na.pos, nb.pos), 80, 0.09, 6, false);
     let e = this.edges.get(k);
     if (!e) {
+      const N = 72;
+      const pos = new Float32Array((N + 1) * 2 * 3);
+      const aT = new Float32Array((N + 1) * 2);
+      const aSide = new Float32Array((N + 1) * 2);
+      const idx = [];
+      for (let i = 0; i <= N; i++) {
+        aT[i * 2] = i / N; aT[i * 2 + 1] = i / N;
+        aSide[i * 2] = -1; aSide[i * 2 + 1] = 1;
+        if (i < N) { const a = i * 2; idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); }
+      }
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+      geo.setAttribute('aT', new THREE.BufferAttribute(aT, 1));
+      geo.setAttribute('aSide', new THREE.BufferAttribute(aSide, 1));
+      geo.setIndex(idx);
       const mat = new THREE.ShaderMaterial({
-        vertexShader: STREAM_VERT, fragmentShader: STREAM_FRAG, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
-        uniforms: { uColor: { value: new THREE.Color(color) }, uHot: { value: new THREE.Color(color) }, uTime: { value: 0 }, uHeat: { value: 0 }, uBase: { value: base } },
+        vertexShader: STREAM_VERT, fragmentShader: STREAM_FRAG, transparent: true, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending,
+        uniforms: {
+          uColor: { value: new THREE.Color(color) }, uHot: { value: new THREE.Color(color) }, uTime: { value: 0 }, uHeat: { value: 0 }, uBase: { value: base },
+          uA: { value: na.pos.clone() }, uB: { value: nb.pos.clone() }, uWidth: { value: 0.11 },
+        },
       });
       const mesh = new THREE.Mesh(geo, mat);
+      mesh.frustumCulled = false; // the curve is computed on the GPU
       this.scene.add(mesh);
-      e = { mesh, mat, heat: 0 };
+      e = { mesh, mat, heat: 0, a, b };
       this.edges.set(k, e);
     } else {
-      e.mesh.geometry.dispose();
-      e.mesh.geometry = geo;
       e.mat.uniforms.uColor.value.set(color);
       e.mat.uniforms.uBase.value = base;
     }
@@ -795,6 +983,137 @@ export class MapScene {
     this._fit();
   }
 
+  // ------------------------------------------------------------------ sky
+
+  _initSky() {
+    this.skyScene = new THREE.Scene();
+    this.skyCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+    this.skyMat = new THREE.ShaderMaterial({
+      vertexShader: SKY_VERT, fragmentShader: SKY_FRAG, depthTest: false, depthWrite: false,
+      uniforms: {
+        uRes: { value: new THREE.Vector2(1, 1) }, uTime: { value: 0 },
+        uTop: { value: new THREE.Color(0x02030a) }, uHor: { value: new THREE.Color(0x0a1130) },
+        uSun: { value: new THREE.Vector2(0.5, 0.5) }, uSunCol: { value: new THREE.Color(0xffd9a0) }, uSunVis: { value: 0 },
+        uMoon: { value: new THREE.Vector2(0.5, 0.5) }, uMoonVis: { value: 0 }, uPhase: { value: 3.14 },
+        uNight: { value: 1 }, uDay: { value: 0 }, uGlow: { value: 0 },
+      },
+    });
+    this.skyQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.skyMat);
+    this.skyQuad.frustumCulled = false;
+    this.skyScene.add(this.skyQuad);
+    this.skyMode = 'auto';
+    try { const m = localStorage.getItem('wanarSkyMode'); if (m) this.skyMode = m; } catch { /* private mode */ }
+    this.sky = { night: 1, day: 0, hour: 0, label: '', moon: 0 };
+    this._skyReport = -1e9;
+  }
+
+  /** WIB (UTC+7) hour as a fraction, e.g. 17.5 = 17:30. */
+  static wibHour(ms = Date.now()) {
+    const d = new Date(ms + 7 * 3600_000);
+    return d.getUTCHours() + d.getUTCMinutes() / 60 + d.getUTCSeconds() / 3600;
+  }
+
+  /** Fraction of the moon's disc that is lit (0 new … 1 full), from the real lunar cycle. */
+  static moonAge(ms = Date.now()) {
+    const jd = ms / 86400000 + 2440587.5;
+    const age = (((jd - 2451550.1) % 29.530588853) + 29.530588853) % 29.530588853;
+    return { age, phase: (age / 29.530588853) * Math.PI * 2, lit: (1 - Math.cos((age / 29.530588853) * Math.PI * 2)) / 2 };
+  }
+
+  setSkyMode(mode) {
+    this.skyMode = ['auto', 'pagi', 'siang', 'sore', 'malam'].includes(mode) ? mode : 'auto';
+    try { localStorage.setItem('wanarSkyMode', this.skyMode); } catch { /* private mode */ }
+    this._skyReport = -1e9;
+  }
+
+  _skyHour() {
+    const fixed = { pagi: 6.6, siang: 12.2, sore: 17.4, malam: 22.0 }[this.skyMode];
+    return fixed ?? MapScene.wibHour();
+  }
+
+  _updateSky(now) {
+    const u = this.skyMat.uniforms;
+    const t = this._skyHour();
+    // colours: interpolate the keyframes around this hour
+    let a = SKY_KEYS[0]; let b = SKY_KEYS[1];
+    for (let i = 0; i < SKY_KEYS.length - 1; i++) if (t >= SKY_KEYS[i][0] && t <= SKY_KEYS[i + 1][0]) { a = SKY_KEYS[i]; b = SKY_KEYS[i + 1]; break; }
+    const k = (t - a[0]) / Math.max(0.001, b[0] - a[0]);
+    u.uTop.value.setHex(a[1]).lerp(new THREE.Color(b[1]), k);
+    u.uHor.value.setHex(a[2]).lerp(new THREE.Color(b[2]), k);
+    this.renderer.setClearColor(u.uHor.value, 1);
+
+    // sun: east -> west across 05:30–18:30; moon the same arc across 17:30–06:30
+    const sunU = (t - 5.5) / 13;
+    const moonU = ((((t - 17.5) % 24) + 24) % 24) / 13;
+    const edge = (x) => Math.min(1, Math.max(0, Math.min(x, 1 - x) / 0.05));
+    const sunVis = sunU >= 0 && sunU <= 1 ? edge(sunU) : 0;
+    const moonVis = moonU >= 0 && moonU <= 1 ? edge(moonU) : 0;
+    const arc = (x) => [0.1 + 0.8 * x, 0.3 + 0.55 * Math.sin(Math.PI * x)];
+    const [sx, sy] = arc(Math.min(1, Math.max(0, sunU)));
+    const [mx, my] = arc(Math.min(1, Math.max(0, moonU)));
+    u.uSun.value.set(sx, sy);
+    u.uMoon.value.set(mx, my);
+    const elev = Math.sin(Math.PI * Math.min(1, Math.max(0, sunU)));
+    const warm = new THREE.Color(1.0, 0.52, 0.2);
+    const white = new THREE.Color(1.0, 0.96, 0.82);
+    u.uSunCol.value.copy(warm).lerp(white, Math.min(1, Math.max(0, (elev - 0.1) / 0.5)));
+    u.uSunVis.value = sunVis;
+    u.uMoonVis.value = moonVis;
+    const moon = MapScene.moonAge();
+    u.uPhase.value = moon.phase;
+    const daylight = sunVis ? Math.min(1, elev * 2.2) * sunVis : 0;
+    const night = 1 - Math.min(1, Math.max(0, (t >= 5.3 && t <= 18.7 ? daylight * 1.3 : 0) + (t >= 5.0 && t < 5.5 ? (t - 5.0) * 1.0 : 0)));
+    u.uNight.value = night;
+    u.uDay.value = Math.min(1, daylight);
+    u.uGlow.value = sunVis ? 1 - Math.min(1, Math.max(0, (elev - 0.05) / 0.4)) : 0.1;
+    u.uTime.value = this.time;
+    u.uRes.value.set(this.host.clientWidth || 1, this.host.clientHeight || 1);
+
+    this.sky.night = night;
+    this.sky.day = u.uDay.value;
+    this.sky.hour = t;
+    this.sky.moon = moon.lit;
+    this.coreLight.intensity = 3.2 - 0.9 * this.sky.day;
+
+    // report to the HUD every ~20 s
+    if (now - this._skyReport > 20000) {
+      this._skyReport = now;
+      this.opts.onSky?.(this.getSkyInfo());
+    }
+  }
+
+  getSkyInfo() {
+    const t = this.sky.hour;
+    const pick = (h) => {
+      if (h < 4.5 || h >= 19.5) return ['🌙', 'Malam'];
+      if (h < 5.7) return ['🌌', 'Menjelang fajar'];
+      if (h < 7) return ['🌅', 'Fajar'];
+      if (h < 11) return ['🌤️', 'Pagi'];
+      if (h < 15) return ['☀️', 'Siang'];
+      if (h < 17.3) return ['🌤️', 'Sore'];
+      if (h < 18.5) return ['🌇', 'Senja'];
+      return ['🌆', 'Petang'];
+    };
+    const [icon, label] = pick(t);
+    const hh = Math.floor(t);
+    const mm = Math.floor((t - hh) * 60);
+    const moonName = (() => {
+      const a = MapScene.moonAge().age;
+      if (a < 1.8 || a > 27.7) return 'Bulan baru';
+      if (a < 6.4) return 'Sabit awal';
+      if (a < 8.4) return 'Paruh pertama';
+      if (a < 13.8) return 'Cembung awal';
+      if (a < 15.8) return 'Bulan purnama';
+      if (a < 21.1) return 'Cembung akhir';
+      if (a < 23.1) return 'Paruh akhir';
+      return 'Sabit akhir';
+    })();
+    return {
+      icon, label, mode: this.skyMode, clock: `${String(hh).padStart(2, '0')}.${String(mm).padStart(2, '0')}`,
+      moonPct: Math.round(this.sky.moon * 100), moonName, night: this.sky.night > 0.5,
+    };
+  }
+
   // ------------------------------------------------------------- effects
 
   /** Jagged lightning between two points (midpoint displacement), with a bright core and a side branch. */
@@ -987,6 +1306,24 @@ export class MapScene {
     const dt = Math.min(0.05, this.clock.getDelta());
     this.time += dt;
 
+    // planets revolve around the Core, never stopping
+    const sp = this.reduced ? 0.3 : 1;
+    for (const n of this.nodes.values()) {
+      const h = n.helio;
+      if (!h || n.orbit) continue;
+      const a = h.a0 + this.time * h.speed * sp;
+      const x = Math.cos(a) * h.r;
+      const yy = Math.sin(a * 2 + h.i) * h.wobble;
+      const z = Math.sin(a) * h.r;
+      const ct = Math.cos(h.tilt); const st = Math.sin(h.tilt);
+      n.pos.set(x, yy * ct - z * st, yy * st + z * ct);
+      n.group.position.copy(n.pos);
+    }
+    for (const e of this.edges.values()) {
+      const na = this.nodes.get(e.a); const nb = this.nodes.get(e.b);
+      if (na && nb) { e.mat.uniforms.uA.value.copy(na.pos); e.mat.uniforms.uB.value.copy(nb.pos); }
+    }
+
     // moons orbit their planets
     for (const n of this.nodes.values()) {
       if (!n.orbit) continue;
@@ -1015,9 +1352,13 @@ export class MapScene {
     this.controls.update();
 
     // stars, galaxy, nebulae, the star itself
-    this.starLayers.forEach((s, i) => { s.material.opacity = 0.55 + Math.sin(this.time * (0.8 + i * 0.5) + i * 2) * 0.3; s.rotation.y += dt * 0.002 * (i + 1); });
-    this.galaxy.rotation.y += dt * 0.012;
-    this.nebulae.forEach((s, i) => { s.material.rotation += dt * 0.01 * (i % 2 ? 1 : -1); });
+    this._updateSky(now);
+    const night = this.sky.night;
+    this.starLayers.forEach((s, i) => { s.material.opacity = (0.55 + Math.sin(this.time * (0.8 + i * 0.5) + i * 2) * 0.3) * (0.15 + 0.85 * night); s.rotation.y += dt * 0.012 * (i + 1); });
+    this.galaxy.material.opacity = 0.45 * (0.25 + 0.75 * night);
+    this.galaxy.rotation.y += dt * 0.03;
+    this.nebulae.forEach((s, i) => { s.material.opacity = 0.55 * (0.3 + 0.7 * night); s.material.rotation += dt * 0.02 * (i % 2 ? 1 : -1); });
+    for (const o of this.orbits) o.rotation.y += dt * 0.01;
     const core = this.nodes.get('core');
     if (core) {
       core.mesh.rotation.y += dt * 0.08;
@@ -1085,6 +1426,9 @@ export class MapScene {
       sy = (Math.random() - 0.5) * this.shake * 0.35;
       this.camera.position.x += sx; this.camera.position.y += sy;
     }
+    this.renderer.clear();
+    this.renderer.render(this.skyScene, this.skyCam);
+    this.renderer.clearDepth();
     this.renderer.render(this.scene, this.camera);
     if (sx || sy) { this.camera.position.x -= sx; this.camera.position.y -= sy; }
     this._labels(now);
@@ -1151,6 +1495,9 @@ export class MapScene {
     for (const p of this.particles) this._kill(p);
     this.particles = [];
     this.flashEl?.remove();
+    clearTimeout(this._resumeTimer);
+    this.skyQuad?.geometry.dispose();
+    this.skyMat?.dispose();
     for (const [id, n] of this.nodes) this._removeNode(id, n);
     for (const e of this.edges.values()) { e.mesh.geometry.dispose(); e.mat.dispose(); }
     this.edges.clear();
