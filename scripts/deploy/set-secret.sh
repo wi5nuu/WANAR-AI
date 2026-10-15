@@ -24,6 +24,15 @@ VAL="$(printf '%s' "$VAL" | tr -d '[:cntrl:][:space:]')"   # buang karakter tak 
 if [ -n "$PREFIX" ] && [[ "$VAL" != "$PREFIX"* ]]; then
   echo "Nilai tidak diawali \"$PREFIX\". Tidak ada yang diubah."; exit 1
 fi
+# A key copied from a dashboard that hides it ("clv_live_***mlum", "sk-...abcd", bullets) is useless.
+if [[ "$VAL" == *"*"* || "$VAL" == *"•"* || "$VAL" == *"…"* || "$VAL" == *"..."* || "$VAL" == *"·"* ]]; then
+  echo "Ini kunci yang DISAMARKAN oleh dashboard (ada tanda * / • / ...), bukan kunci lengkap."
+  echo "Buat/regenerasi kunci baru di dashboard, salin saat ditampilkan penuh (biasanya hanya sekali), lalu ulangi."
+  echo "Tidak ada yang diubah."; exit 1
+fi
+if [ "${#VAL}" -lt 24 ]; then
+  echo "Nilai terlalu pendek (${#VAL} karakter) untuk sebuah kunci API. Tidak ada yang diubah."; exit 1
+fi
 
 TMP="$(mktemp)"; trap 'rm -f "$TMP"' EXIT
 $SUDO grep -vE "^${NAME}=" "$ENV_FILE" > "$TMP" || true
