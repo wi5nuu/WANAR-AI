@@ -339,6 +339,15 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_context_summaries_session ON context_summaries(session_id);
 `);
 
+// Real per-call accounting (tokens reported by the provider, latency, first token, channel).
+for (const [col, type] of [
+  ['prompt_tokens', 'INTEGER DEFAULT 0'], ['completion_tokens', 'INTEGER DEFAULT 0'],
+  ['ttft_ms', 'INTEGER DEFAULT 0'], ['channel', 'TEXT'], ['real', 'INTEGER DEFAULT 0'], ['trace_id', 'TEXT'],
+]) {
+  const have = db.prepare('PRAGMA table_info(request_logs)').all().map((c) => c.name);
+  if (!have.includes(col)) db.exec(`ALTER TABLE request_logs ADD COLUMN ${col} ${type}`);
+}
+
 const prepared = {
   getSessions: db.prepare(`
     SELECT s.id, s.title, s.provider, s.model, s.created_at, s.updated_at,
@@ -364,11 +373,12 @@ const prepared = {
   getUsageHistory: db.prepare('SELECT date, SUM(tokens) as total, SUM(cost) as cost FROM token_usage GROUP BY date ORDER BY date DESC LIMIT ?'),
   getTotalTokensToday: db.prepare("SELECT COALESCE(SUM(tokens),0) as total FROM token_usage WHERE date = ?"),
   logRequest: db.prepare('INSERT INTO request_logs (session_id, provider, model, ip, input_chars, output_chars, total_tokens, response_time_ms, tokens_per_second, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'),
-  getAnalyticsTotal: db.prepare('SELECT COUNT(*) as count, COALESCE(SUM(total_tokens),0) as total_tokens, COALESCE(AVG(tokens_per_second),0) as avg_speed, COALESCE(SUM(input_chars),0) as total_input, COALESCE(SUM(output_chars),0) as total_output, COALESCE(AVG(response_time_ms),0) as avg_response FROM request_logs WHERE created_at >= ?'),
+  logCall: db.prepare('INSERT INTO request_logs (session_id, provider, model, ip, input_chars, output_chars, total_tokens, prompt_tokens, completion_tokens, response_time_ms, ttft_ms, tokens_per_second, status, channel, real, trace_id) VALUES (?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'),
+  getAnalyticsTotal: db.prepare('SELECT COUNT(*) as count, COALESCE(SUM(total_tokens),0) as total_tokens, COALESCE(AVG(CASE WHEN tokens_per_second > 0 THEN tokens_per_second END),0) as avg_speed, COALESCE(SUM(input_chars),0) as total_input, COALESCE(SUM(output_chars),0) as total_output, COALESCE(AVG(CASE WHEN status = \'ok\' THEN response_time_ms END),0) as avg_response, COALESCE(SUM(prompt_tokens),0) as prompt_tokens, COALESCE(SUM(completion_tokens),0) as completion_tokens, COALESCE(SUM(CASE WHEN real = 1 THEN total_tokens ELSE 0 END),0) as real_tokens, COALESCE(SUM(CASE WHEN status = \'ok\' THEN 1 ELSE 0 END),0) as ok_count, COALESCE(AVG(CASE WHEN ttft_ms > 0 THEN ttft_ms END),0) as avg_ttft FROM request_logs WHERE created_at >= ?'),
   getAnalyticsByProvider: db.prepare('SELECT provider, COUNT(*) as count, SUM(total_tokens) as tokens FROM request_logs WHERE created_at >= ? GROUP BY provider'),
-  getAnalyticsByModel: db.prepare('SELECT model, COUNT(*) as count, SUM(total_tokens) as tokens, AVG(tokens_per_second) as avg_speed FROM request_logs WHERE created_at >= ? GROUP BY model ORDER BY count DESC'),
+  getAnalyticsByModel: db.prepare('SELECT model, COUNT(*) as count, SUM(total_tokens) as tokens, AVG(CASE WHEN tokens_per_second > 0 THEN tokens_per_second END) as avg_speed, SUM(prompt_tokens) as prompt_tokens, SUM(completion_tokens) as completion_tokens, AVG(CASE WHEN status = \'ok\' THEN response_time_ms END) as avg_ms FROM request_logs WHERE created_at >= ? GROUP BY model ORDER BY count DESC'),
   getAnalyticsUniqueIPs: db.prepare('SELECT COUNT(DISTINCT ip) as count FROM request_logs WHERE created_at >= ? AND ip IS NOT NULL'),
-  getAnalyticsRecent: db.prepare('SELECT id, session_id, provider, model, ip, input_chars, output_chars, total_tokens, response_time_ms, tokens_per_second, status, created_at FROM request_logs WHERE created_at >= ? ORDER BY created_at DESC LIMIT 200'),
+  getAnalyticsRecent: db.prepare('SELECT id, session_id, provider, model, ip, input_chars, output_chars, total_tokens, prompt_tokens, completion_tokens, response_time_ms, ttft_ms, tokens_per_second, status, channel, real, created_at FROM request_logs WHERE created_at >= ? ORDER BY created_at DESC, id DESC LIMIT 200'),
   getAnalyticsHourly: db.prepare("SELECT substr(created_at,12,2) || 'h' as hour, COUNT(*) as count, SUM(total_tokens) as tokens FROM request_logs WHERE created_at >= ? GROUP BY substr(created_at,1,13) ORDER BY hour ASC"),
 };
 
@@ -438,6 +448,19 @@ export function getTotalTokensToday() {
   const today = new Date().toISOString().slice(0, 10);
   const row = prepared.getTotalTokensToday.get(today);
   return row.total;
+}
+
+/** One REAL model call: tokens as reported by the provider (or estimated, flagged), timing, channel. */
+export function logCall(d) {
+  const prompt = Math.max(0, Math.round(d.prompt_tokens || 0));
+  const completion = Math.max(0, Math.round(d.completion_tokens || 0));
+  const ms = Math.max(0, Math.round(d.response_time_ms || 0));
+  const tps = ms > 0 && completion > 0 ? Math.round((completion / (ms / 1000)) * 100) / 100 : 0;
+  prepared.logCall.run(
+    d.session_id || null, d.provider, d.model || 'unknown', d.ip || null,
+    prompt + completion, prompt, completion, ms, Math.max(0, Math.round(d.ttft_ms || 0)), tps,
+    d.status || 'ok', d.channel || null, d.real ? 1 : 0, d.trace_id || null
+  );
 }
 
 export function logRequest(data) {
@@ -513,6 +536,11 @@ export function getAnalytics(hours = 24) {
     avgSpeed: Math.round(total.avg_speed * 100) / 100,
     totalInput: total.total_input,
     totalOutput: total.total_output,
+    promptTokens: total.prompt_tokens,
+    completionTokens: total.completion_tokens,
+    realTokens: total.real_tokens,
+    okCount: total.ok_count,
+    avgTtft: Math.round(total.avg_ttft),
     avgResponse: Math.round(total.avg_response),
     uniqueIPs: uniqueIPs.count,
     providers: byProvider,

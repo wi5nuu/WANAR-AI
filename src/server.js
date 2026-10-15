@@ -81,7 +81,20 @@ installHeaderCapture();
 aiManager.onUsage = (u) => {
   try {
     db.recordTokenUsage(new Date().toISOString().slice(0, 10), u.provider, u.model || 'unknown', u.total, estimateCost(u.provider, u.total));
+    // Analytics are built from REAL calls: tokens as the provider reported them (estimates are flagged).
+    db.logCall({
+      session_id: u.session, provider: u.provider, model: u.model, ip: u.ip, prompt_tokens: u.prompt, completion_tokens: u.completion,
+      response_time_ms: u.ms, ttft_ms: u.ttft, status: 'ok', channel: u.channel, real: !u.estimated, trace_id: u.traceId,
+    });
   } catch (e) { console.warn('[USAGE] gagal mencatat token:', e.message); }
+};
+aiManager.onFailure = (f) => {
+  try {
+    db.logCall({
+      session_id: f.session, provider: f.provider, model: f.model, ip: f.ip, response_time_ms: f.ms,
+      status: `error: ${f.reason}`, channel: f.channel, real: true, trace_id: f.traceId,
+    });
+  } catch { /* accounting is best effort */ }
 };
 
 // Automation (scheduler + bulk email). Constructed here, started in startServer().
@@ -1292,7 +1305,7 @@ app.post('/api/chat/stream', rateLimiters.chat, asyncHandler(async (req, res) =>
     channel: 'web',
     title: req.body.voice ? 'Obrolan suara (web)' : 'Chat web',
     input: lastUserText,
-    meta: { session: sessionId ? String(sessionId).slice(0, 12) : null, provider: req.query.provider || req.body.provider || null, model: model || null, voice: Boolean(req.body.voice) },
+    meta: { session: sessionId ? String(sessionId).slice(0, 12) : null, ip: clientIP, provider: req.query.provider || req.body.provider || null, model: model || null, voice: Boolean(req.body.voice) },
   }, async () => {
   traceStep('receive', { channel: 'web', chars: lastUserText.length, history: messages.length - 1, rag: Boolean(ragEngine.enabled && ragEngine.initialized) });
   try {
@@ -1347,19 +1360,7 @@ app.post('/api/chat/stream', rateLimiters.chat, asyncHandler(async (req, res) =>
       sendEvent('done', { tokens: totalTokens });
     }
 
-    const elapsed = Date.now() - startTime;
-    db.logRequest({
-      session_id: sessionId,
-      provider,
-      model: model || 'unknown',
-      ip: clientIP,
-      input_chars: inputChars,
-      output_chars: fullContent.length,
-      total_tokens: totalTokens || Math.round(fullContent.length * 1.3),
-      response_time_ms: elapsed,
-      tokens_per_second: elapsed > 0 ? Math.round((totalTokens / (elapsed / 1000)) * 100) / 100 : 0,
-      status: clientDisconnected ? 'client_disconnect' : 'ok',
-    });
+    // Token usage and timing are logged per REAL model call (aiManager.onUsage), not estimated here.
   } catch (error) {
     if (!clientDisconnected && !res.writableEnded) {
       sendEvent('error', { message: error.message || 'Stream error' });

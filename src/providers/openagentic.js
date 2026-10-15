@@ -288,6 +288,8 @@ export default class OpenAgenticProvider {
       max_tokens: maxTokens,
       temperature,
       stream: true,
+      // ask the gateway for the real token counts (they arrive in the last chunk)
+      ...(process.env.AI_STREAM_USAGE === 'false' ? {} : { stream_options: { include_usage: true } }),
     };
 
     // Only use the top-level field if the array has no system message, to avoid

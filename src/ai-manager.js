@@ -444,14 +444,32 @@ export class AIManager {
   }
 
   /** One finished model call: success + token usage (real when the provider reported it). */
-  _traceUsage(cand, startedAt, text, usage, promptTokens) {
+  _traceUsage(cand, startedAt, text, usage, promptTokens, ttft = null) {
     const model = this._modelOf(cand.provider, cand.model);
     const real = usage && (usage.prompt_tokens != null || usage.completion_tokens != null);
     const prompt = real ? Number(usage.prompt_tokens) || 0 : promptTokens;
     const completion = real ? Number(usage.completion_tokens) || 0 : estimateTokens(text);
     traceStep('success', { provider: cand.provider, model, ms: Date.now() - startedAt, chars: String(text || '').length, preview: String(text || '').replace(/\s+/g, ' ').trim().slice(0, 160) });
     traceStep('usage', { provider: cand.provider, model, prompt, completion, estimated: !real });
-    try { this.onUsage?.({ provider: cand.provider, model, prompt, completion, total: prompt + completion, estimated: !real, channel: traceHub.current()?.channel || 'system' }); } catch { /* accounting is best effort */ }
+    try {
+      const tr = traceHub.current();
+      this.onUsage?.({
+        provider: cand.provider, model, prompt, completion, total: prompt + completion, estimated: !real,
+        channel: tr?.channel || 'system', ms: Date.now() - startedAt, ttft, traceId: tr?.id || null,
+        session: tr?.meta?.session || null, ip: tr?.meta?.ip || null,
+      });
+    } catch { /* accounting is best effort */ }
+  }
+
+  _reportFailure(cand, startedAt, err) {
+    try {
+      const tr = traceHub.current();
+      this.onFailure?.({
+        provider: cand.provider, model: this._modelOf(cand.provider, cand.model), reason: classifyError(err),
+        ms: Date.now() - startedAt, channel: tr?.channel || 'system', traceId: tr?.id || null,
+        session: tr?.meta?.session || null, ip: tr?.meta?.ip || null,
+      });
+    } catch { /* accounting is best effort */ }
   }
 
   _promptTokens(messages, systemPrompt) {
@@ -521,7 +539,7 @@ export class AIManager {
           }
           if (ev.type === 'done') {
             if (!text) { errored = 'empty response'; break; }
-            this._traceUsage(cand, startedAt, text, usage, promptTokens);
+            this._traceUsage(cand, startedAt, text, usage, promptTokens, firstAt ? firstAt - startedAt : null);
             yield ev;
             return;
           }
@@ -533,13 +551,14 @@ export class AIManager {
 
       if (errored) {
         traceStep('fail', { provider: cand.provider, model: this._modelOf(cand.provider, cand.model), reason: classifyError(errored), error: String(errored).slice(0, 300), ms: Date.now() - startedAt });
+        this._reportFailure(cand, startedAt, errored);
         this._handleFailover(cand, errored);
         lastError = errored;
         continue;
       }
 
       this.failover.markSuccess(cand.provider, cand.model);
-      this._traceUsage(cand, startedAt, text, usage, promptTokens);
+      this._traceUsage(cand, startedAt, text, usage, promptTokens, firstAt ? firstAt - startedAt : null);
       return;
     }
 
@@ -695,10 +714,13 @@ export class AIManager {
           provider: cand.provider, model: this._modelOf(cand.provider, cand.model),
           reason: cand.reason || (chainIndex === 0 ? 'primary' : 'failover'), index: chainIndex, round,
         });
-        const traceFail = (err) => traceStep('fail', {
-          provider: cand.provider, model: this._modelOf(cand.provider, cand.model),
-          reason: classifyError(err), error: String(err).slice(0, 300), ms: Date.now() - callStarted,
-        });
+        const traceFail = (err) => {
+          traceStep('fail', {
+            provider: cand.provider, model: this._modelOf(cand.provider, cand.model),
+            reason: classifyError(err), error: String(err).slice(0, 300), ms: Date.now() - callStarted,
+          });
+          this._reportFailure(cand, callStarted, err);
+        };
 
         if (providerInstance.supportsStreamingToolCalls) {
           // ===== Real streaming path =====
@@ -744,7 +766,7 @@ export class AIManager {
           activeProvider = cand.provider;
           activeModel = cand.model;
           if (streamedText || toolCalls?.length) {
-            this._traceUsage(cand, callStarted, streamedText + (toolCalls ? JSON.stringify(toolCalls) : ''), usage, callPrompt);
+            this._traceUsage(cand, callStarted, streamedText + (toolCalls ? JSON.stringify(toolCalls) : ''), usage, callPrompt, firstAt ? firstAt - callStarted : null);
           }
 
           if (toolCalls && toolCalls.length > 0) {

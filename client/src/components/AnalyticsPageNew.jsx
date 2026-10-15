@@ -1,3 +1,4 @@
+import { openStream } from '../lib/stream.js';
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import DashboardLayout from './DashboardLayout';
 
@@ -232,9 +233,11 @@ export default function AnalyticsPageNew() {
   const [page, setPage] = useState(0);
   const PAGE_SIZE = 15;
 
-  const load = useCallback(async () => {
+  const [live, setLive] = useState(false);
+
+  const load = useCallback(async (silent = false) => {
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
       const res = await fetch(`/api/analytics?hours=${hours}`);
       if (!res.ok) throw new Error('API error');
       const json = await res.json();
@@ -250,10 +253,25 @@ export default function AnalyticsPageNew() {
   useEffect(() => { load(); }, [load]);
   useEffect(() => { setPage(0); setExpandedRow(null); }, [hours, filterProvider, filterStatus]);
 
-  // Auto-refresh every 30s
+  // Realtime: every finished model call / message on any channel refreshes the numbers at once.
+  // A slow poll stays as a safety net if the stream is blocked.
   useEffect(() => {
-    const id = setInterval(load, 30000);
-    return () => clearInterval(id);
+    let timer = null;
+    const refresh = () => { clearTimeout(timer); timer = setTimeout(() => load(true), 600); };
+    const close = openStream('/api/system-map/events', {
+      onOpen: () => setLive(true),
+      onDown: () => setLive(false),
+      events: {
+        trace: (e) => {
+          try {
+            const m = JSON.parse(e.data);
+            if (m.kind === 'end' || (m.kind === 'event' && ['success', 'usage', 'fail'].includes(m.event?.type))) refresh();
+          } catch { /* ignore */ }
+        },
+      },
+    });
+    const id = setInterval(() => load(true), 60000);
+    return () => { clearTimeout(timer); clearInterval(id); close(); };
   }, [load]);
 
   const recent = data?.recent || [];
@@ -287,8 +305,14 @@ export default function AnalyticsPageNew() {
   const totalTokens = data?.totalTokens || 0;
   const avgResponse = data?.avgResponse || 0;
   const avgSpeed = data?.avgSpeed || 0;
-  const totalInput = data?.totalInput || 0;
-  const totalOutput = data?.totalOutput || 0;
+  const promptTokens = data?.promptTokens || 0;
+  const completionTokens = data?.completionTokens || 0;
+  const realTokens = data?.realTokens || 0;
+  // Tokens as reported by the providers; older rows only have characters.
+  const hasTokenSplit = promptTokens + completionTokens > 0;
+  const totalInput = hasTokenSplit ? promptTokens : (data?.totalInput || 0);
+  const totalOutput = hasTokenSplit ? completionTokens : (data?.totalOutput || 0);
+  const realPct = totalTokens > 0 ? Math.round((realTokens / totalTokens) * 100) : 0;
 
   const thStyle = {
     padding: '10px 14px', textAlign: 'left', fontSize: 11,
@@ -316,7 +340,7 @@ export default function AnalyticsPageNew() {
             </h1>
             {lastUpdated && (
               <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 3 }}>
-                Diperbarui: {lastUpdated.toLocaleTimeString('id-ID')} · auto-refresh 30s
+                Diperbarui: {lastUpdated.toLocaleTimeString('id-ID')} · {live ? 'realtime' : 'menyambung…'}
               </div>
             )}
           </div>
@@ -363,8 +387,8 @@ export default function AnalyticsPageNew() {
         {/* ── Stat Cards ── */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: 12, marginBottom: 20 }}>
           <StatCard label="Total Request" value={fmt(totalRequests)} sub={`periode ${activePeriod}`} color="var(--brand-primary)" icon="⚡" />
-          <StatCard label="Total Token" value={fmt(totalTokens)} sub={`${fmt(totalInput)} input · ${fmt(totalOutput)} output`} color="#6366f1" icon="◈" />
-          <StatCard label="Avg Latensi" value={fmtTime(avgResponse)} sub="waktu respons rata-rata" color="#22c55e" icon="◷" />
+          <StatCard label="Total Token" value={fmt(totalTokens)} sub={`${fmt(totalInput)} input · ${fmt(totalOutput)} output${hasTokenSplit ? ` · ${realPct}% angka asli provider` : ' (karakter)'}`} color="#6366f1" icon="◈" />
+          <StatCard label="Avg Latensi" value={fmtTime(avgResponse)} sub={`rata-rata panggilan berhasil${data?.avgTtft ? ` · token pertama ${fmtTime(data.avgTtft)}` : ''}`} color="#22c55e" icon="◷" />
           <StatCard label="Avg Kecepatan" value={fmtSpeed(avgSpeed)} sub="token per detik" color="#f59e0b" icon="▶" />
         </div>
 
@@ -538,6 +562,7 @@ export default function AnalyticsPageNew() {
                       <th style={thStyle}>Waktu</th>
                       <th style={thStyle}>Provider</th>
                       <th style={thStyle}>Model</th>
+                      <th style={thStyle}>Kanal</th>
                       <th style={{ ...thStyle, textAlign: 'right' }}>Input</th>
                       <th style={{ ...thStyle, textAlign: 'right' }}>Output</th>
                       <th style={{ ...thStyle, textAlign: 'right' }}>Total Token</th>
@@ -568,11 +593,12 @@ export default function AnalyticsPageNew() {
                           <td style={{ ...tdStyle, fontSize: 11, maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 600 }} title={r.model}>
                             {r.model}
                           </td>
+                          <td style={{ ...tdStyle, fontSize: 11, color: 'var(--text-secondary)' }}>{r.channel || '—'}</td>
                           <td style={{ ...tdStyle, fontSize: 11, textAlign: 'right', color: 'var(--text-tertiary)' }}>
-                            {fmt(r.input_chars)} chr
+                            {r.prompt_tokens > 0 ? `${fmt(r.prompt_tokens)} tkn` : `${fmt(r.input_chars)} chr`}
                           </td>
                           <td style={{ ...tdStyle, fontSize: 11, textAlign: 'right', color: 'var(--text-tertiary)' }}>
-                            {fmt(r.output_chars)} chr
+                            {r.completion_tokens > 0 ? `${fmt(r.completion_tokens)} tkn` : `${fmt(r.output_chars)} chr`}
                           </td>
                           <td style={{ ...tdStyle, fontSize: 12, textAlign: 'right', fontWeight: 700, color: '#6366f1' }}>
                             {fmt(r.total_tokens)}
@@ -600,7 +626,7 @@ export default function AnalyticsPageNew() {
 
                         {expandedRow === r.id && (
                           <tr>
-                            <td colSpan={10} style={{ padding: 0, background: 'var(--bg-tertiary)', borderBottom: '1px solid var(--border-primary)' }}>
+                            <td colSpan={11} style={{ padding: 0, background: 'var(--bg-tertiary)', borderBottom: '1px solid var(--border-primary)' }}>
                               <div style={{ padding: '14px 20px', display: 'flex', flexWrap: 'wrap', gap: 24 }}>
                                 <div>
                                   <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 4 }}>ID</div>
@@ -611,11 +637,25 @@ export default function AnalyticsPageNew() {
                                   <div style={{ fontSize: 12, color: 'var(--text-primary)' }}>{fmtDate(r.created_at)}</div>
                                 </div>
                                 <div>
-                                  <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 4 }}>Karakter</div>
+                                  <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 4 }}>{r.prompt_tokens > 0 || r.completion_tokens > 0 ? 'Token' : 'Karakter'}</div>
                                   <div style={{ fontSize: 12, color: 'var(--text-primary)' }}>
-                                    {fmt(r.input_chars)} input · {fmt(r.output_chars)} output
+                                    {r.prompt_tokens > 0 || r.completion_tokens > 0
+                                      ? `${fmt(r.prompt_tokens)} masuk · ${fmt(r.completion_tokens)} keluar · ${r.real ? 'angka asli provider' : 'perkiraan'}`
+                                      : `${fmt(r.input_chars)} input · ${fmt(r.output_chars)} output`}
                                   </div>
                                 </div>
+                                {r.ttft_ms > 0 && (
+                                  <div>
+                                    <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 4 }}>Token pertama</div>
+                                    <div style={{ fontSize: 12, color: 'var(--text-primary)' }}>{fmtTime(r.ttft_ms)}</div>
+                                  </div>
+                                )}
+                                {r.status !== 'ok' && (
+                                  <div>
+                                    <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 4 }}>Alasan gagal</div>
+                                    <div style={{ fontSize: 12, color: '#ef4444' }}>{String(r.status).replace(/^error:\s*/, '')}</div>
+                                  </div>
+                                )}
                                 <div>
                                   <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 4 }}>Token</div>
                                   <div style={{ fontSize: 12, color: '#6366f1', fontWeight: 700 }}>{fmt(r.total_tokens)} total</div>

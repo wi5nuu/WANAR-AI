@@ -183,6 +183,7 @@ export default class TogetherProvider extends BaseProvider {
         temperature: options.temperature ?? 0.7,
         top_p: options.top_p ?? 0.95,
         stream: true,
+        ...(process.env.AI_STREAM_USAGE === 'false' ? {} : { stream_options: { include_usage: true } }),
       };
 
       if (options.tools && options.tools.length > 0) {
