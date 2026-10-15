@@ -306,3 +306,39 @@
 @media (max-width: 640px) {
   .af-wide .agent-flow-toggle.af-toggle-row { flex-wrap: nowrap; gap: 4px; }
 }
+
+/* ── universe look ─────────────────────────────────────── */
+.sm-root { --sm-bg: #02030a; }
+.sm-label {
+  background: rgba(4, 8, 22, .55);
+  border-color: rgba(148, 197, 255, .22);
+  box-shadow: 0 0 18px rgba(56, 189, 248, .08);
+}
+.sm-label-core { font-size: 13.5px; border-color: rgba(125, 211, 252, .7); box-shadow: 0 0 22px rgba(125, 211, 252, .3); }
+.sm-label-provider b { letter-spacing: .01em; }
+.sm-hud-btn.on { border-color: #fbbf24; color: #fde68a; background: rgba(251, 191, 36, .14); }
+
+/* comet text bubbles: the message travelling along the light */
+.sm-bubble {
+  display: inline-flex; align-items: flex-start; gap: 6px;
+  max-width: 260px;
+  padding: 6px 10px;
+  border-radius: 12px 12px 12px 3px;
+  background: rgba(2, 6, 18, .82);
+  border: 1px solid var(--c, #38bdf8);
+  color: #f1f5f9;
+  font-size: 11.5px; line-height: 1.35; text-align: left;
+  white-space: normal;
+  box-shadow: 0 0 18px color-mix(in srgb, var(--c, #38bdf8) 55%, transparent), inset 0 0 12px color-mix(in srgb, var(--c, #38bdf8) 18%, transparent);
+  backdrop-filter: blur(3px);
+  transition: opacity .2s;
+}
+.sm-bubble-icon { flex: 0 0 auto; }
+.sm-bubble-text { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.sm-bubble.hl { border-width: 2px; z-index: 2; }
+.sm-bubble:hover { z-index: 3; }
+.sm-labels.compact .sm-bubble { max-width: 170px; font-size: 10.5px; padding: 4px 8px; }
+/* names only; the detail line appears on hover (the panel has everything) */
+.sm-label-channel small, .sm-label-provider small, .sm-label-tools small { display: none; }
+.sm-label:hover small, .sm-label:focus-visible small { display: block; }
+.sm-label:hover { z-index: 4; }

@@ -409,7 +409,7 @@ export class AIManager {
     const real = usage && (usage.prompt_tokens != null || usage.completion_tokens != null);
     const prompt = real ? Number(usage.prompt_tokens) || 0 : promptTokens;
     const completion = real ? Number(usage.completion_tokens) || 0 : estimateTokens(text);
-    traceStep('success', { provider: cand.provider, model, ms: Date.now() - startedAt, chars: String(text || '').length });
+    traceStep('success', { provider: cand.provider, model, ms: Date.now() - startedAt, chars: String(text || '').length, preview: String(text || '').replace(/\s+/g, ' ').trim().slice(0, 160) });
     traceStep('usage', { provider: cand.provider, model, prompt, completion, estimated: !real });
     try { this.onUsage?.({ provider: cand.provider, model, prompt, completion, total: prompt + completion, estimated: !real, channel: traceHub.current()?.channel || 'system' }); } catch { /* accounting is best effort */ }
   }

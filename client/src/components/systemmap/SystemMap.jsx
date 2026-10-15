@@ -60,11 +60,11 @@ function demoTrace() {
       ev('fail', 1500, { provider: 'openagentic', model: 'deepseek-v4.1-flash-free', reason: 'quota', error: 'free-models-per-day', ms: 1240 }),
       ev('attempt', 1560, { provider: 'openagentic', model: 'glm-5.3-flash', reason: 'same-provider', index: 1 }),
       ev('first_token', 2300, { provider: 'openagentic', ms: 740 }),
-      ev('success', 3600, { provider: 'openagentic', model: 'glm-5.3-flash', ms: 2040, chars: 410 }),
+      ev('success', 3600, { provider: 'openagentic', model: 'glm-5.3-flash', ms: 2040, chars: 410, preview: '{"reply":"Siap, Pak Wisnu. Saya ingatkan jam 14:45 dan tepat jam 15:00.","actions":[…]}' }),
       ev('usage', 3610, { provider: 'openagentic', model: 'glm-5.3-flash', prompt: 1840, completion: 96, estimated: false }),
       ev('plan', 3700, { parsed: true, attempts: 1, reply: 'Siap, Pak Wisnu. Saya ingatkan jam 14:45 dan tepat jam 15:00.', actions: ['reminder', 'reminder', 'task'] }),
       ev('actions', 3800, { results: ['✓ Pengingat 14:45 — meeting', '✓ Pengingat 15:00 — meeting', '✓ Tugas dicatat: meeting'], ok: 3, failed: 0 }),
-      ev('deliver', 4100, { channel: 'telegram', parts: 1, chars: 128, ok: true }),
+      ev('deliver', 4100, { channel: 'telegram', parts: 1, chars: 128, ok: true, preview: 'Siap, Pak Wisnu. Saya ingatkan jam 14:45 dan tepat jam 15:00. ✓ Pengingat 14:45 — meeting' }),
     ],
   };
 }
@@ -87,6 +87,7 @@ export default function SystemMap({ mode = 'simple', demoTick = 0 }) {
   const [detailErr, setDetailErr] = useState('');
   const [filter, setFilter] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [follow, setFollow] = useState(false);
   const demoRef = useRef(new Map());
   const selectedRef = useRef(null);
   selectedRef.current = selected;
@@ -218,7 +219,14 @@ export default function SystemMap({ mode = 'simple', demoTick = 0 }) {
             </span>
           )}
           <span className="sm-chip">⭐ default: {overview?.router?.defaultProvider || '-'}</span>
-          {gl && <button type="button" className="sm-hud-btn" onClick={() => sceneRef.current?.resetView()}>⟲ Pusatkan</button>}
+          {gl && (
+            <button type="button" className={`sm-hud-btn ${follow ? 'on' : ''}`} aria-pressed={follow}
+              title="Kamera terbang mengikuti komet pesan terbaru"
+              onClick={() => { const v = !follow; setFollow(v); sceneRef.current?.setFollow(v); }}>
+              🎥 {follow ? 'Mengikuti pesan' : 'Ikuti pesan'}
+            </button>
+          )}
+          {gl && <button type="button" className="sm-hud-btn" onClick={() => { setFollow(false); sceneRef.current?.setFollow(false); sceneRef.current?.resetView(); }}>⟲ Pusatkan</button>}
           <button type="button" className="sm-hud-btn" onClick={() => setPanel('help')}>❔ Cara baca</button>
         </div>
         {error && <div className="sm-error">⚠️ {error}</div>}

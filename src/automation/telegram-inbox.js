@@ -288,7 +288,7 @@ export class TelegramInbox extends EventEmitter {
           out = String((await plugin.run({ chatId, arg, text, person })) || '');
           const parts = out ? chunkText(out, 3500) : [];
           for (const part of parts) await this._reply(chatId, escapeHtml(part));
-          traceStep('deliver', { channel: 'telegram', parts: parts.length, chars: out.length, ok: true });
+          traceStep('deliver', { channel: 'telegram', parts: parts.length, chars: out.length, ok: true, preview: out.slice(0, 160) });
         } catch (e) {
           out = e?.expose ? e.message : `Gagal: ${e?.message || 'kesalahan tidak diketahui'}`.slice(0, 300);
           traceStep('error', { error: out });
@@ -384,7 +384,7 @@ export class TelegramInbox extends EventEmitter {
       try { this.onExchange?.({ chatId, user: text.slice(0, 4000), assistant: answer }); } catch { /* never block the reply */ }
       const parts = chunkText(answer, 3500);
       for (const part of parts) await this._reply(chatId, escapeHtml(part));
-      traceStep('deliver', { channel: 'telegram', parts: parts.length, chars: answer.length, ok: true });
+      traceStep('deliver', { channel: 'telegram', parts: parts.length, chars: answer.length, ok: true, preview: answer.slice(0, 160) });
       this.emit('ai_reply', { chatId });
       return answer;
     } catch (e) {
@@ -392,7 +392,7 @@ export class TelegramInbox extends EventEmitter {
       traceStep('error', { error: e.message });
       const sorry = 'Maaf, AI sedang tidak tersedia. Coba lagi sebentar ya.';
       await this._reply(chatId, sorry);
-      traceStep('deliver', { channel: 'telegram', parts: 1, chars: sorry.length, ok: true, fallback: true });
+      traceStep('deliver', { channel: 'telegram', parts: 1, chars: sorry.length, ok: true, fallback: true, preview: sorry });
       return sorry;
     }
   }

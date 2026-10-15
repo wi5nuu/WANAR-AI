@@ -238,7 +238,7 @@ export function createCompanion({
       const text = await compose(choice.kind, choice.facts);
       try {
         await notify(chat, text);
-        traceStep('deliver', { channel: 'telegram', kind: 'check-in', chars: text.length, ok: true });
+        traceStep('deliver', { channel: 'telegram', kind: 'check-in', chars: text.length, ok: true, preview: text.slice(0, 160) });
         try { remember?.(chat, text); } catch { /* history is best effort */ }
         return { kind: choice.kind, text };
       } catch (e) {

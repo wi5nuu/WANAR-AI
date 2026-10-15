@@ -112,7 +112,7 @@ export function createBriefing({ worklog, desk = null, notify = null, defaultCha
       const text = build(at);
       try {
         await notify(chat, text);
-        traceStep('deliver', { channel: 'telegram', kind: 'briefing', chars: text.length, ok: true });
+        traceStep('deliver', { channel: 'telegram', kind: 'briefing', chars: text.length, ok: true, preview: text.slice(0, 160) });
         return true;
       } catch (e) {
         console.warn('[BRIEFING] gagal kirim:', e.message);

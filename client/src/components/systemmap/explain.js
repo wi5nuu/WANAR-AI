@@ -119,7 +119,7 @@ export function explainStep(ev, { tech = false } = {}) {
     case 'fail':
       return { icon: '💥', tone: 'err', title: `Gagal di ${pm}`, text: `Penyebab: ${FAIL_REASON[ev.reason] || ev.reason} (${fmtMs(ev.ms)}). Sistem otomatis pindah ke kandidat berikutnya.`, data: tech ? { error: ev.error } : null, raw: ev.error };
     case 'success':
-      return { icon: '✅', tone: 'ok', title: `Jawaban dari ${pm}`, text: `Selesai dalam ${fmtMs(ev.ms)} · ${fmtNum(ev.chars)} karakter.` };
+      return { icon: '✅', tone: 'ok', title: `Jawaban dari ${pm}`, text: `Selesai dalam ${fmtMs(ev.ms)} · ${fmtNum(ev.chars)} karakter.`, raw: ev.preview };
     case 'usage':
       return {
         icon: '🪙', tone: 'info', title: 'Pemakaian token',

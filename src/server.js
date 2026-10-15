@@ -1316,7 +1316,7 @@ app.post('/api/chat/stream', rateLimiters.chat, asyncHandler(async (req, res) =>
     if (!clientDisconnected) {
       // Token usage is recorded per real model call by aiManager.onUsage (actual provider/model after failover).
       totalTokens = Math.round(fullContent.length * 1.3);
-      traceStep('deliver', { channel: 'web', chars: fullContent.length, ok: true });
+      traceStep('deliver', { channel: 'web', chars: fullContent.length, ok: true, preview: fullContent.slice(0, 160) });
 
       if (sessionId && fullContent) {
         saveMessagesToDb(sessionId, messages, fullContent, totalTokens, provider, model);
