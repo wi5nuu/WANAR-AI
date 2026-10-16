@@ -214,9 +214,18 @@ export function createAlarms({
     let fired = 0;
     try {
       const t = now();
+      const ALARM_STALE_MS = 60 * 60_000; // alarm yang lewat > 1 jam tidak dibunyikan lagi
+
       for (const a of q.active.all()) {
         if (a.status === 'armed') {
-          if (a.at > t) continue;
+          if (a.at > t) continue; // belum waktunya
+          // Alarm yang waktunya sudah lewat lebih dari 1 jam (service sebelumnya
+          // mati saat seharusnya berbunyi): jangan bunyikan, tandai expired saja.
+          if (t - a.at > ALARM_STALE_MS) {
+            q.expire.run(a.id);
+            onChange();
+            continue;
+          }
           if (!q.ring.run(a.id).changes) continue;
           a.status = 'ringing';
           onChange();
@@ -243,10 +252,24 @@ export function createAlarms({
     return fired;
   }
 
+  /** Membersihkan alarm lama yang waktunya sudah lewat terlalu lama (stale) saat service pertama kali menyala. */
+  function cleanupStale() {
+    const t = now();
+    let n = 0;
+    for (const a of q.active.all()) {
+      if (a.status === 'armed' && a.at <= t && t - a.at > ALARM_STALE_MS) {
+        n += q.expire.run(a.id).changes;
+      }
+    }
+    if (n) onChange();
+    return n;
+  }
+
   return {
-    add, list, recent, ringing, ack, cancel, cancelAll, snooze, tick, view, config: cfg,
+    add, list, recent, ringing, ack, cancel, cancelAll, snooze, tick, view, config: cfg, cleanupStale,
     start() {
       if (timer) return;
+      cleanupStale(); // bersihkan alarm stale segera saat nyala
       timer = setInterval(() => { tick().catch(() => {}); }, 5_000);
       timer.unref?.();
     },
