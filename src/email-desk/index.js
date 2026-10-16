@@ -91,12 +91,16 @@ export function createEmailDesk({ db, aiManager = null, automation = null, env =
     env,
     now,
     defaultChatId: () => ownerChats[0] || null,
-    notify: telegram
-      ? async (chatId, text) => {
-        if (telegram.mode !== 'live') throw new Error('Telegram belum dikonfigurasi (mode simulasi)');
-        await telegram.send({ to: chatId, text });
-      }
-      : null,
+    // Shared router: understands "wa:628..." (WhatsApp) and Telegram chat ids,
+    // so draft confirmations follow the channel they were created in.
+    notify: automation?.notify
+      ? (chatId, text) => automation.notify(chatId, text)
+      : telegram
+        ? async (chatId, text) => {
+          if (telegram.mode !== 'live') throw new Error('Telegram belum dikonfigurasi (mode simulasi)');
+          await telegram.send({ to: chatId, text });
+        }
+        : null,
   });
 
   const watcher = new ImapWatcher({

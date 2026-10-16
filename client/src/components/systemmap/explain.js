@@ -9,6 +9,7 @@
 export const CHANNEL_META = {
   web: { label: 'Chat Web', icon: '💬', color: '#38bdf8' },
   telegram: { label: 'Telegram', icon: '✈️', color: '#2aabee' },
+  whatsapp: { label: 'WhatsApp', icon: '💚', color: '#25d366' },
   email: { label: 'Email Desk', icon: '📧', color: '#f472b6' },
   companion: { label: 'Sapaan Peka', icon: '💛', color: '#facc15' },
   briefing: { label: 'Briefing Pagi', icon: '🌅', color: '#fb923c' },
@@ -143,7 +144,9 @@ export function explainStep(ev, { tech = false } = {}) {
     case 'fallback':
       return { icon: '🛟', tone: 'warn', title: 'Jalur cadangan', text: ev.detail || ev.name };
     case 'deliver': {
-      const where = ev.channel === 'telegram' ? 'Telegram' : ev.channel === 'web' ? 'layar chat web' : ev.channel;
+      const where = ev.channel === 'web'
+        ? 'layar chat web'
+        : (CHANNEL_META[ev.channel]?.label || ev.channel);
       if (ev.ok === false) return { icon: '📭', tone: 'err', title: `Gagal dikirim ke ${where}`, text: ev.note || ev.error || 'Pengiriman gagal.' };
       const what = ev.kind === 'check-in' ? 'Sapaan' : ev.kind === 'briefing' ? 'Briefing' : ev.kind === 'outgoing' ? 'Pesan inisiatif' : 'Jawaban';
       return { icon: '📤', tone: 'out', title: `${what} terkirim ke ${where}`, text: `${fmtNum(ev.chars)} karakter${ev.parts > 1 ? ` dalam ${ev.parts} bagian` : ''}${ev.fallback ? ' (pesan maaf otomatis)' : ''}.` };

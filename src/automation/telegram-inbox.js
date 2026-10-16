@@ -224,15 +224,23 @@ export class TelegramInbox extends EventEmitter {
 
     const chatId = String(msg.chat.id);
     const text = msg.text.trim();
+    const person = msg.chat.type === 'private'
+      ? [msg.from?.first_name, msg.from?.last_name].filter(Boolean).join(' ')
+      : msg.chat.title || '';
+    const username = msg.from?.username || msg.chat.username || null;
+    // Contact memory ("siapa yang chat tadi?"): one cheap upsert per message.
+    try {
+      this.store.people?.touch({
+        channel: 'telegram', address: chatId, name: person || null,
+        owner: this.isOwner(chatId), message: text.slice(0, 200),
+      });
+    } catch { /* contact memory is best-effort */ }
+
     const match = /^\/([a-z_]+)(?:@\w+)?(?:\s+(.+))?$/i.exec(text);
     if (!match) return this._maybeChat(msg, chatId, text);
 
     const command = match[1].toLowerCase();
     const arg = (match[2] || '').trim();
-    const person = msg.chat.type === 'private'
-      ? [msg.from?.first_name, msg.from?.last_name].filter(Boolean).join(' ')
-      : msg.chat.title || '';
-    const username = msg.from?.username || msg.chat.username || null;
     const key = suppressionKey('telegram', chatId);
 
     if (command === 'id') {

@@ -10,6 +10,8 @@
  *   email_campaigns     a batch of emails sharing one template
  *   email_outbox        one row per recipient — the durable send queue
  *   email_suppressions  addresses that must never be mailed (opt-out/bounce)
+ *   inbound_messages    provider message ids already handled (webhook dedup)
+ *   people              contact memory: everyone who ever messaged, per channel
  *
  * @author Wisnu Alfian Nur Ashar
  */
@@ -167,6 +169,27 @@ export function createStore(db) {
       reason TEXT NOT NULL DEFAULT 'manual',
       created_at INTEGER NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS inbound_messages (
+      channel TEXT NOT NULL,
+      message_id TEXT NOT NULL,
+      from_address TEXT,
+      created_at INTEGER NOT NULL,
+      PRIMARY KEY (channel, message_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS people (
+      channel TEXT NOT NULL,
+      address TEXT NOT NULL,
+      name TEXT,
+      is_owner INTEGER NOT NULL DEFAULT 0,
+      seen_count INTEGER NOT NULL DEFAULT 1,
+      last_message TEXT,
+      first_seen_at INTEGER NOT NULL,
+      last_seen_at INTEGER NOT NULL,
+      PRIMARY KEY (channel, address)
+    );
+    CREATE INDEX IF NOT EXISTS idx_people_seen ON people(last_seen_at DESC);
   `);
 
   // Additive migration: databases created before attachments existed.
@@ -494,7 +517,71 @@ export function createStore(db) {
     },
   };
 
-  return { jobs, runs, campaigns, outbox, suppressions, attachments, subscribers, _db: db };
+  // ------------------------------------------------------------ inbound dedup
+
+  const inbound = {
+    /**
+     * Claims a provider message id (WhatsApp is push-based and Meta retries
+     * webhooks). `true` = first time seen — process it; `false` = duplicate —
+     * do not react twice.
+     */
+    claim(channel, messageId, from = null) {
+      if (!messageId) return true;
+      const res = db.prepare(
+        'INSERT OR IGNORE INTO inbound_messages (channel, message_id, from_address, created_at) VALUES (?, ?, ?, ?)'
+      ).run(String(channel), String(messageId).slice(0, 200), from ? String(from).slice(0, 40) : null, now());
+      return res.changes > 0;
+    },
+    count: (channel) => db.prepare('SELECT COUNT(*) AS n FROM inbound_messages WHERE channel = ?').get(String(channel)).n,
+  };
+
+  // ------------------------------------------------------------- people
+  // Contact memory: everyone who ever messaged the owner's channels — the
+  // WhatsApp/Telegram counterpart of the email desk's contacts. One cheap
+  // upsert per inbound message; read by the owner's AI context so questions
+  // like "siapa yang chat tadi?" can be answered from real data. The owner's
+  // own addresses are flagged `is_owner` and hidden from the list.
+
+  const people = {
+    /** Records one inbound message. `message` = short preview of the last text. */
+    touch({ channel, address, name = null, owner = false, message = null }) {
+      const t = now();
+      db.prepare(`
+        INSERT INTO people (channel, address, name, is_owner, seen_count, last_message, first_seen_at, last_seen_at)
+        VALUES (?, ?, ?, ?, 1, ?, ?, ?)
+        ON CONFLICT(channel, address) DO UPDATE SET
+          name = COALESCE(excluded.name, people.name),
+          is_owner = MAX(people.is_owner, excluded.is_owner),
+          seen_count = people.seen_count + 1,
+          last_message = COALESCE(excluded.last_message, people.last_message),
+          last_seen_at = excluded.last_seen_at
+      `).run(
+        String(channel), String(address),
+        name ? String(name).slice(0, 120) : null,
+        owner ? 1 : 0,
+        message ? String(message).slice(0, 200) : null,
+        t, t
+      );
+      return people.get(channel, address);
+    },
+    get: (channel, address) =>
+      db.prepare('SELECT * FROM people WHERE channel = ? AND address = ?').get(String(channel), String(address)) || null,
+    /** Most recent contacts first; the owner's own numbers are excluded by default. */
+    list({ limit = 12, includeOwner = false } = {}) {
+      return db.prepare(
+        `SELECT * FROM people ${includeOwner ? '' : 'WHERE is_owner = 0'} ORDER BY last_seen_at DESC LIMIT ?`
+      ).all(limit);
+    },
+    count({ includeOwner = false } = {}) {
+      return db.prepare(
+        `SELECT COUNT(*) AS n FROM people ${includeOwner ? '' : 'WHERE is_owner = 0'}`
+      ).get().n;
+    },
+    remove: (channel, address) =>
+      db.prepare('DELETE FROM people WHERE channel = ? AND address = ?').run(String(channel), String(address)).changes > 0,
+  };
+
+  return { jobs, runs, campaigns, outbox, suppressions, attachments, subscribers, inbound, people, _db: db };
 }
 
 let defaultStore = null;

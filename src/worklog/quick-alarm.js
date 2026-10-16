@@ -16,9 +16,11 @@ const ASKS_ABOUT = /\b(alarm|alaram)\b.*\b(apa|berapa)\b/i;
 
 /**
  * @param {{alarms?: object}} worklog  the worklog service (has .alarms)
+ * @param {{chatId?: string|null, source?: string}} [opts]  where the request came
+ *   from; "wa:628..." routes the ringing notifications to WhatsApp.
  * @returns {string|null} reply, or null when the message is not about alarms
  */
-export function quickAlarm(worklog, text, now = Date.now(), env = process.env) {
+export function quickAlarm(worklog, text, now = Date.now(), env = process.env, opts = {}) {
   const al = worklog?.alarms;
   if (!al) return null;
   const t = String(text || '').trim();
@@ -50,7 +52,7 @@ export function quickAlarm(worklog, text, now = Date.now(), env = process.env) {
     if (!req) return `Alarm jam berapa, ${call}? Tulis misalnya "bunyikan alarm jam 4 subuh".`;
     let a;
     try {
-      a = al.add({ at: req.at, label: req.label, source: 'telegram' });
+      a = al.add({ at: req.at, label: req.label, source: opts.source || 'telegram', chatId: opts.chatId || null });
     } catch (e) {
       return `✗ ${e.message}`;
     }

@@ -222,10 +222,28 @@ Secara bawaan otomasi hanya bisa dibuka dari localhost. Untuk akses dari kompute
 | --- | --- | --- |
 | Email | SMTP | Lampiran, HTML, daftar suppress |
 | Telegram | Bot API resmi | Lampiran dokumen; pelanggan mendaftar lewat `/start`, berhenti lewat `/stop`; `@subscribers` = semua pelanggan |
-| WhatsApp | **Cloud API resmi (Meta)** | Template wajib untuk memulai percakapan; nomor Indonesia otomatis dinormalisasi (0812… → 62812…) |
+| WhatsApp | **Cloud API resmi (Meta)** | Template wajib untuk memulai percakapan; nomor Indonesia otomatis dinormalisasi (0812… → 62812…). **Dua arah**: pesan masuk lewat webhook `/webhook/whatsapp`, nomor pemilik di `WHATSAPP_AI_CHAT_IDS` dijawab AI dengan teks bebas (jendela 24 jam), pelanggan berhenti lewat STOP dan mendaftar lewat START |
 | Slack / Discord / Teams | Incoming webhook | Tujuan tetap dari `.env`; Discord tanpa @mention |
 | Webhook | POST JSON bertanda tangan HMAC | Untuk n8n, Zapier, Make, atau layanan sendiri |
 
 Satu job bisa menarget beberapa kanal sekaligus; satu kanal yang gagal tidak menghentikan yang lain. Kuota harian dihitung **per kanal**.
+
+**WhatsApp dua arah (pesan masuk).** Daftarkan `https://domain-anda/webhook/whatsapp` di dashboard Meta
+(WhatsApp → Configuration) dengan Verify token = `WHATSAPP_VERIFY_TOKEN`, isi `WHATSAPP_APP_SECRET`
+(App Secret), lalu subscribe field **messages**. Setelah itu: pemilik bisa mengobrol dengan AI langsung
+dari WhatsApp (pengingat, jurnal, email — sama seperti Telegram), pengingat/alarm yang dibuat dari
+WhatsApp dikirim kembali ke WhatsApp, dan balasan otomatis memakai teks bebas karena pemilik yang
+membuka jendela 24 jam. Setiap payload diverifikasi lewat `X-Hub-Signature-256` (tanpa App Secret
+yang benar, webhook menolak semuanya); retry Meta tidak pernah dijawab dua kali (dedup per message id).
+Job/kampanye ke pelanggan tetap mengikuti aturan Meta: opt-in (START) + template untuk memulai percakapan.
+
+**Memori kontak.** Setiap orang yang pernah mengirim pesan ke kanal Anda (WhatsApp/Telegram) dicatat
+otomatis di tabel `people`: nama profil, jumlah pesan, terakhir kapan, plus cuplikan pesan terakhir.
+AI pemilik bisa menjawab pertanyaan seperti "siapa yang chat tadi?" dari data itu; nomor/chat pemilik
+sendiri ditandai dan tidak ikut terdaftar. Tanpa env baru — semuanya lokal di database.
+
+**Pelajaran malam di semua kanal.** Hasil tidur malam (nightly learning 00.00) kini ikut disuntikkan
+ke prompt asisten Telegram **dan** WhatsApp, bukan hanya chat web — sebagai catatan internal yang
+tidak dibacakan ke Anda.
 
 **Sengaja tidak ada** integrasi WhatsApp tidak resmi (whatsapp-web/Baileys): itu melanggar ketentuan WhatsApp dan berisiko membuat nomor Anda diblokir permanen.

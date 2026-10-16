@@ -28,6 +28,7 @@ const MAX_TEXT = 6000;
 export const CHANNELS = {
   web: { label: 'Chat Web', icon: '💬' },
   telegram: { label: 'Telegram', icon: '✈️' },
+  whatsapp: { label: 'WhatsApp', icon: '💚' },
   email: { label: 'Email Desk', icon: '📧' },
   companion: { label: 'Sapaan Peka', icon: '💛' },
   briefing: { label: 'Briefing Pagi', icon: '🌅' },

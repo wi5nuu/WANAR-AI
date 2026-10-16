@@ -19,6 +19,7 @@ import { CampaignEngine } from './campaigns.js';
 import { createAttachmentService } from './attachments.js';
 import { createChannels } from './channels/index.js';
 import { TelegramInbox, makeChatResponder } from './telegram-inbox.js';
+import { WhatsAppInbox } from './whatsapp-inbox.js';
 import { AutomationScheduler } from './scheduler.js';
 
 export function createAutomation({
@@ -41,6 +42,14 @@ export function createAutomation({
     env,
     responder: aiManager ? makeChatResponder({ aiManager }) : null,
   });
+  // WhatsApp is push-based: the inbox has no polling loop, the server mounts its
+  // webhook (/webhook/whatsapp) and calls it. The responder is wired by the
+  // server (the owner assistant), not here.
+  const whatsappInbox = new WhatsAppInbox({
+    channel: channels.get('whatsapp'),
+    store,
+    env,
+  });
   const scheduler = new AutomationScheduler({
     store,
     engine,
@@ -58,9 +67,30 @@ export function createAutomation({
   inbox.on('subscribed', (e) => events.emit('event', { channel: 'subscriber', type: 'subscribed', ...e }));
   inbox.on('ai_reply', (e) => events.emit('event', { channel: 'subscriber', type: 'ai_reply', ...e }));
   inbox.on('unsubscribed', (e) => events.emit('event', { channel: 'subscriber', type: 'unsubscribed', ...e }));
+  whatsappInbox.on('subscribed', (e) => events.emit('event', { channel: 'subscriber', type: 'subscribed', ...e }));
+  whatsappInbox.on('ai_reply', (e) => events.emit('event', { channel: 'subscriber', type: 'ai_reply', ...e }));
+  whatsappInbox.on('unsubscribed', (e) => events.emit('event', { channel: 'subscriber', type: 'unsubscribed', ...e }));
+  whatsappInbox.on('delivery_status', (e) => events.emit('event', { channel: 'wa_status', ...e }));
   scheduler.on('review_needed', (e) => events.emit('event', { channel: 'review', ...e }));
 
-  return { store, mailer, engine, scheduler, events, attachments, channels, inbox };
+  /**
+   * Deliver one plain message to the right channel:
+   *   "wa:6281234567890" -> WhatsApp free-form   (24h window)
+   *   anything else      -> Telegram chat id
+   * Reminders/alarms created from a WhatsApp chat carry the "wa:" prefix, so
+   * the answer comes back where the request was made.
+   */
+  async function notify(address, text) {
+    const raw = String(address || '').trim();
+    const [id, to] = raw.toLowerCase().startsWith('wa:')
+      ? ['whatsapp', raw.slice(3).trim()]
+      : ['telegram', raw];
+    const channel = channels.get(id);
+    if (channel.mode !== 'live') throw new Error(`${channel.label} belum dikonfigurasi (mode simulasi)`);
+    await channel.send({ to, text, ...(id === 'whatsapp' ? { freeform: true } : {}) });
+  }
+
+  return { store, mailer, engine, scheduler, events, attachments, channels, inbox, whatsappInbox, notify };
 }
 
 export * from './store.js';

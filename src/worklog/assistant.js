@@ -277,7 +277,7 @@ export function fallbackPlan(text, now = Date.now()) {
  * Builds the responder used for the owner's plain Telegram messages.
  * Same signature as makeChatResponder, so it is a drop-in replacement.
  */
-export function makeAssistantResponder({ aiManager, worklog, emailDesk = null, briefing = null, companion = null, market = null, context = null, ownerName = process.env.OWNER_NAME || 'Wisnu Alfian Nur Ashar' }) {
+export function makeAssistantResponder({ aiManager, worklog, emailDesk = null, briefing = null, companion = null, market = null, learning = null, context = null, ownerName = process.env.OWNER_NAME || 'Wisnu Alfian Nur Ashar' }) {
   const first = String(ownerName).split(/\s+/)[0];
   // The assistant is the owner's subordinate: it addresses him respectfully by name.
   const call = String(process.env.OWNER_CALL || '').trim() || `Mas ${first}`;
@@ -290,7 +290,12 @@ export function makeAssistantResponder({ aiManager, worklog, emailDesk = null, b
       if (said) { traceStep('intent', { name: 'peka-control', detail: 'Mengatur sapaan peka (jeda/lanjut) — dijawab kode, tanpa AI', model: false }); return said; }
     }
     // Alarms: arming, acknowledging and cancelling are handled by code, instantly.
-    const alarmReply = quickAlarm(worklog, text, typeof worklog.now === 'function' ? worklog.now() : Date.now());
+    // A request that came from WhatsApp ("wa:...") rings back on WhatsApp.
+    const waTarget = String(chatId || '').startsWith('wa:') ? chatId : null;
+    const alarmReply = quickAlarm(
+      worklog, text, typeof worklog.now === 'function' ? worklog.now() : Date.now(),
+      process.env, waTarget ? { chatId: waTarget, source: 'whatsapp' } : {}
+    );
     if (alarmReply) { traceStep('intent', { name: 'alarm', detail: 'Mengatur/mematikan alarm — dijalankan kode, tanpa AI', model: false }); return alarmReply; }
     // Markets: prices, watchlist, price alerts, scenario maths. Information only, never advice.
     if (market) {
@@ -321,6 +326,10 @@ export function makeAssistantResponder({ aiManager, worklog, emailDesk = null, b
     const reminders = worklog.listReminders(15);
     let extra = '';
     try { extra = typeof context === 'function' ? String((await context({ text, chatId })) || '') : ''; } catch { extra = ''; }
+    // Lessons from the nightly self-learning run — the same block the web chat
+    // already uses, so Telegram and WhatsApp replies improve too.
+    let lessons = '';
+    try { lessons = String(learning?.promptBlock?.() || '').trim(); } catch { lessons = ''; }
 
     const system = [
       `Kamu adalah Wanar AI, asisten pribadi ${ownerName}. Dia adalah ATASANMU sekaligus PEMILIKMU, dan orang di chat ini adalah dia sendiri (terverifikasi). Kamu bawahan yang setia: sopan, ramah, tulus, tegas, dan cerdas.`,
@@ -371,6 +380,7 @@ export function makeAssistantResponder({ aiManager, worklog, emailDesk = null, b
         ? '- Kamu TIDAK bisa mengirim pesan chat ke orang lain, membuka file, atau browsing dari sini (email bisa, lihat bagian EMAIL).'
         : '- Kamu TIDAK bisa mengirim email/pesan ke orang lain, membuka file, atau browsing dari sini.',
       ...(emailDesk ? emailPromptLines(emailDesk) : []),
+      lessons ? `PELAJARAN DARI PENGALAMAN SEBELUMNYA (catatan internalmu — pakai agar makin tepat, JANGAN dibacakan atau disebut ke ${first}):\n${lessons}` : '',
       '',
       'Balas HANYA satu objek JSON: {"reply":"jawaban singkat untuk ' + first + '","actions":[...]}',
       'Di "reply" JANGAN mengulang detail aksi (sistem akan menambahkan konfirmasi otomatis); cukup tanggapan singkat.',

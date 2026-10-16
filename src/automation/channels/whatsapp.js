@@ -23,6 +23,14 @@
  *   - text mode: free-form text (+ documents), but Meta only delivers it inside
  *     the 24h customer-service window opened by the customer's own message.
  *
+ * Inbox replies (whatsapp-inbox.js) pass `freeform: true`: the owner just
+ * messaged us, so the 24h window is open and the text mode always applies —
+ * even when a template is configured for campaigns.
+ *
+ * Inbound configuration (used by the webhook + inbox, surfaced in describe()):
+ *   WHATSAPP_VERIFY_TOKEN  must match the Meta dashboard "Verify token"
+ *   WHATSAPP_APP_SECRET    Meta App Secret — verifies X-Hub-Signature-256
+ *
  * @author Wisnu Alfian Nur Ashar
  */
 
@@ -89,6 +97,9 @@ export function createWhatsAppChannel(env = process.env, { fetchImpl = globalThi
   const templateLang = (env.WHATSAPP_TEMPLATE_LANG || 'id').trim();
   const configured = Boolean(token && /^\d{5,}$/.test(phoneId));
   const forceDry = boolEnv(env, 'WHATSAPP_DRY_RUN');
+  const verifyToken = (env.WHATSAPP_VERIFY_TOKEN || '').trim();
+  const appSecret = (env.WHATSAPP_APP_SECRET || '').trim();
+  const kirimSecret = (env.KIRIMDEV_WEBHOOK_SECRET || '').trim();
 
   const limits = {
     dailyCap: intEnv(env, 'WHATSAPP_DAILY_CAP', 250, { min: 1 }),
@@ -153,8 +164,14 @@ export function createWhatsAppChannel(env = process.env, { fetchImpl = globalThi
         forceDryRun: forceDry, limits, capabilities: adapter.capabilities, recipientKind: 'phone',
         hasSecret: Boolean(token),
         sendMode: templateName ? `template: ${templateName} (${templateLang})` : 'teks bebas (hanya dalam 24 jam setelah pelanggan membalas)',
+        // Inbound side: what the webhook (/webhook/whatsapp) needs to be alive.
+        inbound: {
+          // Meta direct needs the verify token + app secret; Kirimdev only its signing secret.
+          ready: Boolean(configured && ((verifyToken && appSecret) || kirimSecret)),
+          missing: kirimSecret ? [] : missingList([['WHATSAPP_VERIFY_TOKEN', Boolean(verifyToken)], ['WHATSAPP_APP_SECRET', Boolean(appSecret)]]),
+        },
         missing: missingList([['WHATSAPP_TOKEN', Boolean(token)], ['WHATSAPP_PHONE_NUMBER_ID', /^\d{5,}$/.test(phoneId)]]),
-        hint: 'Memakai WhatsApp Business Cloud API resmi (Meta). Untuk mengirim ke pelanggan baru wajib template yang disetujui dan persetujuan (opt-in) pelanggan.',
+        hint: 'Memakai WhatsApp Business Cloud API resmi (Meta). Untuk mengirim ke pelanggan baru wajib template yang disetujui dan persetujuan (opt-in) pelanggan. Untuk pesan MASUK, daftarkan https://domain-anda/webhook/whatsapp di dashboard Meta (isi WHATSAPP_VERIFY_TOKEN & WHATSAPP_APP_SECRET).',
       };
     },
 
@@ -173,7 +190,14 @@ export function createWhatsAppChannel(env = process.env, { fetchImpl = globalThi
       }
     },
 
-    async send({ to, subject, text, attachments, mode }) {
+    /**
+     * @param {{to:string, subject?:string, text?:string, attachments?:Array,
+     *          mode?:string, freeform?:boolean}} msg
+     *   freeform: force free-form text mode even when a template is configured
+     *   (only valid inside the 24h window — used by the inbox to answer the
+     *   owner, who opened the window by messaging first).
+     */
+    async send({ to, subject, text, attachments, mode, freeform = false }) {
       const phone = normalizePhone(to);
       if (!phone) throw new MailError(`Nomor WhatsApp tidak valid: ${String(to).slice(0, 40)}`, ErrorKind.INVALID);
       const subj = String(subject || '').replace(/\s+/g, ' ').trim().slice(0, 150);
@@ -182,11 +206,11 @@ export function createWhatsAppChannel(env = process.env, { fetchImpl = globalThi
 
       const useMode = mode || adapter.mode;
       const hasFiles = Boolean(attachments && attachments.length);
-      if (templateName && hasFiles) {
+      if (templateName && !freeform && hasFiles) {
         throw new MailError('Lampiran tidak didukung pada mode template WhatsApp.', ErrorKind.INVALID);
       }
 
-      if (templateName) {
+      if (templateName && !freeform) {
         const param = sanitizeTemplateParam(subj ? `${subj} - ${body}` : body);
         if (useMode !== 'live') return { messageId: dryId('wa'), accepted: [phone], dryRun: true, mode: 'template' };
         const res = await post('messages', {
@@ -222,6 +246,17 @@ export function createWhatsAppChannel(env = process.env, { fetchImpl = globalThi
         });
       }
       return { messageId: firstId, accepted: [phone], dryRun: false, mode: 'text', parts: parts.length };
+    },
+
+    /** Marks an inbound message as read (best effort). Also clears the phone's unread badge. */
+    async markRead(messageId) {
+      if (!messageId || adapter.mode !== 'live') return { ok: false };
+      try {
+        await post('messages', { messaging_product: 'whatsapp', status: 'read', message_id: String(messageId) });
+        return { ok: true };
+      } catch {
+        return { ok: false };
+      }
     },
 
     close() { mediaCache.clear(); },

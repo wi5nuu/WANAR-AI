@@ -33,12 +33,16 @@ export function createWorklog({ db, aiManager = null, automation = null, env = p
     fetchImpl,
     execFileImpl,
     defaultChatId: () => ownerChats[0] || null,
-    notify: telegram
-      ? async (chatId, text) => {
-        if (telegram.mode !== 'live') throw new Error('Telegram belum dikonfigurasi (mode simulasi)');
-        await telegram.send({ to: chatId, text });
-      }
-      : null,
+    // Prefer the shared router: it understands "wa:628..." (WhatsApp) as well as
+    // Telegram chat ids, so reminders follow the channel they were created in.
+    notify: automation?.notify
+      ? (chatId, text) => automation.notify(chatId, text)
+      : telegram
+        ? async (chatId, text) => {
+          if (telegram.mode !== 'live') throw new Error('Telegram belum dikonfigurasi (mode simulasi)');
+          await telegram.send({ to: chatId, text });
+        }
+        : null,
   });
 
   // Alarms ("bangunkan saya jam 4 subuh"): ring repeatedly until the owner answers.

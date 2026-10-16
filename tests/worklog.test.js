@@ -942,6 +942,23 @@ describe('Telegram assistant: plain language -> validated actions', async () => 
     expect(w.svc.listReminders()).toHaveLength(0);
   });
 
+  it('pelajaran malam (nightly learning) ikut masuk ke prompt sebagai catatan internal', async () => {
+    const w = build({ start: T('09:00') });
+    let captured = '';
+    const ai = { async *chatStream(_m, o) { captured = o.systemPrompt; yield { type: 'content', content: '{"reply":"Baik.","actions":[]}' }; yield { type: 'done' }; } };
+    const learning = { promptBlock: () => 'Pelajaran dari interaksi sebelumnya:\n- Sering lupa istirahat — ingatkan halus.' };
+    const reply = await makeAssistantResponder({ aiManager: ai, worklog: w.svc, learning })({ text: 'halo', chatId: '1' });
+    expect(captured).toContain('Pelajaran dari interaksi sebelumnya');
+    expect(captured).toContain('JANGAN dibacakan');
+    expect(typeof reply).toBe('string');
+
+    // Tanpa learning (atau blok kosong) prompt tetap bersih.
+    let clean = '';
+    const ai2 = { async *chatStream(_m, o) { clean = o.systemPrompt; yield { type: 'content', content: '{"reply":"Halo.","actions":[]}' }; yield { type: 'done' }; } };
+    await makeAssistantResponder({ aiManager: ai2, worklog: w.svc, learning: { promptBlock: () => '' } })({ text: 'halo', chatId: '1' });
+    expect(clean).not.toContain('PELAJARAN');
+  });
+
   it('/pengingat and /batal manage reminders from Telegram', async () => {
     const w = build({ start: T('09:00') });
     w.svc.addReminder({ at: `${D} 12:00`, text: 'Meeting Pak Andi' });

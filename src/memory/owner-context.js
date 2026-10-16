@@ -6,7 +6,7 @@
  * on any surface (today: the Telegram bot) can answer accurately about it.
  *
  *   Always:   work journal (today + 7 days), automation (jobs, recent runs,
- *             campaigns, channels), recent chat topics
+ *             campaigns, channels), recent contacts, recent chat topics
  *   On demand: chat messages matching the question's keywords (so "kemarin
  *             saya tanya apa soal docker?" finds the actual exchange)
  *
@@ -133,6 +133,33 @@ export function createOwnerContext({ db, automation = null, worklog = null }) {
     }
   }
 
+  function peopleSection() {
+    const store = automation?.store;
+    if (!store?.people) return '';
+    try {
+      const rows = store.people.list({ limit: 8 });
+      if (!rows.length) return '';
+      const total = store.people.count();
+      const label = { whatsapp: 'WA', telegram: 'Telegram' };
+      const when = (ms) => (Number.isFinite(Number(ms))
+        ? new Date(Number(ms)).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
+        : '');
+      const lines = rows.map((r) => {
+        const who = clip(r.name || 'tanpa nama', 40);
+        const tail = `…${String(r.address || '').slice(-4)}`;
+        const preview = r.last_message ? ` — pesan terakhir: "${clip(redact(r.last_message), 120)}"` : '';
+        return `- ${who} (${label[r.channel] || r.channel} ${tail}, ${r.seen_count} pesan, terakhir ${when(r.last_seen_at)})${preview}`;
+      });
+      return [
+        'KONTAK — ORANG LAIN YANG PERNAH MENGHUBUNGI (jawab pertanyaan seperti "siapa yang chat tadi" dari daftar ini; ini bukan pemilik):',
+        ...lines,
+        total > rows.length ? `(${total - rows.length} kontak lain tidak ditampilkan.)` : '',
+      ].filter(Boolean).join('\n');
+    } catch {
+      return '';
+    }
+  }
+
   function recentChatsSection() {
     try {
       const rows = db.prepare(`
@@ -203,6 +230,7 @@ export function createOwnerContext({ db, automation = null, worklog = null }) {
       'DATA SISTEM WANAR AI MILIK PENGGUNA (gunakan untuk menjawab; jangan mengarang di luar data ini):',
       journalSection(),
       automationSection(),
+      peopleSection(),
       relevantChatsSection(text, excludeSessionId),
       recentChatsSection(),
     ].filter(Boolean);
@@ -212,20 +240,21 @@ export function createOwnerContext({ db, automation = null, worklog = null }) {
   };
 }
 
-// ------------------------------------------------- Telegram -> chat history
+// --------------------------------------- chat channels -> chat history
 
 /**
- * Persists Telegram AI conversations as regular chat sessions (one per chat per
- * day), so they show up in the web sidebar and in the shared memory above.
+ * Persists AI conversations from a messaging channel as regular chat sessions
+ * (one per chat per day), so they show up in the web sidebar and in the shared
+ * memory above.
  */
-export function createTelegramTranscript({ db, tz = 'Asia/Jakarta' }) {
+function createChannelTranscript({ db, tz = 'Asia/Jakarta', prefix, label, provider, model }) {
   const ensure = db.prepare('INSERT OR IGNORE INTO chat_sessions (id, title, provider, model) VALUES (?, ?, ?, ?)');
   const add = db.prepare('INSERT INTO chat_messages (session_id, role, content, tokens, provider, model) VALUES (?, ?, ?, 0, ?, ?)');
   const touch = db.prepare("UPDATE chat_sessions SET updated_at = datetime('now') WHERE id = ?");
 
   const sessionId = (chatId, at = Date.now()) => {
     const date = new Date(at).toLocaleDateString('en-CA', { timeZone: tz });
-    return `tg-${String(chatId).replace(/[^0-9-]/g, '')}-${date}`;
+    return `${prefix}-${String(chatId).replace(/[^0-9-]/g, '')}-${date}`;
   };
 
   const recent = db.prepare('SELECT role, content FROM chat_messages WHERE session_id = ? ORDER BY id DESC LIMIT ?');
@@ -239,24 +268,34 @@ export function createTelegramTranscript({ db, tz = 'Asia/Jakarta' }) {
     /** Assistant-initiated message (no user turn before it). */
     recordOutgoing({ chatId, assistant, at = Date.now() }) {
       const id = sessionId(chatId, at);
-      const label = new Date(at).toLocaleDateString('id-ID', { timeZone: tz, day: 'numeric', month: 'short' });
+      const when = new Date(at).toLocaleDateString('id-ID', { timeZone: tz, day: 'numeric', month: 'short' });
       db.transaction(() => {
-        ensure.run(id, `Telegram · ${label}`, 'telegram', 'telegram-bot');
-        add.run(id, 'assistant', String(assistant).slice(0, 8000), 'telegram', 'telegram-bot');
+        ensure.run(id, `${label} · ${when}`, provider, model);
+        add.run(id, 'assistant', String(assistant).slice(0, 8000), provider, model);
         touch.run(id);
       })();
       return id;
     },
     record({ chatId, user, assistant, at = Date.now() }) {
       const id = sessionId(chatId, at);
-      const label = new Date(at).toLocaleDateString('id-ID', { timeZone: tz, day: 'numeric', month: 'short' });
+      const when = new Date(at).toLocaleDateString('id-ID', { timeZone: tz, day: 'numeric', month: 'short' });
       db.transaction(() => {
-        ensure.run(id, `Telegram · ${label}`, 'telegram', 'telegram-bot');
-        add.run(id, 'user', String(user).slice(0, 8000), 'telegram', 'telegram-bot');
-        add.run(id, 'assistant', String(assistant).slice(0, 8000), 'telegram', 'telegram-bot');
+        ensure.run(id, `${label} · ${when}`, provider, model);
+        add.run(id, 'user', String(user).slice(0, 8000), provider, model);
+        add.run(id, 'assistant', String(assistant).slice(0, 8000), provider, model);
         touch.run(id);
       })();
       return id;
     },
   };
+}
+
+/** Telegram AI conversations ("tg-<chat>-<date>"). */
+export function createTelegramTranscript({ db, tz = 'Asia/Jakarta' }) {
+  return createChannelTranscript({ db, tz, prefix: 'tg', label: 'Telegram', provider: 'telegram', model: 'telegram-bot' });
+}
+
+/** WhatsApp AI conversations ("wa-<phone>-<date>"). */
+export function createWhatsAppTranscript({ db, tz = 'Asia/Jakarta' }) {
+  return createChannelTranscript({ db, tz, prefix: 'wa', label: 'WhatsApp', provider: 'whatsapp', model: 'whatsapp-bot' });
 }

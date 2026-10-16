@@ -660,6 +660,14 @@ describe('Telegram inbox (opt-in / opt-out)', () => {
     expect(replies[0].html).toContain('Budi Santoso');
   });
 
+  it('merekam setiap pengirim ke memori kontak (people)', async () => {
+    const { a, inbox } = setup();
+    await inbox.handleUpdate(msg(55555, 'halo, ada?'));
+    const p = a.store.people.get('telegram', '55555');
+    expect(p).toMatchObject({ name: 'Budi Santoso', seen_count: 1, is_owner: 0 });
+    expect(p.last_message).toBe('halo, ada?');
+  });
+
   it('/stop unsubscribes AND suppresses permanently', async () => {
     const { a, inbox } = setup();
     await inbox.handleUpdate(msg(55555, '/start'));

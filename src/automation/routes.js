@@ -179,6 +179,7 @@ export function createAutomationRouter({ automation, rateLimiters = {}, actorOf 
         ? automation.channels.describeAll().map((c) => ({ ...c, sentToday: channelUsage[c.id] || 0 }))
         : [],
       telegramInbox: automation.inbox ? automation.inbox.status() : null,
+      whatsappInbox: automation.whatsappInbox ? automation.whatsappInbox.status() : null,
       usage: { sentToday, dailyCap: mail.dailyCap, remaining: Math.max(0, mail.dailyCap - sentToday) },
       counts: {
         jobsActive: jobs.filter((j) => j.status === 'active').length,
@@ -394,6 +395,7 @@ export function createAutomationRouter({ automation, rateLimiters = {}, actorOf 
         subscribers: c.id === 'telegram' ? store.subscribers.counts('telegram') : undefined,
       })),
       telegramInbox: automation.inbox ? automation.inbox.status() : null,
+      whatsappInbox: automation.whatsappInbox ? automation.whatsappInbox.status() : null,
     });
   }));
 

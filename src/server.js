@@ -62,8 +62,9 @@ import { createNightlyLearning } from './command-center/nightly-learning.js';
 import { createCompanion } from './companion.js';
 import { createMarket } from './market/service.js';
 import { createCommandCenterRouter } from './command-center/routes.js';
-import { createOwnerContext, createTelegramTranscript } from './memory/owner-context.js';
+import { createOwnerContext, createTelegramTranscript, createWhatsAppTranscript } from './memory/owner-context.js';
 import { makeAssistantResponder } from './worklog/assistant.js';
+import { createWhatsAppWebhookRouter } from './automation/whatsapp-webhook.js';
 import { traceHub, traceStep } from './observability/trace-hub.js';
 import { installHeaderCapture } from './observability/quota.js';
 import { createSystemMapRouter } from './observability/routes.js';
@@ -182,11 +183,30 @@ automation.inbox.responder = makeAssistantResponder({
   briefing,
   companion,
   market,
+  learning,
   context: ({ text, chatId }) => ownerContext({ text, excludeSessionId: chatId ? telegramTranscript.sessionId(chatId) : null }),
 });
 automation.inbox.onExchange = (e) => telegramTranscript.record(e);
 automation.inbox.onOutgoing = (e) => telegramTranscript.recordOutgoing(e);
 automation.inbox.loadHistory = (chatId) => telegramTranscript.history(chatId);
+
+// WhatsApp: same owner assistant, its own transcript. Replies are free-form
+// text (the owner's own message opened Meta's 24h window), and the "wa:" chat
+// prefix routes reminders/alarms created here back to WhatsApp.
+const whatsappTranscript = createWhatsAppTranscript({ db: sqliteDb });
+automation.whatsappInbox.responder = makeAssistantResponder({
+  aiManager,
+  worklog: worklog.service,
+  emailDesk: emailDesk.desk,
+  briefing,
+  companion,
+  market,
+  learning,
+  context: ({ text, chatId }) => ownerContext({ text, excludeSessionId: chatId ? whatsappTranscript.sessionId(chatId) : null }),
+});
+automation.whatsappInbox.onExchange = (e) => whatsappTranscript.record(e);
+automation.whatsappInbox.onOutgoing = (e) => whatsappTranscript.recordOutgoing(e);
+automation.whatsappInbox.loadHistory = (phone) => whatsappTranscript.history(phone);
 
 // ==================== MULTER FILE UPLOAD CONFIG ====================
 const ALLOWED_MIMETYPES = new Set([
@@ -688,6 +708,12 @@ app.use(cors({
   credentials: true,
   maxAge: 86400,
 }));
+
+// WhatsApp webhook (Meta pushes inbound messages here). Mounted BEFORE the
+// app-wide JSON parser: X-Hub-Signature-256 signs the exact request bytes, so
+// this route reads the raw body itself (see automation/whatsapp-webhook.js).
+// Public by design — the signature is the authentication.
+app.use('/webhook/whatsapp', createWhatsAppWebhookRouter({ inbox: automation.whatsappInbox }));
 
 app.use(express.json({ limit: '15mb' }));
 
@@ -2906,6 +2932,7 @@ async function startServer() {
     } else {
       automation.scheduler.start();
       if (automation.inbox.start()) console.log('Telegram   : inbox aktif (pelanggan mendaftar lewat /start)');
+      if (automation.whatsappInbox?.enabled) console.log('WhatsApp   : webhook aktif di /webhook/whatsapp (balasan AI untuk WHATSAPP_AI_CHAT_IDS)');
       worklog.service.start();
       console.log('Worklog    : jurnal kerja aktif (laporan Telegram terjadwal)');
       emailDesk.desk.start(); // follow-up checks
