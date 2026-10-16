@@ -26,6 +26,7 @@ import { parseAmount, parseQuick } from './parse.js';
 import { EMAIL_ACTION_TYPES, emailPromptLines, quickContact, quickEmailReply, quickDelegate, quickPolicy, runEmailActions, emailFallback } from '../email-desk/assistant-actions.js';
 import { traceStep } from '../observability/trace-hub.js';
 import { quickAlarm } from './quick-alarm.js';
+import { quickMarket } from '../market/quick.js';
 
 const MAX_ACTIONS = 8;
 const ACTION_TYPES = ['reminder', 'cancel_reminder', 'task', 'finance', 'clock', 'schedule', 'report', ...EMAIL_ACTION_TYPES];
@@ -276,7 +277,7 @@ export function fallbackPlan(text, now = Date.now()) {
  * Builds the responder used for the owner's plain Telegram messages.
  * Same signature as makeChatResponder, so it is a drop-in replacement.
  */
-export function makeAssistantResponder({ aiManager, worklog, emailDesk = null, briefing = null, companion = null, context = null, ownerName = process.env.OWNER_NAME || 'Wisnu Alfian Nur Ashar' }) {
+export function makeAssistantResponder({ aiManager, worklog, emailDesk = null, briefing = null, companion = null, market = null, context = null, ownerName = process.env.OWNER_NAME || 'Wisnu Alfian Nur Ashar' }) {
   const first = String(ownerName).split(/\s+/)[0];
   // The assistant is the owner's subordinate: it addresses him respectfully by name.
   const call = String(process.env.OWNER_CALL || '').trim() || `Mas ${first}`;
@@ -291,6 +292,12 @@ export function makeAssistantResponder({ aiManager, worklog, emailDesk = null, b
     // Alarms: arming, acknowledging and cancelling are handled by code, instantly.
     const alarmReply = quickAlarm(worklog, text, typeof worklog.now === 'function' ? worklog.now() : Date.now());
     if (alarmReply) { traceStep('intent', { name: 'alarm', detail: 'Mengatur/mematikan alarm — dijalankan kode, tanpa AI', model: false }); return alarmReply; }
+    // Markets: prices, watchlist, price alerts, scenario maths. Information only, never advice.
+    if (market) {
+      let marketReply = null;
+      try { marketReply = await quickMarket(market, text); } catch { marketReply = null; }
+      if (marketReply) { traceStep('intent', { name: 'market', detail: 'Info pasar/alarm harga/simulasi — dijalankan kode dari data nyata, tanpa AI', model: false }); return marketReply; }
+    }
     // "agenda hari ini" / "briefing": answered from data, instantly and for free.
     if (briefing && BRIEFING_ASK.test(String(text || '').trim())) {
       traceStep('intent', { name: 'briefing', detail: 'Agenda/briefing disusun dari data jurnal, pengingat & email — tanpa AI, 0 token', model: false });

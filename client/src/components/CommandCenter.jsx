@@ -10,6 +10,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { openStream, getAutomationToken } from '../lib/stream.js';
 import { sfx } from './systemmap/sfx.js';
+import MarketCard from './MarketCard.jsx';
 import DashboardLayout from './DashboardLayout';
 import CommandIntel from './CommandIntel';
 import './automation.css';
@@ -243,6 +244,7 @@ export default function CommandCenter() {
 
             <div className="cc-masonry">
             <AlarmCard alarms={work.alarms} busy={busy} act={act} />
+            <MarketCard api={api} notify={notify} />
 
             {email && (
               <div className="au-card cc-gap cc-policy">

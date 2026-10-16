@@ -19,7 +19,7 @@ import { localDate, atTime, addDays } from '../worklog/time.js';
 
 const STARTED = Date.now();
 
-export function createCommandCenterRouter({ worklog, emailDesk = null, automation = null, briefing = null, intel = null, learning = null, env = process.env, rateLimiters = {} }) {
+export function createCommandCenterRouter({ worklog, emailDesk = null, automation = null, briefing = null, intel = null, learning = null, market = null, env = process.env, rateLimiters = {} }) {
   const svc = worklog.service;
   const desk = emailDesk?.desk || null;
   const watcher = emailDesk?.watcher || null;
@@ -157,6 +157,49 @@ export function createCommandCenterRouter({ worklog, emailDesk = null, automatio
   }));
 
   // --------------------------------------------------------------- realtime
+
+  // ---- Pasar & investasi: live quotes, watchlist, price alerts, neutral digest, scenario calculator
+  const needMarket = () => {
+    if (!market) throw Object.assign(new Error('Modul pasar belum aktif'), { expose: true });
+    return market;
+  };
+  const marketErr = (fn) => async (req) => {
+    try { return await fn(req); } catch (e) { throw Object.assign(e, { expose: true }); }
+  };
+  router.get('/market', wrap(marketErr(async (req) => {
+    const m = needMarket();
+    const d = await m.quotes({ force: req.query.force === '1' });
+    return { quotes: d.quotes, errors: d.errors || [], stale: Boolean(d.stale), at: d.at, watchlist: m.watchlist(), alerts: m.alerts(), disclaimer: d.disclaimer };
+  })));
+  router.post('/market/watch', wrap(marketErr(async (req) => {
+    const m = needMarket();
+    const symbol = m.addWatch(req.body?.symbol);
+    return { symbol, watchlist: m.watchlist() };
+  })));
+  router.delete('/market/watch/:symbol', wrap(marketErr(async (req) => {
+    const m = needMarket();
+    return { removed: m.removeWatch(req.params.symbol), watchlist: m.watchlist() };
+  })));
+  router.post('/market/alerts', wrap(marketErr(async (req) => {
+    const m = needMarket();
+    return { alert: m.addAlert({ symbol: req.body?.symbol, op: req.body?.op, value: req.body?.value, note: req.body?.note || null }), alerts: m.alerts() };
+  })));
+  router.delete('/market/alerts/:id', wrap(marketErr(async (req) => {
+    const m = needMarket();
+    return { removed: m.removeAlert(req.params.id), alerts: m.alerts() };
+  })));
+  router.post('/market/digest', wrap(marketErr(async () => {
+    const d = await needMarket().digest();
+    return { text: d.text, ai: d.ai, at: d.at, disclaimer: d.disclaimer };
+  })));
+  router.post('/market/scenario', wrap(marketErr(async (req) => {
+    const b = req.body || {};
+    const num = (v) => (v === '' || v == null ? null : Number(v));
+    return needMarket().scenario({
+      principal: num(b.principal) || 0, monthly: num(b.monthly) || 0, months: num(b.months) || 12,
+      annualPct: num(b.annualPct), target: num(b.target), inflationPct: num(b.inflationPct) || 0,
+    });
+  })));
 
   // Live market / economy / tech intel (cached server-side; safe to poll)
   router.get('/intel', wrap(async (req) => {

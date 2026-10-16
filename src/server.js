@@ -59,6 +59,7 @@ import { createBriefing } from './briefing.js';
 import { createIntelService } from './command-center/intel.js';
 import { createNightlyLearning } from './command-center/nightly-learning.js';
 import { createCompanion } from './companion.js';
+import { createMarket } from './market/service.js';
 import { createCommandCenterRouter } from './command-center/routes.js';
 import { createOwnerContext, createTelegramTranscript } from './memory/owner-context.js';
 import { makeAssistantResponder } from './worklog/assistant.js';
@@ -154,12 +155,26 @@ const ownerContext = createOwnerContext({ db: sqliteDb, automation, worklog });
 const telegramTranscript = createTelegramTranscript({ db: sqliteDb });
 // The owner's plain messages go to an assistant that can also ACT (reminders,
 // journal, schedule) through a validated whitelist — one model call per message.
+// Market desk: live quotes, watchlist, price alerts to Telegram, neutral digest, scenario maths.
+const market = createMarket({
+  db: sqliteDb,
+  aiManager,
+  chatId: () => String(process.env.TELEGRAM_AI_CHAT_IDS || '').split(',')[0]?.trim() || null,
+  notify: automation.channels.has('telegram')
+    ? async (chatId, text) => {
+      const tg = automation.channels.get('telegram');
+      if (tg.mode !== 'live') throw new Error('Telegram belum dikonfigurasi');
+      await tg.send({ to: chatId, text });
+    }
+    : null,
+});
 automation.inbox.responder = makeAssistantResponder({
   aiManager,
   worklog: worklog.service,
   emailDesk: emailDesk.desk,
   briefing,
   companion,
+  market,
   context: ({ text, chatId }) => ownerContext({ text, excludeSessionId: chatId ? telegramTranscript.sessionId(chatId) : null }),
 });
 automation.inbox.onExchange = (e) => telegramTranscript.record(e);
@@ -1058,7 +1073,7 @@ app.use('/api/automation', createAutomationRouter({
 // ==================== WORK JOURNAL ====================
 app.use('/api/worklog', createWorklogRouter({ worklog, rateLimiters }));
 app.use('/api/email-desk', createEmailDeskRouter({ emailDesk, rateLimiters }));
-app.use('/api/command-center', createCommandCenterRouter({ worklog, emailDesk, automation, briefing, intel, learning, rateLimiters }));
+app.use('/api/command-center', createCommandCenterRouter({ worklog, emailDesk, automation, briefing, intel, learning, market, rateLimiters }));
 app.use('/api/system-map', createSystemMapRouter({ aiManager, db, config, automation, emailDesk, companion, briefing, envFile: path.join(process.cwd(), '.env'), tools: () => getToolDefinitions(), rateLimiters }));
 
 app.get('/api/sessions/:id/messages', (req, res) => {
@@ -2887,6 +2902,7 @@ async function startServer() {
       worklog.service.start();
       console.log('Worklog    : jurnal kerja aktif (laporan Telegram terjadwal)');
       emailDesk.desk.start(); // follow-up checks
+      if (market.start()) console.log('Pasar      : alarm harga aktif (cek tiap menit)');
       if (companion.start()) console.log('Peka       : sapaan peduli aktif (maks ' + companion.config.maxPerDay + '/hari, /peka untuk mengatur)');
       if (learning.start()) console.log('Belajar    : pembelajaran otomatis tiap 00:00 (pelajaran disuntik ke prompt)');
       if (briefing.start()) console.log('Briefing   : briefing pagi otomatis di hari kerja (/brief kapan saja)');
@@ -2900,7 +2916,7 @@ async function startServer() {
   }
   for (const sig of ['SIGINT', 'SIGTERM']) {
     process.once(sig, () => {
-      try { automation.scheduler.stop(); automation.inbox.stop(); worklog.service.stop(); emailDesk.watcher.stop(); emailDesk.desk.stop(); briefing.stop(); learning.stop(); companion.stop(); automation.channels.closeAll(); } catch { /* ignore */ }
+      try { automation.scheduler.stop(); automation.inbox.stop(); worklog.service.stop(); emailDesk.watcher.stop(); emailDesk.desk.stop(); briefing.stop(); learning.stop(); companion.stop(); market.stop(); automation.channels.closeAll(); } catch { /* ignore */ }
       process.exit(0);
     });
   }

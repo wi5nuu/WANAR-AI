@@ -166,3 +166,32 @@
 .cc-page .au-grid.cols-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 @container (max-width: 760px) { .cc-page .au-grid.cols-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @container (max-width: 380px) { .cc-page .au-grid.cols-4 { grid-template-columns: minmax(0, 1fr); } }
+
+/* ── pasar & investasi ─────────────────────────────────── */
+.mk-tabs { display: flex; gap: 4px; margin: 0.6rem 0; padding: 3px; border-radius: 10px; background: var(--bg-tertiary); overflow-x: auto; scrollbar-width: none; }
+.mk-tabs button { flex: 1 0 auto; border: 0; background: transparent; padding: 6px 10px; border-radius: 8px; font: inherit; font-size: 0.82rem; font-weight: 600; color: var(--text-secondary); cursor: pointer; white-space: nowrap; }
+.mk-tabs button.on { background: var(--bg-primary); color: var(--text-primary); box-shadow: 0 1px 3px rgba(0, 0, 0, .12); }
+.mk-list { display: flex; flex-direction: column; }
+.mk-row { display: grid; grid-template-columns: minmax(0, 1.1fr) auto minmax(0, 1fr) 22px; gap: 0.6rem; align-items: center; padding: 0.45rem 0; border-bottom: 1px solid var(--border-secondary); }
+.mk-name { min-width: 0; display: flex; flex-direction: column; }
+.mk-name b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mk-name small { color: var(--text-tertiary); font-size: 0.7rem; }
+.mk-price { text-align: right; display: flex; flex-direction: column; font-variant-numeric: tabular-nums; min-width: 0; }
+.mk-price b { font-size: 0.9rem; overflow: hidden; text-overflow: ellipsis; }
+.mk-price span { font-size: 0.74rem; color: var(--text-tertiary); }
+.mk-price .up, .mk-sim-row .up { color: #16a34a; }
+.mk-price .down, .mk-sim-row .down { color: #dc2626; }
+.mk-spark.empty { display: block; width: 74px; height: 24px; }
+.mk-x { border: 0; background: transparent; color: var(--text-tertiary); font-size: 1.1rem; cursor: pointer; line-height: 1; }
+.mk-x:hover { color: #dc2626; }
+.mk-add { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 0.5rem; margin-top: 0.7rem; }
+.mk-alertform { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.5rem; margin-top: 0.7rem; }
+.mk-alertform button { grid-column: 1 / -1; }
+.mk-fired { display: flex; justify-content: space-between; gap: 0.5rem; font-size: 0.8rem; padding: 3px 0; color: var(--text-secondary); }
+.mk-fired small { color: var(--text-tertiary); }
+.mk-sim { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.5rem; margin-top: 0.6rem; }
+.mk-sim label { display: flex; flex-direction: column; gap: 3px; font-size: 0.74rem; color: var(--text-secondary); }
+.mk-sim button { grid-column: 1 / -1; }
+.mk-sim-row { padding: 0.6rem 0; border-bottom: 1px solid var(--border-secondary); font-size: 0.86rem; }
+.mk-simout { margin-top: 0.7rem; }
+.mk-disc { margin-top: 0.8rem; padding-top: 0.5rem; border-top: 1px dashed var(--border-secondary); }
