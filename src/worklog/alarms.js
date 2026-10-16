@@ -110,6 +110,9 @@ export function createAlarms({
   let timer = null;
   let busy = false;
 
+  /** Alarm yang lewat lebih dari 1 jam tidak dibunyikan lagi, kedaluwarsa saja. */
+  const ALARM_STALE_MS = 60 * 60_000;
+
   const q = {
     insert: db.prepare('INSERT INTO wl_alarms (id, at, label, chat_id, created_at, source) VALUES (?, ?, ?, ?, ?, ?)'),
     get: db.prepare('SELECT * FROM wl_alarms WHERE id = ?'),
@@ -214,8 +217,6 @@ export function createAlarms({
     let fired = 0;
     try {
       const t = now();
-      const ALARM_STALE_MS = 60 * 60_000; // alarm yang lewat > 1 jam tidak dibunyikan lagi
-
       for (const a of q.active.all()) {
         if (a.status === 'armed') {
           if (a.at > t) continue; // belum waktunya
