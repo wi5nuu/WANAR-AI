@@ -222,7 +222,7 @@ Secara bawaan otomasi hanya bisa dibuka dari localhost. Untuk akses dari kompute
 | --- | --- | --- |
 | Email | SMTP | Lampiran, HTML, daftar suppress |
 | Telegram | Bot API resmi | Lampiran dokumen; pelanggan mendaftar lewat `/start`, berhenti lewat `/stop`; `@subscribers` = semua pelanggan |
-| WhatsApp | **Cloud API resmi (Meta)** | Template wajib untuk memulai percakapan; nomor Indonesia otomatis dinormalisasi (0812… → 62812…). **Dua arah**: pesan masuk lewat webhook `/webhook/whatsapp`, nomor pemilik di `WHATSAPP_AI_CHAT_IDS` dijawab AI dengan teks bebas (jendela 24 jam), pelanggan berhenti lewat STOP dan mendaftar lewat START |
+| WhatsApp | **Cloud API resmi (Meta)** | **Opsional — berbayar sejak 1 Okt 2026**: balasan (pesan layanan) kena biaya setelah kuota 1.000/bulan — untuk chat dua arah gratis penuh pakai Telegram. Template wajib untuk memulai percakapan; nomor Indonesia otomatis dinormalisasi (0812… → 62812…). **Dua arah**: pesan masuk lewat webhook `/webhook/whatsapp`, nomor pemilik di `WHATSAPP_AI_CHAT_IDS` dijawab AI dengan teks bebas (jendela 24 jam), pelanggan berhenti lewat STOP dan mendaftar lewat START |
 | Slack / Discord / Teams | Incoming webhook | Tujuan tetap dari `.env`; Discord tanpa @mention |
 | Webhook | POST JSON bertanda tangan HMAC | Untuk n8n, Zapier, Make, atau layanan sendiri |
 
@@ -233,9 +233,20 @@ Satu job bisa menarget beberapa kanal sekaligus; satu kanal yang gagal tidak men
 (App Secret), lalu subscribe field **messages**. Setelah itu: pemilik bisa mengobrol dengan AI langsung
 dari WhatsApp (pengingat, jurnal, email — sama seperti Telegram), pengingat/alarm yang dibuat dari
 WhatsApp dikirim kembali ke WhatsApp, dan balasan otomatis memakai teks bebas karena pemilik yang
-membuka jendela 24 jam. Setiap payload diverifikasi lewat `X-Hub-Signature-256` (tanpa App Secret
+membuka jendela 24 jam (tetap dihitung sebagai pesan layanan — lihat catatan biaya di bawah).
+Setiap payload diverifikasi lewat `X-Hub-Signature-256` (tanpa App Secret
 yang benar, webhook menolak semuanya); retry Meta tidak pernah dijawab dua kali (dedup per message id).
 Job/kampanye ke pelanggan tetap mengikuti aturan Meta: opt-in (START) + template untuk memulai percakapan.
+
+**Biaya WhatsApp (penting).** Sejak **1 Oktober 2026** Meta tidak lagi menggratiskan pesan layanan:
+balasan yang kita kirim — termasuk balasan AI ke pemilik — masuk kuota gratis **1.000 pesan
+layanan/bulan per nomor**, selebihnya ditagih mengikuti tarif utility (Indonesia kisaran puluhan
+rupiah per pesan; cek rate card resmi Meta untuk angka pasti). Pesan **masuk** tetap gratis dan
+kampanye template (marketing) selalu berbayar. Karena itu WhatsApp bersifat **opsional**: biarkan
+env kosong = fitur mati total dan nol biaya, Meta pun tidak pernah memanggil webhook. Untuk chat
+dua arah dengan AI yang **gratis penuh tanpa batas**, pakai **Telegram** — Bot API resmi tanpa
+biaya per pesan, dan semua fitur (memori kontak, pelajaran malam, gerbang YA, pengingat/alarm)
+berjalan sama di sana.
 
 **Memori kontak.** Setiap orang yang pernah mengirim pesan ke kanal Anda (WhatsApp/Telegram) dicatat
 otomatis di tabel `people`: nama profil, jumlah pesan, terakhir kapan, plus cuplikan pesan terakhir.
