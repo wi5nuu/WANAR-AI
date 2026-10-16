@@ -177,3 +177,25 @@ describe('Telegram commands', () => {
     expect(fetchImpl.calls).toHaveLength(0); // nothing was fetched
   });
 });
+
+describe('digest', () => {
+  it('shows the index in points and keeps only a plain paragraph from the AI', async () => {
+    const { svc } = desk();
+    const bad = { chatStream: async function* () { yield { type: 'content', content: '| Aset | Harga |\n|---|---|\n| IHSG | 5863 |\n\nMau saya buatkan CSV?' }; yield { type: 'done' }; } };
+    svc.ai = bad;
+    const d = await svc.digest();
+    expect(d.ai).toBe(false);
+    expect(d.text).toMatch(/IHSG 5\.863,78 poin/);
+    expect(d.text).not.toMatch(/\|/);
+
+    svc.ai = { chatStream: async function* () { yield { type: 'content', content: 'IHSG melemah 1,33% hari ini sementara kripto menguat tipis. Data bursa bisa tertunda; ini informasi, bukan nasihat investasi.' }; yield { type: 'done' }; } };
+    const ok = await svc.digest();
+    expect(ok.ai).toBe(true);
+    expect(ok.text).toMatch(/melemah/);
+
+    svc.ai = { chatStream: async function* () { yield { type: 'content', content: 'Sebaiknya beli BBCA sekarang karena akan naik besok, ini rekomendasi saya yang kuat sekali.' }; yield { type: 'done' }; } };
+    const advice = await svc.digest();
+    expect(advice.ai).toBe(false);
+    expect(advice.text).not.toMatch(/sebaiknya beli/i);
+  });
+});

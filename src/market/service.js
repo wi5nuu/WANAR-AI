@@ -27,6 +27,7 @@ const OPS = {
 
 export const fmtPrice = (q) => {
   const n = Number(q.price);
+  if (q.kind === 'index') return `${n.toLocaleString('id-ID', { maximumFractionDigits: 2 })} poin`;
   const digits = q.currency && !String(q.currency).startsWith('IDR') ? (n < 10 ? 4 : 2) : 0;
   const s = n.toLocaleString('id-ID', { maximumFractionDigits: digits });
   return String(q.currency || '').startsWith('IDR') ? `Rp${s}${q.currency === 'IDR/gram' ? '/gram' : ''}` : `${s} ${q.currency || ''}`.trim();
@@ -224,9 +225,15 @@ export class MarketService extends EventEmitter {
           'DILARANG: rekomendasi beli/jual/tahan, target harga, prediksi, janji untung, atau menyuruh berinvestasi.',
           'Boleh: menyebut apa yang naik/turun, kondisi IHSG, kurs, emas, kripto, dan hal yang perlu dicermati secara umum (volatilitas, data tertunda).',
           'Jangan mengarang angka yang tidak ada di data. Akhiri dengan satu kalimat pendek: ini informasi, bukan nasihat investasi.',
+          'FORMAT: satu paragraf teks biasa. TANPA tabel, TANPA markdown (**, #, |), TANPA daftar, TANPA pertanyaan atau tawaran di akhir, TANPA komentar tentang dirimu atau tentang data.',
         ].join('\n');
         const r = await collect(this.ai, [{ role: 'user', content: `DATA (${new Date(data.at).toISOString()}):\n${facts}` }], { systemPrompt: system, temperature: 0.3, maxTokens: 500, traceChannel: 'automation', traceTitle: 'Ringkasan pasar' });
-        if (r.text && r.text.length > 30) { text = r.text; ai = true; }
+        const t = String(r.text || '').trim();
+        // Anything that is not a short plain paragraph is rejected: the facts are the safe answer.
+        const wellFormed = t.length > 30 && t.length < 900 && !/[|*#]/.test(t) && !/\?\s*$/.test(t)
+          && !/\b(mau saya|apakah (?:anda|mas)|ingin saya|silakan pilih)\b/i.test(t)
+          && !/\b(beli|jual|tahan|akumulasi|target harga|rekomendasi)\b/i.test(t);
+        if (wellFormed) { text = t; ai = true; }
       } catch { /* the facts alone are fine */ }
     }
     return { text, facts, ai, quotes: data.quotes, at: data.at, disclaimer: DISCLAIMER, errors: data.errors || [] };
