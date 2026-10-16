@@ -245,6 +245,7 @@ export default function CommandCenter() {
             <div className="cc-masonry">
             <AlarmCard alarms={work.alarms} busy={busy} act={act} />
             <MarketCard api={api} notify={notify} />
+            <PrayerTimesCard prayerTimes={data.prayerTimes} busy={busy} act={act} />
 
             {email && (
               <div className="au-card cc-gap cc-policy">
@@ -490,6 +491,51 @@ function AlarmCard({ alarms, busy, act }) {
         <button type="button" className="au-btn sm cc-notifbtn" onClick={() => Notification.requestPermission().then(setPerm)}>🔔 Izinkan notifikasi browser untuk alarm</button>
       )}
       <div className="au-tiny">Bot tidak bisa menembus mode senyap HP: atur nada keras untuk chat Telegram ini (dan izinkan lewat "Jangan Ganggu"). Untuk bunyi darurat sungguhan, pasang aplikasi ntfy dan isi NTFY_TOPIC di server.</div>
+    </div>
+  );
+}
+
+/** Jadwal waktu shalat — status dan pengiriman otomatis ke Telegram. */
+function PrayerTimesCard({ prayerTimes, busy, act }) {
+  const pt = prayerTimes || {};
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(t);
+  }, []);
+
+  const nextSubuh = pt.city && pt.schedule ? `tiap hari ${pt.schedule.replace('daily@', '')} WIB` : '—';
+  const lastSent = pt.lastRunAt ? ago(pt.lastRunAt) : 'belum pernah';
+  const modeLabel = pt.live ? 'live' : pt.configured ? 'simulasi' : 'tidak dikonfigurasi';
+  const ok = pt.enabled && pt.live && pt.running;
+
+  return (
+    <div className={`au-card cc-gap ${ok ? '' : 'cc-warn'}`}>
+      <h3>
+        <span className="cc-title">🕌 Waktu Shalat — {pt.city || 'Bekasi'}</span>
+        <small>{pt.country || 'Indonesia'} · {nextSubuh} · status: {modeLabel}</small>
+      </h3>
+      <div className="au-list">
+        <div className="wl-row">
+          <div className="grow cc-ellipsis">
+            <div className="t">Subuh</div>
+            <div className="au-muted">sebelum fajar · jadwal dari Aladhan API</div>
+          </div>
+          <div className={`au-chip ${ok ? 'ok' : 'warn'}`}>{ok ? 'aktif' : 'tidak aktif'}</div>
+        </div>
+        <div className="wl-row">
+          <div className="grow cc-ellipsis">
+            <div className="t">Kirim ke Telegram</div>
+            <div className="au-muted">chat ID {pt.chatId ? String(pt.chatId).slice(-4) : '–'} · terakhir {lastSent}</div>
+          </div>
+          <div className="au-actions">
+            <button className="au-btn sm" disabled={!!busy || !pt.live} onClick={() => act('pt', () => fetch('/api/automation/prayer-times/send', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Automation-Token': getAutomationToken() || '' }, body: JSON.stringify({ city: pt.city || 'Bekasi' }) }).then(async (r) => { if (!r.ok) throw new Error(await r.text()); return r.json(); }), 'Jadwal shalat dikirim ke Telegram')}>Kirim sekarang</button>
+          </div>
+        </div>
+      </div>
+      {!ok && (
+        <div className="au-muted">Aktifkan PRAYER_TIMES_ENABLED=true dan TELEGRAM_BOT_TOKEN di .env server, lalu restart layanan.</div>
+      )}
     </div>
   );
 }
