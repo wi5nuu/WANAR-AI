@@ -48,7 +48,7 @@ export function parseSkills(raw) {
 }
 
 /** Whole-word match that also copes with C++, Node.js, .NET. */
-function hasSkill(text, skill) {
+export function hasSkill(text, skill) {
   const e = esc(skill);
   return new RegExp(`(^|[^a-z0-9+#])${e}([^a-z0-9+#]|$)`, 'i').test(text);
 }

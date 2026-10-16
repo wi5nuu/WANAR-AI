@@ -18,10 +18,14 @@ const SCAN = /^\s*(?:tolong\s+)?(?:pindai|scan|cari(?:kan)?|cek)\s+(?:lowongan|l
 const LIST = /^\s*(?:ada\s+)?(?:lowongan|loker)(?:\s+(?:kerja|remote))?(?:\s+(?:apa|baru|terbaru|cocok|hari\s+ini|untuk\s+(?:saya|aku|mas)))*\s*(?:yang\s+cocok)?\s*[.!?]*\s*$|^\s*(?:lowongan|loker)\s+apa\s+(?:yang\s+)?(?:cocok|baru)\b|^\s*radar\s+(?:lowongan|kerja|karir|karier)\s*[.!?]*\s*$/i;
 const STATUS = /^\s*(?:status|rekap|ringkasan)\s+(?:lamaran|karir|karier|lowongan)\s*[.!?]*\s*$/i;
 // "laporan agent", "rekap harian agen", "agent hari ini ngapain": the same text as the 19.00 report, on demand.
+// "kit 12" / "paket lamaran 12": cover letter + standard answers for posting #12 (the number shown in the list).
+const KIT = /^\s*(?:kit|paket)(?:\s+lamaran)?\s+#?(\d{1,6})\s*[.!?]*\s*$/i;
 const REPORT = /^\s*(?:laporan|rekap)\s+(?:harian\s+|kerja\s+)?(?:agent|agen)\s*[.!?]*\s*$|^\s*(?:agent|agen)\s+(?:hari\s+ini\s+)?(?:ngapain|kerja\s+apa)(?:\s+aja|\s+saja)?\s*[?.!]*\s*$/i;
 
 const LABEL = { new: 'baru', shortlisted: 'dipilih', applying: 'sedang dilamar', applied: 'sudah dilamar', interview: 'wawancara', offer: 'penawaran', rejected: 'ditolak', skipped: 'dilewati' };
 const clip = (s, n) => (String(s).length > n ? `${String(s).slice(0, n - 1)}…` : String(s));
+
+import { kitMessage } from './kit.js';
 
 export async function quickCareer(career, text) {
   const t = String(text || '').trim();
@@ -34,6 +38,9 @@ export async function quickCareer(career, text) {
   }
 
   if (REPORT.test(t)) return career.reportText().text;
+
+  const kitM = KIT.exec(t);
+  if (kitM) return kitMessage(career.kit(Number(kitM[1])));
 
   if (STATUS.test(t)) {
     const s = career.store.stats();
@@ -53,10 +60,12 @@ export async function quickCareer(career, text) {
     }
     const lines = ['Lowongan remote yang cocok dengan profil Mas:', ''];
     [...apply, ...maybe].forEach((j, i) => {
-      lines.push(`${i + 1}. [${j.score}] ${clip(j.title, 80)} - ${clip(j.company || 'perusahaan tidak disebut', 40)}${j.verdict === 'maybe' ? ' (perlu dicek)' : ''}`);
+      lines.push(`#${j.id} [${j.score}] ${clip(j.title, 80)} - ${clip(j.company || 'perusahaan tidak disebut', 40)}${j.verdict === 'maybe' ? ' (perlu dicek)' : ''}`);
       if (j.location) lines.push(`   ${clip(j.location, 70)}${j.salary_text ? ` | ${clip(j.salary_text, 30)}` : ''}`);
       lines.push(`   ${j.url}`);
     });
+    const first = [...apply, ...maybe][0];
+    lines.push('', `Ketik "kit ${first.id}" untuk surat lamaran dan jawaban standar lowongan itu.`);
     return lines.join('\n');
   }
 

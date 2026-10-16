@@ -5,6 +5,8 @@
  *   GET  /report              the daily report text + the numbers behind it
  *   GET  /jobs                postings (?verdict=apply|maybe|skip &status= &q= &minScore= &limit= &offset=)
  *   GET  /jobs/:id            one posting with its description
+ *   GET  /jobs/:id/kit        application kit: cover letter, standard answers, what only the owner can answer
+ *   GET  /cv                  the owner's CV (PDF), when uploaded
  *   POST /jobs/:id/status     { status, notes? }  move a posting through the pipeline
  *   POST /scan                start a sweep now (returns at once; progress shows in the activity feed)
  *   GET  /activity            what the agent has been doing (?afterId= &agent= &level= &limit=)
@@ -16,6 +18,8 @@
  */
 
 import express from 'express';
+import fs from 'node:fs';
+import path from 'node:path';
 import { createAccessGuard } from '../automation/routes.js';
 import { STATUSES } from './store.js';
 
@@ -44,6 +48,19 @@ export function createCareerRouter({ career, env = process.env }) {
     const job = career.store.getJob(req.params.id);
     if (!job) return res.status(404).json({ error: 'lowongan tidak ditemukan' });
     res.json(job);
+  });
+
+  // Everything needed to apply by hand in two minutes: cover letter, standard answers, what only the owner can answer.
+  router.get('/jobs/:id/kit', (req, res) => {
+    const kit = career.kit(req.params.id);
+    if (!kit.ok) return res.status(kit.error?.startsWith('Lowongan') ? 404 : 409).json({ error: kit.error });
+    res.json(kit);
+  });
+
+  router.get('/cv', (_req, res) => {
+    const file = career.cvPath();
+    if (!fs.existsSync(file)) return res.status(404).json({ error: 'CV belum diunggah ke server.' });
+    res.download(file, path.basename(file));
   });
 
   router.post('/jobs/:id/status', (req, res) => {

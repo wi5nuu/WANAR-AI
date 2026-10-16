@@ -77,3 +77,35 @@ export const priceText = (p) => `${shortRupiah(p.min)} – ${shortRupiah(p.max)}
 
 export function remember(key, value) { try { localStorage.setItem(key, value); } catch { /* private mode */ } }
 export function recall(key, fallback) { try { return localStorage.getItem(key) || fallback; } catch { return fallback; } }
+
+/** Downloads a protected file (the owner's CV) with the operator token, then hands it to the browser. */
+export async function downloadFile(path, fallbackName = 'file') {
+  const headers = {};
+  const t = getAutomationToken();
+  if (t) headers['X-Automation-Token'] = t;
+  const res = await fetch(path, { headers });
+  if (!res.ok) {
+    let msg = `Unduhan gagal (HTTP ${res.status})`;
+    try { msg = (await res.json()).error || msg; } catch { /* not JSON */ }
+    throw new Error(msg);
+  }
+  const name = /filename="?([^";]+)"?/.exec(res.headers.get('content-disposition') || '')?.[1] || fallbackName;
+  const url = URL.createObjectURL(await res.blob());
+  const a = document.createElement('a');
+  a.href = url; a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
+/** Copies text; returns true when the browser allowed it. */
+export async function copyText(text) {
+  try { await navigator.clipboard.writeText(text); return true; } catch { /* fall through */ }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.setAttribute('readonly', ''); ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    const ok = document.execCommand('copy');
+    ta.remove();
+    return ok;
+  } catch { return false; }
+}

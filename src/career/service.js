@@ -19,11 +19,14 @@ import { scoreJob, parseSkills, SCORING_DEFAULTS } from './scoring.js';
 import { CareerStore } from './store.js';
 import { buildDailyReport, wib, wibDay } from './report.js';
 import { skillsFromFacts } from './facts.js';
+import { buildKit } from './kit.js';
+import fs from 'node:fs';
+import path from 'node:path';
 
 const DEFAULT_INTERVAL_H = 6;
 const FIRST_SCAN_DELAY_MS = 2 * 60_000;
 const DIGEST_MAX = 8;
-const ENRICH_MAX = 24;
+const ENRICH_MAX = 60;
 const TICK_MS = 5 * 60_000;         // report + watchdog heartbeat
 const REPORT_RETRIES = 3;           // a failed report is retried, never repeated after it succeeded
 
@@ -102,11 +105,19 @@ export class CareerService extends EventEmitter {
       let fresh = 0; let apply = 0; let maybe = 0; let enriched = 0;
       for (let job of jobs) {
         let result = scoreJob(job, profile);
-        // Greenhouse lists carry no description: read the full posting only for plausible candidates.
-        if (job.source.startsWith('greenhouse:') && !job.description && result.verdict !== 'skip' && enriched < ENRICH_MAX) {
-          enriched += 1;
-          job = await enrichGreenhouse(this.fetchImpl, job);
-          result = scoreJob(job, profile);
+        // Greenhouse lists carry no description. Without it a posting can never score well, so waiting for a
+        // decent score before reading it would mean never reading it. Read it for every software role that is
+        // not already ruled out by region; remember what was read so the next scan does not fetch it again.
+        if (job.source.startsWith('greenhouse:') && !job.description) {
+          const known = this.store.descriptionOf(job.source, job.extId);
+          if (known) {
+            job = { ...job, description: known };
+            result = scoreJob(job, profile);
+          } else if (enriched < ENRICH_MAX && result.eligibility !== 'no' && result.reasons.some((r) => r.startsWith('peran:'))) {
+            enriched += 1;
+            job = await enrichGreenhouse(this.fetchImpl, job);
+            result = scoreJob(job, profile);
+          }
         }
         const up = this.store.upsertJob(job, result);
         if (up.inserted) {
@@ -171,6 +182,27 @@ export class CareerService extends EventEmitter {
     this.store.log({ agent: 'career', kind: 'digest', level: 'good', title: `Laporan lowongan terkirim ke Telegram (${top.length} teratas dari ${batch.length})`,
       detail: top.map((j) => `${j.score} - ${j.title} @ ${j.company}`).join('\n') });
     return top.length;
+  }
+
+  // ---------------------------------------------------------- application kit
+
+  /** Where the owner's CV (PDF) lives; the file is optional. */
+  cvPath() {
+    return this.env.OWNER_CV_FILE || path.join(process.cwd(), 'data', 'owner-cv.pdf');
+  }
+
+  /**
+   * Cover letter + standard answers + CV for one stored posting. The e-mail shown is the mailbox the
+   * agent watches (employers' replies must reach it), falling back to the portfolio's address.
+   */
+  kit(jobId) {
+    const job = this.store.getJob(jobId);
+    if (!job) return { ok: false, error: 'Lowongan tidak ditemukan.' };
+    const cv = this.cvPath();
+    return buildKit(job, this.getFacts(), {
+      now: this.now(), email: this.env.APPLY_EMAIL || this.env.IMAP_USER || null,
+      resumeFile: fs.existsSync(cv) ? path.basename(cv) : null,
+    });
   }
 
   // ---------------------------------------------------------- daily report

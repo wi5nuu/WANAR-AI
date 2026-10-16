@@ -241,3 +241,21 @@
 .ag-skel i { display: block; height: 14px; border-radius: 7px; background: linear-gradient(90deg, var(--bg-tertiary) 25%, rgba(127, 127, 127, 0.18) 50%, var(--bg-tertiary) 75%); background-size: 200% 100%; animation: ag-shine 1.3s linear infinite; }
 @keyframes ag-shine { to { background-position: -200% 0; } }
 @media (prefers-reduced-motion: reduce) { .ag-skel i { animation: none; } }
+
+/* ---------- application kit (inside a job card) ---------- */
+.ag-job-kit { grid-column: 1 / -1; margin-top: 0.4rem; padding-top: 0.9rem; border-top: 1px dashed var(--border-primary); }
+.ag-kit { display: flex; flex-direction: column; gap: 0.6rem; }
+.ag-kit-h { display: flex; justify-content: space-between; align-items: baseline; gap: 0.5rem; margin-top: 0.4rem; }
+.ag-kit-h h4 { margin: 0; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.07em; color: var(--text-secondary); }
+.ag-callout-s { margin: 0; padding: 0.5rem 0.75rem; border-radius: 10px; font-size: 0.82rem; background: rgba(245, 158, 11, 0.12); border: 1px solid rgba(245, 158, 11, 0.4); }
+.ag-letter { font-size: 0.84rem !important; line-height: 1.55; min-height: 11rem; }
+.ag-ans { margin: 0; display: flex; flex-direction: column; }
+.ag-ans > div { display: grid; grid-template-columns: minmax(7rem, 0.45fr) minmax(0, 1fr) auto; gap: 0.6rem; align-items: baseline; padding: 0.4rem 0; border-bottom: 1px solid var(--border-primary); font-size: 0.84rem; }
+.ag-ans > div:last-child { border-bottom: 0; }
+.ag-ans dt { color: var(--text-secondary); }
+.ag-ans dd { margin: 0; overflow-wrap: anywhere; }
+.ag-needs { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 0.35rem; }
+.ag-needs li { display: flex; flex-direction: column; font-size: 0.84rem; padding: 0.4rem 0.7rem; border-radius: 10px; background: var(--bg-tertiary); }
+.ag-needs small { color: var(--text-secondary); font-size: 0.75rem; }
+.ag-kit-a { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; margin-top: 0.3rem; }
+@container (max-width: 560px) { .ag-ans > div { grid-template-columns: minmax(0, 1fr) auto; } .ag-ans dt { grid-column: 1 / -1; font-size: 0.74rem; } }

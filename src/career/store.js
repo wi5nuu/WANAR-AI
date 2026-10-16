@@ -97,6 +97,11 @@ export class CareerStore {
     return { ...r, remote: r.remote == null ? null : Boolean(r.remote), tags: j(r.tags, []), reasons: j(r.reasons, []), warnings: j(r.warnings, []) };
   }
 
+  /** The stored description of a posting we already read (so a scan never fetches it twice), or ''. */
+  descriptionOf(source, extId) {
+    return this.db.prepare('SELECT description d FROM career_jobs WHERE source = ? AND ext_id = ?').get(source, String(extId))?.d || '';
+  }
+
   getJob(id) { return this._shape(this.db.prepare('SELECT * FROM career_jobs WHERE id = ?').get(Number(id))); }
 
   listJobs({ verdict = null, status = null, q = '', minScore = 0, limit = 50, offset = 0, includeDescription = false } = {}) {
