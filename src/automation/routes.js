@@ -593,14 +593,14 @@ export function createAutomationRouter({ automation, rateLimiters = {}, actorOf 
   }));
 
   router.post('/prayer-times/send', strict, wrap(async (req, res) => {
-    const { chatId, city = 'Bekasi', country = 'Indonesia', method = 2 } = req.body || {};
+    const { chatId, city = 'Bekasi', country = 'Indonesia', method = 2, prayerKey } = req.body || {};
     const adapter = automation.channels.get('telegram');
     if (!adapter) throw new MailError('Channel Telegram tidak tersedia', 'INVALID');
     const target = String(chatId || defaultChatId() || '').trim();
     if (!target) throw new MailError('Chat ID tujuan belum diisi. Isi PRAYER_TIMES_CHAT_ID atau TELEGRAM_AI_CHAT_IDS di .env.', 'INVALID');
     try {
-      const result = await sendPrayerTimesToTelegram({ channel: adapter, chatId: target, city, country, method });
-      res.json({ success: true, chatId: target, city, result: { messageId: result.messageId, parts: result.parts, dryRun: result.dryRun } });
+      const result = await sendPrayerTimesToTelegram({ channel: adapter, chatId: target, city, country, method, prayerKey });
+      res.json({ success: true, chatId: target, city, prayerKey, result: { messageId: result.messageId, parts: result.parts, dryRun: result.dryRun } });
     } catch (err) {
       if (err instanceof MailError) {
         return res.status(err.code === 'TRANSIENT' ? 502 : 400).json({ success: false, error: err.message });

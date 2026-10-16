@@ -2,8 +2,8 @@
  * src/automation/prayer-times.js
  *
  * Jadwal waktu shalat untuk kota (default: Bekasi, Indonesia).
- * Mengambil data dari Aladhan API (gratis, tidak perlu API key) dan
- * mengirim ke Telegram melalui channel adapter yang sudah ada.
+ * Mengambil data dari Aladhan API dan mengirim pengingat ke Telegram
+ * pada setiap waktu shalat (5 kali sehari: Subuh, Dzuhur/Jumat, Ashar, Maghrib, Isya).
  *
  * Endpoint: https://api.aladhan.com/v1/timingsByCity?city=Bekasi&country=Indonesia&method=2
  *
@@ -12,10 +12,11 @@
 
 import { boolEnv, intEnv } from './channels/base.js';
 import { MailError } from './mailer.js';
+import { zonedToUtc, zonedParts, DEFAULT_TIMEZONE } from './cron.js';
 
 const DEFAULT_CITY = 'Bekasi';
 const DEFAULT_COUNTRY = 'Indonesia';
-const DEFAULT_METHOD = 2; // ISNA — umum digunakan di Indonesia
+const DEFAULT_METHOD = 2; // ISNA
 
 const PRAYER_LABELS_ID = {
   Fajr: 'Subuh',
@@ -23,11 +24,18 @@ const PRAYER_LABELS_ID = {
   Asr: 'Ashar',
   Maghrib: 'Maghrib',
   Isha: 'Isya',
-  Sunrise: 'Terbit',
-  Sunset: 'Terbenam',
 };
 
-/** Aladhan hanya mengembalikan nama hari dalam bahasa Inggris; map ke Indonesia. */
+const PRAYER_EMOJIS = {
+  Fajr: '🌅',
+  Dhuhr: '☀️',
+  Asr: '🏟️',
+  Maghrib: '🌇',
+  Isha: '🌙',
+};
+
+const ORDER = ['Fajr', 'Dhuhr', 'Asr', 'Maghrib', 'Isha'];
+
 const WEEKDAY_EN_TO_ID = {
   Sunday: 'Minggu',
   Monday: 'Senin',
@@ -38,24 +46,10 @@ const WEEKDAY_EN_TO_ID = {
   Saturday: 'Sabtu',
 };
 
-const PRAYER_EMOJIS = {
-  Fajr: '🌅',
-  Dhuhr: '☀️',
-  Asr: '🏟️',
-  Maghrib: '🌇',
-  Isha: '🌙',
-  Sunrise: '🌄',
-  Sunset: '🌆',
-};
-
-const ORDER = ['Fajr', 'Dhuhr', 'Asr', 'Maghrib', 'Isha'];
-
-/** Apakah fitur waktu shalat diaktifkan via env. */
 export function isPrayerTimesEnabled(env = process.env) {
   return boolEnv(env, 'PRAYER_TIMES_ENABLED', true);
 }
 
-/** Chat ID tujuan default: pakai PRAYER_TIMES_CHAT_ID, fallback ke TELEGRAM_AI_CHAT_IDS pertama. */
 export function defaultChatId(env = process.env) {
   const explicit = String(env.PRAYER_TIMES_CHAT_ID || '').trim();
   if (explicit) return explicit;
@@ -63,11 +57,6 @@ export function defaultChatId(env = process.env) {
   return first || null;
 }
 
-/**
- * Ambil jadwal waktu shalat dari Aladhan API.
- * @param {{city?:string, country?:string, method?:number}} opts
- * @returns {Promise<{timings:object, date:object, meta:object}>}
- */
 export async function fetchPrayerTimes({
   city = DEFAULT_CITY,
   country = DEFAULT_COUNTRY,
@@ -81,11 +70,7 @@ export async function fetchPrayerTimes({
   try {
     res = await fetch(url, { signal: AbortSignal.timeout(20_000) });
   } catch (err) {
-    throw new MailError(
-      `Gagal menghubungi Aladhan API: ${err?.message || err}`,
-      'TRANSIENT',
-      { code: err?.cause?.code || 'ENETWORK' },
-    );
+    throw new MailError(`Gagal menghubungi Aladhan API: ${err?.message || err}`, 'TRANSIENT', { code: err?.cause?.code || 'ENETWORK' });
   }
   if (!res.ok) {
     throw new MailError(`Aladhan API gagal: HTTP ${res.status}`, 'TRANSIENT', { responseCode: res.status });
@@ -97,7 +82,6 @@ export async function fetchPrayerTimes({
   return json.data;
 }
 
-/** Format jadwal waktu shalat menjadi pesan teks Bahasa Indonesia. */
 export function formatPrayerTimesMessage(data, { city = DEFAULT_CITY } = {}) {
   const { timings, date } = data || {};
   if (!timings) throw new MailError('Data waktu shalat tidak lengkap', 'INVALID');
@@ -114,6 +98,7 @@ export function formatPrayerTimesMessage(data, { city = DEFAULT_CITY } = {}) {
   const hijriYear = hijri.year || '';
 
   const isJumat = weekdayId === 'Jumat';
+
   const lines = [];
   lines.push(`🕌 Jadwal Waktu Shalat — ${city}`);
   lines.push(
@@ -137,17 +122,42 @@ export function formatPrayerTimesMessage(data, { city = DEFAULT_CITY } = {}) {
   return lines.join('\n');
 }
 
-/**
- * Kirim jadwal waktu shalat ke Telegram.
- * @param {{channel:object, chatId:string, city?:string, country?:string, method?:number}} opts
- * @returns {Promise<object>} hasil pengiriman channel
- */
-export async function sendPrayerTimesToTelegram({
+export function formatPrayerReminder(data, { city = DEFAULT_CITY, prayerKey } = {}) {
+  const { timings, date } = data || {};
+  if (!timings || !prayerKey) throw new MailError('Data waktu shalat tidak lengkap', 'INVALID');
+
+  const waktu = timings[prayerKey];
+  if (!waktu) throw new MailError(`Waktu ${prayerKey} tidak ditemukan`, 'INVALID');
+
+  const gregorian = date.gregorian || {};
+  const weekdayEn = gregorian.weekday?.en || '';
+  const weekdayId = WEEKDAY_EN_TO_ID[weekdayEn] || weekdayEn;
+  const isJumat = weekdayId === 'Jumat';
+
+  let label = PRAYER_LABELS_ID[prayerKey];
+  let emoji = PRAYER_EMOJIS[prayerKey];
+  if (prayerKey === 'Dhuhr' && isJumat) {
+    label = 'Jumat';
+    emoji = '🕌';
+  }
+
+  const callName = String(process.env.OWNER_NAME || 'Wisnu Alfian Nur Ashar').split(/\s+/)[0] || 'Mas Wisnu';
+
+  const lines = [];
+  lines.push(`${emoji} Waktu Shalat ${label} — ${city}`);
+  lines.push(`📅 ${waktu} WIB`);
+  lines.push('');
+  lines.push(`Waktunya shalat ${label.toLowerCase()}, ${callName}. Semoga khusyuk dan diterima. 🤲`);
+  return lines.join('\n');
+}
+
+export async function sendPrayerReminderToTelegram({
   channel,
   chatId,
   city = DEFAULT_CITY,
   country = DEFAULT_COUNTRY,
   method = DEFAULT_METHOD,
+  prayerKey,
 } = {}) {
   if (!channel) throw new MailError('Channel Telegram tidak tersedia', 'INVALID');
   if (channel.mode !== 'live') {
@@ -156,14 +166,10 @@ export async function sendPrayerTimesToTelegram({
   if (!chatId) throw new MailError('Chat ID tujuan belum diisi. Set PRAYER_TIMES_CHAT_ID atau TELEGRAM_AI_CHAT_IDS di .env.', 'INVALID');
 
   const data = await fetchPrayerTimes({ city, country, method });
-  const text = formatPrayerTimesMessage(data, { city });
+  const text = formatPrayerReminder(data, { city, prayerKey });
   return channel.send({ to: chatId, text });
 }
 
-/**
- * Buat service waktu shalat yang bisa dijadwalkan.
- * @param {{channel:object, chatId?:string, env?:object, fetchImpl?:Function}} deps
- */
 export function createPrayerTimesService({
   channel,
   chatId = null,
@@ -173,76 +179,110 @@ export function createPrayerTimesService({
   const city = String(env.PRAYER_TIMES_CITY || DEFAULT_CITY).trim();
   const country = String(env.PRAYER_TIMES_COUNTRY || DEFAULT_COUNTRY).trim();
   const method = intEnv(env, 'PRAYER_TIMES_METHOD', DEFAULT_METHOD, { min: 1, max: 11 });
-  const schedule = String(env.PRAYER_TIMES_SCHEDULE || 'daily@04:00').trim();
   const targetChatId = chatId || defaultChatId(env);
   const enabled = boolEnv(env, 'PRAYER_TIMES_ENABLED', true);
+  const tz = env.AUTOMATION_TZ || 'Asia/Jakarta';
 
-  let timer = null;
+  let timers = [];
+  let lastData = null;
   let lastRunAt = null;
   let lastError = null;
-  let lastResult = null;
 
-  async function sendNow() {
+  async function fetchAndSchedule() {
+    const data = await fetchPrayerTimes({ city, country, method });
+    lastData = data;
+    const timings = data.timings;
+
+    // Clear existing timers
+    for (const t of timers) clearTimeout(t);
+    timers = [];
+
+    const now = Date.now();
+    const local = zonedParts(now, tz);
+
+    for (const key of ORDER) {
+      const timeStr = timings[key]; // "04:33"
+      const [h, m] = timeStr.split(':').map(Number);
+      const runAt = zonedToUtc(local.year, local.month, local.day, h, m, tz);
+      const delay = runAt - now;
+
+      if (delay > 0 && delay < 24 * 60 * 60 * 1000) {
+        const timer = setTimeout(async () => {
+          try {
+            await sendPrayerReminderToTelegram({ channel, chatId: targetChatId, city, country, method, prayerKey: key });
+            lastRunAt = Date.now();
+            lastError = null;
+          } catch (e) {
+            lastError = e.message;
+            console.warn(`[PRAYER-TIMES] pengingat ${key} gagal:`, e.message);
+          }
+        }, delay);
+        timers.push(timer);
+        timer.unref?.();
+      }
+    }
+  }
+
+  async function sendNow(prayerKey) {
     if (!enabled) throw new MailError('Fitur waktu shalat dinonaktifkan (PRAYER_TIMES_ENABLED=false)', 'INVALID');
     if (!targetChatId) throw new MailError('Chat ID tujuan belum dikonfigurasi', 'INVALID');
-    const data = await fetchPrayerTimes({ city, country, method });
-    const text = formatPrayerTimesMessage(data, { city });
+    const data = lastData || await fetchPrayerTimes({ city, country, method });
+    const text = formatPrayerReminder(data, { city, prayerKey });
     const result = await channel.send({ to: targetChatId, text });
     lastRunAt = Date.now();
     lastError = null;
-    lastResult = result;
-    return { ok: true, chatId: targetChatId, city, result };
+    return { ok: true, chatId: targetChatId, city, prayerKey, result };
   }
 
-  async function start() {
-    if (timer) return false;
+  function start() {
     if (!enabled) return false;
     if (!targetChatId) {
       console.log('[PRAYER-TIMES] tidak dimulai: PRAYER_TIMES_CHAT_ID / TELEGRAM_AI_CHAT_IDS belum diisi');
       return false;
     }
-    // Jalankan segera saat start, lalu tiap menit cek apakah sudah waktunya.
-    sendNow().catch((e) => { lastError = e.message; console.warn('[PRAYER-TIMES] kirim awal gagal:', e.message); });
 
-    const { parseSchedule, nextRun } = await import('./cron.js');
-    let parsed;
-    try { parsed = parseSchedule(schedule); } catch (e) {
-      console.warn('[PRAYER-TIMES] jadwal tidak valid ("' + schedule + '"), pakai daily@04:00:', e.message);
-      parsed = parseSchedule('daily@04:00');
-    }
+    // Fetch and schedule immediately
+    fetchAndSchedule().catch((e) => { lastError = e.message; console.warn('[PRAYER-TIMES] jadwal awal gagal:', e.message); });
 
-    let lastDue = null; // epoch ms terakhir yang sudah terkirim, mencegah duplikasi
-    timer = setInterval(async () => {
+    // Refetch every 24 hours to get next day's prayer times
+    const refetchTimer = setInterval(async () => {
       try {
-        const now = Date.now();
-        // nextRun(afterMs) = waktu jadwal berikutnya yang LEBIH BESAR dari afterMs.
-        // Pakai now - 1s agar jadwal yang tepat sekarang masih ikut terbaca.
-        const due = nextRun(parsed, now - 1_000, env.AUTOMATION_TZ || 'Asia/Jakarta');
-        // Kirim jika jadwal sudah tiba / akan tiba dalam 1 menit, dan belum pernah dikirim untuk jadwal ini.
-        if (due && due <= now + 60_000 && (!lastDue || due > lastDue)) {
-          await sendNow();
-          lastDue = due;
-        }
+        await fetchAndSchedule();
       } catch (e) {
         lastError = e.message;
-        console.warn('[PRAYER-TIMES] jadwal gagal:', e.message);
+        console.warn('[PRAYER-TIMES] refetch jadwal harian gagal:', e.message);
       }
-    }, 60_000);
-    timer.unref?.();
+    }, 24 * 60 * 60 * 1000);
+    refetchTimer.unref?.();
+    timers.push(refetchTimer);
+
     return true;
   }
 
   function stop() {
-    if (timer) clearInterval(timer);
-    timer = null;
+    for (const t of timers) clearTimeout(t);
+    timers = [];
     return true;
   }
 
   function status() {
     const nowId = new Date().toLocaleDateString('id-ID', {
       weekday: 'long',
-      timeZone: env.AUTOMATION_TZ || 'Asia/Jakarta',
+      timeZone: tz,
     });
+    const upcoming = [];
+    if (lastData && lastData.timings) {
+      const now = Date.now();
+      const local = zonedParts(now, tz);
+      for (const key of ORDER) {
+        const timeStr = lastData.timings[key];
+        const [h, m] = timeStr.split(':').map(Number);
+        const runAt = zonedToUtc(local.year, local.month, local.day, h, m, tz);
+        if (runAt > now) {
+          upcoming.push({ prayer: PRAYER_LABELS_ID[key], time: timeStr, at: runAt });
+        }
+      }
+    }
     return {
       enabled,
       configured: Boolean(channel && channel.configured),
@@ -250,15 +290,22 @@ export function createPrayerTimesService({
       city,
       country,
       method,
-      schedule,
       weekday: nowId,
       chatId: targetChatId || null,
-      running: Boolean(timer),
+      running: timers.length > 0,
       lastRunAt,
       lastError,
-      lastResult: lastResult ? { messageId: lastResult.messageId, parts: lastResult.parts, dryRun: lastResult.dryRun } : null,
+      upcoming,
     };
   }
 
-  return { start, stop, status, sendNow, fetchPrayerTimes: () => fetchPrayerTimes({ city, country, method }), formatMessage: (data) => formatPrayerTimesMessage(data, { city }) };
+  return {
+    start,
+    stop,
+    status,
+    sendNow,
+    fetchPrayerTimes: () => fetchPrayerTimes({ city, country, method }),
+    formatMessage: (data) => formatPrayerTimesMessage(data, { city }),
+    formatReminder: (data, prayerKey) => formatPrayerReminder(data, { city, prayerKey }),
+  };
 }

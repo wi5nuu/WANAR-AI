@@ -495,7 +495,7 @@ function AlarmCard({ alarms, busy, act }) {
   );
 }
 
-/** Jadwal waktu shalat — status dan pengiriman otomatis ke Telegram. */
+/** Jadwal waktu shalat — 5 pengingat harian ke Telegram. */
 function PrayerTimesCard({ prayerTimes, busy, act }) {
   const pt = prayerTimes || {};
   const [now, setNow] = useState(Date.now());
@@ -505,38 +505,61 @@ function PrayerTimesCard({ prayerTimes, busy, act }) {
   }, []);
 
   const isJumat = pt.weekday === 'Jumat';
-  const nextSubuh = pt.city && pt.schedule ? `tiap hari ${pt.schedule.replace('daily@', '')} WIB` : '—';
   const lastSent = pt.lastRunAt ? ago(pt.lastRunAt) : 'belum pernah';
   const modeLabel = pt.live ? 'live' : pt.configured ? 'simulasi' : 'tidak dikonfigurasi';
   const ok = pt.enabled && pt.live && pt.running;
-  const label = isJumat ? 'Jumat' : 'Subuh';
-  const emoji = isJumat ? '🕌' : '🌅';
-  const desc = isJumat ? 'ganti Dzuhur pada hari Jumat' : 'sebelum fajar · jadwal dari Aladhan API';
+
+  const prayerList = [
+    { key: 'Fajr', label: 'Subuh', emoji: '🌅' },
+    { key: 'Dhuhr', label: isJumat ? 'Jumat' : 'Dzuhur', emoji: isJumat ? '🕌' : '☀️' },
+    { key: 'Asr', label: 'Ashar', emoji: '🏟️' },
+    { key: 'Maghrib', label: 'Maghrib', emoji: '🌇' },
+    { key: 'Isha', label: 'Isya', emoji: '🌙' },
+  ];
+
+  const upcoming = (pt.upcoming || []).map((u) => {
+    const item = prayerList.find((p) => p.label === u.prayer || p.key === (u.prayer === 'Jumat' ? 'Dhuhr' : u.prayer));
+    return { ...u, label: item?.label || u.prayer, emoji: item?.emoji || '🕌' };
+  });
 
   return (
     <div className={`au-card cc-gap ${ok ? '' : 'cc-warn'}`}>
       <h3>
         <span className="cc-title">🕌 Waktu Shalat — {pt.city || 'Bekasi'}</span>
-        <small>{pt.country || 'Indonesia'} · {nextSubuh} · status: {modeLabel}</small>
+        <small>{pt.country || 'Indonesia'} · {pt.weekday || '—'} · status: {modeLabel}</small>
       </h3>
-      <div className="au-list">
-        <div className="wl-row">
-          <div className="grow cc-ellipsis">
-            <div className="t">{emoji} {label}</div>
-            <div className="au-muted">{desc}</div>
-          </div>
-          <div className={`au-chip ${ok ? 'ok' : 'warn'}`}>{ok ? 'aktif' : 'tidak aktif'}</div>
+
+      {upcoming.length > 0 ? (
+        <div className="au-list">
+          {upcoming.map((u) => {
+            const remaining = u.at - now;
+            const isDue = remaining <= 0 && remaining > -60_000;
+            const labelTxt = remaining > 0 ? fmtCountdown(remaining) : 'Sekarang';
+            return (
+              <div key={u.prayer} className="wl-row">
+                <div className="grow cc-ellipsis">
+                  <div className="t">{u.emoji} {u.label} — {u.time} WIB</div>
+                  <div className="au-muted">{remaining > 0 ? `lemas ${labelTxt}` : 'waktu shalat telah tiba'}</div>
+                </div>
+                <div className={`au-chip ${isDue ? 'warn' : 'ok'}`}>{isDue ? 'SIAP' : 'menunggu'}</div>
+              </div>
+            );
+          })}
         </div>
-        <div className="wl-row">
-          <div className="grow cc-ellipsis">
-            <div className="t">Kirim ke Telegram</div>
-            <div className="au-muted">chat ID {pt.chatId ? String(pt.chatId).slice(-4) : '–'} · terakhir {lastSent}</div>
-          </div>
-          <div className="au-actions">
-            <button className="au-btn sm" disabled={!!busy || !pt.live} onClick={() => act('pt', () => fetch('/api/automation/prayer-times/send', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Automation-Token': getAutomationToken() || '' }, body: JSON.stringify({ city: pt.city || 'Bekasi' }) }).then(async (r) => { if (!r.ok) throw new Error(await r.text()); return r.json(); }), 'Jadwal shalat dikirim ke Telegram')}>Kirim sekarang</button>
-          </div>
+      ) : (
+        <div className="au-muted">Belum ada jadwal shalat untuk hari ini.</div>
+      )}
+
+      <div className="wl-row">
+        <div className="grow cc-ellipsis">
+          <div className="t">Kirim ke Telegram</div>
+          <div className="au-muted">chat ID {pt.chatId ? String(pt.chatId).slice(-4) : '–'} · terakhir {lastSent}</div>
+        </div>
+        <div className="au-actions">
+          <button className="au-btn sm" disabled={!!busy || !pt.live} onClick={() => act('pt', () => fetch('/api/automation/prayer-times/send', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Automation-Token': getAutomationToken() || '' }, body: JSON.stringify({ city: pt.city || 'Bekasi' }) }).then(async (r) => { if (!r.ok) throw new Error(await r.text()); return r.json(); }), 'Jadwal shalat dikirim ke Telegram')}>Kirim sekarang</button>
         </div>
       </div>
+
       {!ok && (
         <div className="au-muted">Aktifkan PRAYER_TIMES_ENABLED=true dan TELEGRAM_BOT_TOKEN di .env server, lalu restart layanan.</div>
       )}
