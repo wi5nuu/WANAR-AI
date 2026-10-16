@@ -62,6 +62,8 @@ import { createIntelService } from './command-center/intel.js';
 import { createNightlyLearning } from './command-center/nightly-learning.js';
 import { createCompanion } from './companion.js';
 import { createMarket } from './market/service.js';
+import { createCareer } from './career/service.js';
+import { createCareerRouter } from './career/routes.js';
 import { createCommandCenterRouter } from './command-center/routes.js';
 import { createOwnerContext, createTelegramTranscript, createWhatsAppTranscript } from './memory/owner-context.js';
 import { makeAssistantResponder } from './worklog/assistant.js';
@@ -177,6 +179,20 @@ const market = createMarket({
     }
     : null,
 });
+// Career radar: remote-job sources -> honest scoring against the owner's profile -> Telegram digest,
+// plus an activity feed so the owner can see what the agent has been doing.
+const career = createCareer({
+  db: sqliteDb,
+  getProfile: () => db.getProfile(),
+  chatId: () => String(process.env.TELEGRAM_AI_CHAT_IDS || '').split(',')[0]?.trim() || null,
+  notify: automation.channels.has('telegram')
+    ? async (chatId, text) => {
+      const tg = automation.channels.get('telegram');
+      if (tg.mode !== 'live') throw new Error('Telegram belum dikonfigurasi');
+      await tg.send({ to: chatId, text });
+    }
+    : null,
+});
 // "YA" flow: risky chat requests (kirim kampanye) are proposed first; they run
 // through the tools registry + action gate only after the owner replies YA.
 const chatActions = createChatActions({ automation, executeTool, mintApproval: actionGate.mintApproval });
@@ -187,6 +203,7 @@ automation.inbox.responder = makeAssistantResponder({
   briefing,
   companion,
   market,
+  career,
   learning,
   chatActions,
   context: ({ text, chatId }) => ownerContext({ text, excludeSessionId: chatId ? telegramTranscript.sessionId(chatId) : null }),
@@ -206,6 +223,7 @@ automation.whatsappInbox.responder = makeAssistantResponder({
   briefing,
   companion,
   market,
+  career,
   learning,
   chatActions,
   context: ({ text, chatId }) => ownerContext({ text, excludeSessionId: chatId ? whatsappTranscript.sessionId(chatId) : null }),
@@ -1113,6 +1131,7 @@ app.use('/api/automation', createAutomationRouter({
 app.use('/api/worklog', createWorklogRouter({ worklog, rateLimiters }));
 app.use('/api/email-desk', createEmailDeskRouter({ emailDesk, rateLimiters }));
 app.use('/api/command-center', createCommandCenterRouter({ worklog, emailDesk, automation, briefing, intel, learning, market, prayerTimes, rateLimiters }));
+app.use('/api/career', createCareerRouter({ career }));
 app.use('/api/system-map', createSystemMapRouter({ aiManager, db, config, automation, emailDesk, companion, briefing, envFile: path.join(process.cwd(), '.env'), tools: () => getToolDefinitions(), rateLimiters }));
 
 app.get('/api/sessions/:id/messages', (req, res) => {
@@ -2943,6 +2962,7 @@ async function startServer() {
       console.log('Worklog    : jurnal kerja aktif (laporan Telegram terjadwal)');
       emailDesk.desk.start(); // follow-up checks
       if (market.start()) console.log('Pasar      : alarm harga aktif (cek tiap menit)');
+      if (career.start()) console.log('Karir      : radar lowongan remote aktif (laporan ke Telegram)');
       if (companion.start()) console.log('Peka       : sapaan peduli aktif (maks ' + companion.config.maxPerDay + '/hari, /peka untuk mengatur)');
       if (learning.start()) console.log('Belajar    : pembelajaran otomatis tiap 00:00 (pelajaran disuntik ke prompt)');
       if (briefing.start()) console.log('Briefing   : briefing pagi otomatis di hari kerja (/brief kapan saja)');
@@ -2957,7 +2977,7 @@ async function startServer() {
   }
   for (const sig of ['SIGINT', 'SIGTERM']) {
     process.once(sig, () => {
-      try { automation.scheduler.stop(); automation.inbox.stop(); prayerTimes.stop(); worklog.service.stop(); emailDesk.watcher.stop(); emailDesk.desk.stop(); briefing.stop(); learning.stop(); companion.stop(); market.stop(); automation.channels.closeAll(); } catch { /* ignore */ }
+      try { automation.scheduler.stop(); automation.inbox.stop(); prayerTimes.stop(); worklog.service.stop(); emailDesk.watcher.stop(); emailDesk.desk.stop(); briefing.stop(); learning.stop(); companion.stop(); market.stop(); career.stop(); automation.channels.closeAll(); } catch { /* ignore */ }
       process.exit(0);
     });
   }

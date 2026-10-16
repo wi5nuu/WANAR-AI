@@ -16,6 +16,7 @@ import { hardRefresh } from '../lib/refresh.js';
 const APPS_MENU = [
   { group: 'Kerja', items: [
     { path: '/command-center', label: 'Pusat Kendali', desc: 'Semua aktivitas agent, realtime', Icon: IconRadar },
+    { path: '/agent-center', label: 'Pusat Agen', desc: 'Radar lowongan & jejak kerja agent', Icon: IconBriefcase },
     { path: '/system-map', label: 'Peta Sistem', desc: 'Alur pesan, model & kuota — 3D realtime', Icon: IconGalaxy },
     { path: '/worklog', label: 'Jurnal Kerja', desc: 'Jam kerja, tugas, keuangan, laporan', Icon: IconWorklog },
     { path: '/automation', label: 'Otomasi', desc: 'Jadwal & kirim pesan multi-kanal', Icon: IconBolt },

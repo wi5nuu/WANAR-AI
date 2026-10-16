@@ -27,6 +27,7 @@ import { EMAIL_ACTION_TYPES, emailPromptLines, quickContact, quickEmailReply, qu
 import { traceStep } from '../observability/trace-hub.js';
 import { quickAlarm } from './quick-alarm.js';
 import { quickMarket } from '../market/quick.js';
+import { quickCareer } from '../career/quick.js';
 
 const MAX_ACTIONS = 8;
 const ACTION_TYPES = ['reminder', 'cancel_reminder', 'task', 'finance', 'clock', 'schedule', 'report', ...EMAIL_ACTION_TYPES];
@@ -277,7 +278,7 @@ export function fallbackPlan(text, now = Date.now()) {
  * Builds the responder used for the owner's plain Telegram messages.
  * Same signature as makeChatResponder, so it is a drop-in replacement.
  */
-export function makeAssistantResponder({ aiManager, worklog, emailDesk = null, briefing = null, companion = null, market = null, learning = null, chatActions = null, context = null, ownerName = process.env.OWNER_NAME || 'Wisnu Alfian Nur Ashar' }) {
+export function makeAssistantResponder({ aiManager, worklog, emailDesk = null, briefing = null, companion = null, market = null, career = null, learning = null, chatActions = null, context = null, ownerName = process.env.OWNER_NAME || 'Wisnu Alfian Nur Ashar' }) {
   const first = String(ownerName).split(/\s+/)[0];
   // The assistant is the owner's subordinate: it addresses him respectfully by name.
   const call = String(process.env.OWNER_CALL || '').trim() || `Mas ${first}`;
@@ -302,6 +303,12 @@ export function makeAssistantResponder({ aiManager, worklog, emailDesk = null, b
       let marketReply = null;
       try { marketReply = await quickMarket(market, text); } catch { marketReply = null; }
       if (marketReply) { traceStep('intent', { name: 'market', detail: 'Info pasar/alarm harga/simulasi — dijalankan kode dari data nyata, tanpa AI', model: false }); return marketReply; }
+    }
+    // Career radar: "lowongan baru", "pindai lowongan sekarang", "status lamaran" — from the radar's own data.
+    if (career) {
+      let careerReply = null;
+      try { careerReply = await quickCareer(career, text); } catch { careerReply = null; }
+      if (careerReply) { traceStep('intent', { name: 'career', detail: 'Radar lowongan/status lamaran — dijawab kode dari data radar, tanpa AI', model: false }); return careerReply; }
     }
     // "agenda hari ini" / "briefing": answered from data, instantly and for free.
     if (briefing && BRIEFING_ASK.test(String(text || '').trim())) {
