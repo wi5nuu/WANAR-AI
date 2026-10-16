@@ -51,6 +51,7 @@ import { getPoolStats } from './providers/http-client.js';
 import sqliteDb from './database.js';
 import { initAutomation } from './automation/runtime.js';
 import { createAutomationRouter } from './automation/routes.js';
+import { createPrayerTimesService } from './automation/prayer-times.js';
 import { initWorklog } from './worklog/index.js';
 import { createWorklogRouter } from './worklog/routes.js';
 import { initEmailDesk } from './email-desk/index.js';
@@ -100,6 +101,12 @@ aiManager.onFailure = (f) => {
 
 // Automation (scheduler + bulk email). Constructed here, started in startServer().
 const automation = initAutomation({ db: sqliteDb, aiManager });
+
+// Waktu shalat otomatis (Bekasi) — kirim ke Telegram setiap hari sebelum Subuh.
+const prayerTimes = createPrayerTimesService({
+  channel: automation.channels.get('telegram'),
+  env: process.env,
+});
 
 // Work journal (jam kerja, tugas, keuangan, laporan, evaluasi). Shares the
 // Telegram bot: adds owner-only commands and gives the AI chat today's context.
@@ -2906,6 +2913,7 @@ async function startServer() {
       if (companion.start()) console.log('Peka       : sapaan peduli aktif (maks ' + companion.config.maxPerDay + '/hari, /peka untuk mengatur)');
       if (learning.start()) console.log('Belajar    : pembelajaran otomatis tiap 00:00 (pelajaran disuntik ke prompt)');
       if (briefing.start()) console.log('Briefing   : briefing pagi otomatis di hari kerja (/brief kapan saja)');
+      if (prayerTimes.start()) console.log('Waktu Shalat: jadwal Bekasi aktif (' + prayerTimes.status().schedule + ' WIB)');
       console.log(emailDesk.watcher.start()
         ? 'Email Desk : memantau balasan email (IMAP IDLE, realtime)'
         : 'Email Desk : aktif tanpa pemantau balasan (IMAP_* belum diatur)');
@@ -2916,7 +2924,7 @@ async function startServer() {
   }
   for (const sig of ['SIGINT', 'SIGTERM']) {
     process.once(sig, () => {
-      try { automation.scheduler.stop(); automation.inbox.stop(); worklog.service.stop(); emailDesk.watcher.stop(); emailDesk.desk.stop(); briefing.stop(); learning.stop(); companion.stop(); market.stop(); automation.channels.closeAll(); } catch { /* ignore */ }
+      try { automation.scheduler.stop(); automation.inbox.stop(); prayerTimes.stop(); worklog.service.stop(); emailDesk.watcher.stop(); emailDesk.desk.stop(); briefing.stop(); learning.stop(); companion.stop(); market.stop(); automation.channels.closeAll(); } catch { /* ignore */ }
       process.exit(0);
     });
   }

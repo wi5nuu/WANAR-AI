@@ -39,6 +39,10 @@ import { CampaignError, startOfLocalDay } from './campaigns.js';
 import { JobError, JOB_TYPES } from './scheduler.js';
 import { MailError } from './mailer.js';
 import { AttachmentError } from './attachments.js';
+import {
+  isPrayerTimesEnabled, defaultChatId, fetchPrayerTimes, formatPrayerTimesMessage,
+  sendPrayerTimesToTelegram, createPrayerTimesService,
+} from './prayer-times.js';
 
 /**
  * busboy decodes multipart filenames as latin1; browsers send UTF-8. Undo that
@@ -556,6 +560,67 @@ export function createAutomationRouter({ automation, rateLimiters = {}, actorOf 
     if (!verified.ok) return res.json({ success: false, mode: 'live', error: verified.error, kind: verified.kind });
     const r = await engine.sendTest({ to });
     res.json({ success: true, mode: 'live', messageId: r.messageId });
+  }));
+
+  // ------------------------------------------------------- waktu shalat (Bekasi)
+
+  router.get('/prayer-times', wrap(async (req, res) => {
+    const { city = 'Bekasi', country = 'Indonesia', method = 2 } = req.query;
+    try {
+      const data = await fetchPrayerTimes({ city, country, method });
+      res.json({ success: true, city, data });
+    } catch (err) {
+      if (err instanceof MailError) {
+        return res.status(err.code === 'TRANSIENT' ? 502 : 400).json({ success: false, error: err.message });
+      }
+      throw err;
+    }
+  }));
+
+  router.get('/prayer-times/format', wrap((req, res) => {
+    const { city = 'Bekasi' } = req.query;
+    const data = req.body?.data;
+    if (!data || !data.timings) {
+      return res.status(400).json({ success: false, error: 'Field "data" (hasil /prayer-times) wajib diisi' });
+    }
+    try {
+      const text = formatPrayerTimesMessage(data, { city });
+      res.json({ success: true, text });
+    } catch (err) {
+      if (err instanceof MailError) return res.status(400).json({ success: false, error: err.message });
+      throw err;
+    }
+  }));
+
+  router.post('/prayer-times/send', strict, wrap(async (req, res) => {
+    const { chatId, city = 'Bekasi', country = 'Indonesia', method = 2 } = req.body || {};
+    const adapter = automation.channels.get('telegram');
+    if (!adapter) throw new MailError('Channel Telegram tidak tersedia', 'INVALID');
+    const target = String(chatId || defaultChatId() || '').trim();
+    if (!target) throw new MailError('Chat ID tujuan belum diisi. Isi PRAYER_TIMES_CHAT_ID atau TELEGRAM_AI_CHAT_IDS di .env.', 'INVALID');
+    try {
+      const result = await sendPrayerTimesToTelegram({ channel: adapter, chatId: target, city, country, method });
+      res.json({ success: true, chatId: target, city, result: { messageId: result.messageId, parts: result.parts, dryRun: result.dryRun } });
+    } catch (err) {
+      if (err instanceof MailError) {
+        return res.status(err.code === 'TRANSIENT' ? 502 : 400).json({ success: false, error: err.message });
+      }
+      throw err;
+    }
+  }));
+
+  router.get('/prayer-times/status', wrap((req, res) => {
+    const adapter = automation.channels.get('telegram');
+    res.json({
+      success: true,
+      enabled: isPrayerTimesEnabled(),
+      city: 'Bekasi',
+      country: 'Indonesia',
+      method: 2,
+      telegramConfigured: Boolean(adapter?.configured),
+      telegramLive: Boolean(adapter?.mode === 'live'),
+      defaultChatId: defaultChatId() || null,
+    });
   }));
 
   // ------------------------------------------------------- AI compose
