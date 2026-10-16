@@ -41,7 +41,7 @@ import { MailError } from './mailer.js';
 import { AttachmentError } from './attachments.js';
 import {
   isPrayerTimesEnabled, defaultChatId, fetchPrayerTimes, formatPrayerTimesMessage,
-  sendPrayerTimesToTelegram, createPrayerTimesService,
+  sendPrayerReminderToTelegram, createPrayerTimesService,
 } from './prayer-times.js';
 
 /**
@@ -599,7 +599,7 @@ export function createAutomationRouter({ automation, rateLimiters = {}, actorOf 
     const target = String(chatId || defaultChatId() || '').trim();
     if (!target) throw new MailError('Chat ID tujuan belum diisi. Isi PRAYER_TIMES_CHAT_ID atau TELEGRAM_AI_CHAT_IDS di .env.', 'INVALID');
     try {
-      const result = await sendPrayerTimesToTelegram({ channel: adapter, chatId: target, city, country, method, prayerKey });
+      const result = await sendPrayerReminderToTelegram({ channel: adapter, chatId: target, city, country, method, prayerKey });
       res.json({ success: true, chatId: target, city, prayerKey, result: { messageId: result.messageId, parts: result.parts, dryRun: result.dryRun } });
     } catch (err) {
       if (err instanceof MailError) {
