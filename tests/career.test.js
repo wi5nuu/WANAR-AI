@@ -692,3 +692,32 @@ describe('facts.js (lembar fakta di run time)', () => {
     expect(p.skills).toEqual(expect.arrayContaining(['react', 'laravel', 'cloudflare']));
   });
 });
+
+// --------------------------------------------------------------- peringatan kanal terputus
+
+import { channelWarnings } from '../src/career/health.js';
+
+describe('channelWarnings (setelan yang hilang diam-diam harus terlihat)', () => {
+  const reg = (modes) => ({ has: (id) => id in modes, get: (id) => ({ mode: modes[id] }) });
+
+  it('semua tersambung: tidak ada baris', () => {
+    expect(channelWarnings(reg({ email: 'live', telegram: 'live' }))).toEqual([]);
+  });
+
+  it('email dry-run: peringatan jelas dengan akibatnya; Telegram sehat tidak disebut', () => {
+    const w = channelWarnings(reg({ email: 'dry-run', telegram: 'live' }));
+    expect(w).toHaveLength(1);
+    expect(w[0]).toMatch(/PERHATIAN: Email belum tersambung \(mode dry-run\).*tidak terkirim/);
+  });
+
+  it('kanal yang tidak terdaftar atau registri rusak tidak melempar galat', () => {
+    expect(channelWarnings(reg({}))).toEqual([]);
+    expect(channelWarnings({ has: () => { throw new Error('boom'); }, get: () => null })).toEqual([]);
+  });
+
+  it('masuk ke laporan harian lewat sections', async () => {
+    const { svc } = makeService({ jobs: [], notify: async () => {}, now: Date.parse('2026-10-16T12:00:00Z') });
+    svc.sections.push(() => channelWarnings(reg({ email: 'dry-run' })));
+    expect(svc.reportText().text).toContain('PERHATIAN: Email belum tersambung');
+  });
+});
