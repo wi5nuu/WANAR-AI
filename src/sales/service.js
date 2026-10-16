@@ -14,13 +14,14 @@
 import { EventEmitter } from 'node:events';
 import { qualify } from './qualify.js';
 import { decide, buildReply, buildFollowUp } from './reply.js';
+import { converse } from './intent.js';
 import { rupiah } from './catalog.js';
 import { SalesStore } from './store.js';
 import { inQuietHours } from '../career/service.js';
 
 const MAX_TEXT = 2000;
-const FLOOD_PER_HOUR = 6;
-const MAX_AUTO_REPLIES = 3;
+const FLOOD_PER_HOUR = 12; // a real sales chat can run to a dozen messages an hour; spam is caught by content, this only stops floods
+const MAX_AUTO_REPLIES = 6; // a real sale needs back-and-forth; the engine hands over at the decisive moments long before this
 const HOT_RENOTIFY_MS = 6 * 3_600_000;
 const TICK_MS = 5 * 60_000;
 
@@ -143,6 +144,14 @@ export class SalesService extends EventEmitter {
     const tooLong = lead.auto_replies >= MAX_AUTO_REPLIES;
     if (tooLong) d = { ...d, escalate: true, reasons: [...d.reasons, 'percakapan sudah panjang, perlu Wisnu'] };
 
+    // After the first full answer the conversation engine talks: it reads what the person just wrote and
+    // either answers from the owner's catalog or hands over at the moments that decide a sale.
+    let conv = null;
+    if (!firstAnswer && !tooLong) {
+      conv = converse({ text: t, name: lead.name || '', service: q.service, catalog, facts: this.getFacts(), repliesSoFar: lead.auto_replies || 0 });
+      if (conv.escalate) d = { ...d, escalate: true, hot: d.hot || conv.hot, reasons: [...new Set([...d.reasons, ...conv.reasons])] };
+    }
+
     const patch = {
       service_id: q.service?.id || lead.service_id || null, need,
       budget_min: q.budget?.min ?? lead.budget_min ?? null, budget_max: q.budget?.max ?? lead.budget_max ?? null,
@@ -157,7 +166,7 @@ export class SalesService extends EventEmitter {
     if (!tooLong) {
       reply = firstAnswer
         ? buildReply(q, catalog, this.getFacts(), { name: lead.name || '', escalate: d.escalate, reasons: d.reasons })
-        : buildFollowUp(q.lang, d.escalate);
+        : (conv ? conv.text : buildFollowUp(q.lang, d.escalate));
     }
     const viaSite = source === 'site';
     const autoSend = Boolean(reply) && (this.autoReply || viaSite);
@@ -166,14 +175,33 @@ export class SalesService extends EventEmitter {
       lead = this.store.updateLead(lead.id, { last_out_at: this.now(), auto_replies: (lead.auto_replies || 0) + 1, status: lead.status === 'new' ? 'contacted' : lead.status });
     }
 
+    // "stop / tidak tertarik": close it, and never write again unless they do. A new message later reopens it.
+    if (conv?.close) lead = this.store.updateLead(lead.id, { status: 'lost', escalated: false });
+    else if (conv && lead.status === 'lost') lead = this.store.updateLead(lead.id, { status: 'contacted' });
+
     this.log({
       agent: 'sales', kind: 'lead', level: d.hot || d.escalate ? 'good' : 'info',
       title: `${created ? 'Prospek baru' : 'Pesan lanjutan'}: ${q.service?.name || 'kebutuhan belum jelas'} - ${lead.name || lead.contact} (${source}, skor ${lead.score})`,
       detail: d.escalate ? `Perlu pemilik: ${d.reasons.join('; ')}` : null, ref: String(lead.id),
     });
-    await this._maybeNotifyOwner(lead, d);
+    // A prospect ready to start, or haggling, or asking for a call is the moment that decides the sale: tell the owner at once.
+    await this._maybeNotifyOwner(lead, d, { force: Boolean(conv?.hot) });
     this.emit('lead', { leadId: lead.id, created });
     return { leadId: lead.id, reply, autoSend, escalate: d.escalate, reasons: d.reasons, hot: d.hot, spam: false, rateLimited: false, created };
+  }
+
+  /**
+   * "What should I answer?": the same conversation engine, for a message the owner received on a channel
+   * the agent cannot see (Freelancer chat, a personal WhatsApp). Pure: it records nothing and sends nothing.
+   */
+  suggest({ text, serviceId = null, name = '', repliesSoFar = 0 } = {}) {
+    const t = String(text || '').trim().slice(0, MAX_TEXT);
+    if (!t) throw new Error('pesan kosong');
+    const catalog = this.store.catalog();
+    const q = qualify(t, catalog.services);
+    const service = catalog.services.find((s) => s.id === serviceId) || q.service;
+    const r = converse({ text: t, name, service, catalog, facts: this.getFacts(), repliesSoFar });
+    return { ...r, service: service ? { id: service.id, name: service.name } : null, budget: q.budget, spam: q.spam };
   }
 
   // ------------------------------------------------------------ owner side

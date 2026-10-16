@@ -27,6 +27,14 @@ const APPROVE = /^\s*setujui\s+harga(?:\s+usulan)?(\s+(?:dan|beserta|serta)\s+sy
 const SETPRICE = /^\s*(?:atur|set|ubah)\s+harga\s+([a-z]+)\s+(.+?)\s*(?:-|–|sampai|s\/d|hingga)\s*(.+?)(?:\s+per\s+(bulan|proyek|jam|halaman))?\s*[.!?]*\s*$/i;
 const SERVICES = /^\s*(?:daftar\s+layanan|layanan\s+saya|katalog\s+layanan|harga\s+layanan)\s*[.!?]*\s*$/i;
 
+// Client radar: "peluang", "peluang 12", "peluang 12 dihubungi", "saran balasan: <pesan klien>"
+const P_LIST = /^\s*peluang(?:\s+(?:baru|klien|hari\s+ini|freelancer|lokal))?\s*[.!?]*\s*$/i;
+const P_DETAIL = /^\s*peluang\s+#?(\d{1,6})\s*[.!?]*\s*$/i;
+const P_SET = /^\s*peluang\s+#?(\d{1,6})\s+(dihubungi|balas|dibalas|nego|menang|deal|kalah|lewati|skip)(?:\s+(.{1,40}))?\s*[.!?]*\s*$/i;
+const SUGGEST = /^\s*saran\s+balasan\s*[:,-]\s*([\s\S]{3,1200})$/i;
+const P_STATUS = { dihubungi: 'contacted', balas: 'replied', dibalas: 'replied', nego: 'negotiating', menang: 'won', deal: 'won', kalah: 'lost', lewati: 'skipped', skip: 'skipped' };
+const P_STATUS_ID = { new: 'baru', contacted: 'sudah dihubungi', replied: 'sudah membalas', negotiating: 'negosiasi', won: 'menang', lost: 'kalah', skipped: 'dilewati' };
+
 const STATUS_WORD = { dihubungi: 'contacted', kualifikasi: 'qualified', penawaran: 'proposal', nego: 'negotiating', menang: 'won', deal: 'won', kalah: 'lost', batal: 'lost', spam: 'spam' };
 const STATUS_ID = { new: 'baru', contacted: 'sudah dihubungi', qualified: 'terkualifikasi', proposal: 'penawaran', negotiating: 'negosiasi', won: 'menang', lost: 'kalah', spam: 'spam' };
 const ALIAS = { landing: 'landing', profil: 'landing', company: 'landing', toko: 'ecommerce', ecommerce: 'ecommerce', web: 'webapp', webapp: 'webapp', aplikasi: 'webapp', sistem: 'webapp',
@@ -60,6 +68,64 @@ export async function quickSales(sales, text, { now = Date.now() } = {}) {
     lines.push('', `Syarat pembayaran: ${c.terms.payment}, revisi ${c.terms.revisions}x (${c.terms.approved ? 'disetujui' : 'belum disetujui'}).`);
     if (c.services.some((s) => !s.price.approved)) lines.push('Ketik "setujui harga" bila kisarannya sudah pas, atau "atur harga webapp 10jt - 30jt".');
     return lines.join('\n');
+  }
+
+  // ---- client radar (only when it is switched on)
+  const pr = sales.prospects;
+  if (pr) {
+    let pm = SUGGEST.exec(t);
+    if (pm) {
+      try {
+        const s = sales.suggest({ text: pm[1] });
+        const head = `Saran balasan (maksud: ${s.intent}${s.service ? `, layanan: ${s.service.name}` : ''}):`;
+        const tail = s.escalate ? `\n\nCatatan: ${s.reasons.join('; ')}. Bagian ini sebaiknya Mas sendiri yang menjawab.` : (s.close ? '\n\nCatatan: klien menolak; jangan dikejar lagi.' : '');
+        return `${head}\n\n${s.text}${tail}`;
+      } catch (e) { return `Tidak bisa menyusun saran: ${e.message}.`; }
+    }
+
+    pm = P_SET.exec(t);
+    if (pm) {
+      const status = P_STATUS[pm[2].toLowerCase()];
+      const value = status === 'won' && pm[3] ? parseAmount(pm[3].replace(/^bernilai\s+|^senilai\s+/i, '')) : null;
+      try {
+        const p = pr.setStatus(Number(pm[1]), status, { value });
+        return `Peluang #${p.id} (${p.title}) sekarang: ${P_STATUS_ID[p.status]}${p.value_idr ? `, nilai ${rupiah(p.value_idr)}` : ''}.${status === 'contacted' ? ' Saya ingatkan untuk menindaklanjuti dua hari lagi bila belum ada balasan.' : ''}`;
+      } catch (e) { return `Tidak bisa mengubah: ${e.message}.`; }
+    }
+
+    pm = P_DETAIL.exec(t);
+    if (pm) {
+      const d = pr.draft(Number(pm[1]));
+      if (!d) return `Peluang #${pm[1]} tidak ditemukan.`;
+      const p = d.prospect;
+      const out = [];
+      if (d.kind === 'local') {
+        out.push(`Peluang #${p.id}: ${p.title} (${p.description.split(' · ')[0] || p.category}), skor ${p.score}`);
+        if (p.location) out.push(`Alamat: ${p.location}`);
+        out.push(`Telepon: ${p.contact ? `+${p.contact}` : '-'}`, '');
+        out.push(d.link ? `Buka WhatsApp dengan pesan terisi: ${d.link}` : 'Tidak ada nomor ponsel, hubungi lewat telepon.', '');
+        out.push('Pesan:', d.text, '', `Setelah terkirim, balas: peluang ${p.id} dihubungi`);
+        return out.join('\n');
+      }
+      out.push(`Peluang #${p.id} (Freelancer.com): ${p.title}`);
+      out.push(`${p.bids} penawar | anggaran ${p.budget_max ? `${p.currency} ${p.budget_min}-${p.budget_max}${p.hourly ? '/jam' : ''}` : 'tidak dicantumkan'} | skor ${p.score}`);
+      out.push(`Buka: ${p.url}`, '');
+      if (d.warnings.length) out.push(...d.warnings.map((w) => `Catatan: ${w}`), '');
+      if (d.bid) out.push(`Saran penawaran: ${p.currency} ${d.bid.amount} (${d.bid.note})`, '');
+      out.push('Pesan penawaran:', d.text);
+      return out.join('\n');
+    }
+
+    if (P_LIST.test(t)) {
+      const local = pr.store.list({ kind: 'local', verdict: 'good', status: 'new', limit: 4 }).prospects;
+      const market = pr.store.list({ kind: 'marketplace', verdict: 'good', status: 'new', limit: 4 }).prospects;
+      if (!local.length && !market.length) return 'Belum ada peluang klien yang cocok. Radar memindai Freelancer.com tiap 6 jam dan usaha lokal tiap 3 hari.';
+      const l = ['Peluang klien yang cocok:'];
+      if (local.length) l.push('', 'Usaha lokal tanpa website:', ...local.map((p) => `#${p.id} [${p.score}] ${clip(p.title, 40)} (${p.description.split(' · ')[0] || p.category})`));
+      if (market.length) l.push('', 'Freelancer.com:', ...market.map((p) => `#${p.id} [${p.score}] ${clip(p.title, 46)} (${p.bids} penawar)`));
+      l.push('', 'Ketik "peluang <nomor>" untuk pesan siap kirim.');
+      return l.join('\n');
+    }
   }
 
   let m = SETPRICE.exec(t);

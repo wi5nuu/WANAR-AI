@@ -15,6 +15,7 @@ import ActivityFeed from './agent/ActivityFeed.jsx';
 import JobsTab from './agent/JobsTab.jsx';
 import LeadsTab from './agent/LeadsTab.jsx';
 import ServicesTab from './agent/ServicesTab.jsx';
+import ProspectsTab from './agent/ProspectsTab.jsx';
 import AboutTab from './agent/AboutTab.jsx';
 import './automation.css';
 import './agent-center.css';
@@ -23,7 +24,7 @@ const FEED_MS = 4000;
 const SLOW_MS = 20000;
 const TABS = [
   ['overview', 'Ringkasan'], ['feed', 'Aktivitas'], ['jobs', 'Lowongan'],
-  ['leads', 'Klien'], ['services', 'Layanan'], ['about', 'Cara kerja'],
+  ['leads', 'Klien'], ['prospects', 'Peluang'], ['services', 'Layanan'], ['about', 'Cara kerja'],
 ];
 const TAB_KEY = 'agentCenterTab';
 
@@ -106,7 +107,7 @@ export default function AgentCenter() {
   const stalled = report?.facts?.stalled;
   const live = status?.running ? 'run' : stalled ? 'bad' : status?.enabled === false ? 'off' : 'ok';
   const liveText = { run: 'Sedang memindai…', bad: 'Radar berhenti', off: 'Radar dimatikan', ok: 'Aktif terus' }[live];
-  const counts = { jobs: status?.apply || 0, leads: salesSum?.stats?.needsOwner || 0 };
+  const counts = { jobs: status?.apply || 0, leads: salesSum?.stats?.needsOwner || 0, prospects: salesSum?.prospects?.dueFollowUps || 0 };
 
   return (
     <DashboardLayout>
@@ -148,6 +149,7 @@ export default function AgentCenter() {
           {tab === 'feed' && <ActivityFeed items={feed} onMore={more} canMore={feed.length >= Math.min(feedLimit, 300) && feedLimit < 300} />}
           {tab === 'jobs' && <JobsTab status={status} onChanged={refreshAll} setError={fail} />}
           {tab === 'leads' && <LeadsTab summary={salesSum} goto={go} onChanged={refreshAll} setError={fail} />}
+          {tab === 'prospects' && <ProspectsTab summary={salesSum} onChanged={refreshAll} setError={fail} />}
           {tab === 'services' && <ServicesTab onChanged={refreshAll} setError={fail} />}
           {tab === 'about' && <AboutTab intervalHours={status?.intervalHours} />}
         </main>

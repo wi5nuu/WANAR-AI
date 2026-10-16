@@ -23,6 +23,7 @@ import express from 'express';
 import { createAccessGuard } from '../automation/routes.js';
 import { verifyKirimSignature } from '../automation/whatsapp-inbox.js';
 import { LEAD_STATUSES } from './store.js';
+import { PROSPECT_STATUSES } from './prospects/service.js';
 
 export function createSalesRouter({ sales, env = process.env }) {
   const router = express.Router();
@@ -32,7 +33,7 @@ export function createSalesRouter({ sales, env = process.env }) {
   router.get('/summary', (_req, res) => {
     const cat = sales.catalog();
     res.json({
-      stats: sales.store.stats(), autoReply: sales.autoReply,
+      stats: sales.store.stats(), autoReply: sales.autoReply, prospects: sales.prospects ? sales.prospects.store.stats() : null,
       catalog: { services: cat.services.length, pricesApproved: cat.services.filter((s) => s.price.approved).length, termsApproved: Boolean(cat.terms.approved) },
     });
   });
@@ -57,6 +58,42 @@ export function createSalesRouter({ sales, env = process.env }) {
 
   router.post('/leads/:id/reply', async (req, res) => {
     try { res.json({ ok: true, ...(await sales.ownerReply(req.params.id, req.body?.text)) }); } catch (e) { res.status(400).json({ error: e.message }); }
+  });
+
+  // "What should I answer?" for a client message received somewhere the agent cannot see.
+  router.post('/suggest', (req, res) => {
+    try { res.json(sales.suggest({ text: req.body?.text, serviceId: req.body?.serviceId || null, name: String(req.body?.name || '').slice(0, 60), repliesSoFar: Number(req.body?.repliesSoFar) || 0 })); }
+    catch (e) { res.status(400).json({ error: e.message }); }
+  });
+
+  // Client radar: people who may need the owner's services (the first message is always sent by the owner).
+  router.get('/prospects', (req, res) => {
+    const p = sales.prospects; if (!p) return res.status(404).json({ error: 'radar klien tidak aktif' });
+    const { kind, verdict, status, q, limit, offset } = req.query;
+    if (kind && !['local', 'marketplace'].includes(String(kind))) return res.status(400).json({ error: 'kind tidak valid' });
+    if (verdict && !['good', 'maybe', 'skip'].includes(String(verdict))) return res.status(400).json({ error: 'verdict tidak valid' });
+    res.json({ ...p.store.list({ kind: kind ? String(kind) : null, verdict: verdict ? String(verdict) : null, status: status ? String(status) : null, q: q ? String(q).slice(0, 80) : '', limit, offset }), stats: p.store.stats() });
+  });
+
+  router.get('/prospects/:id', (req, res) => {
+    const d = sales.prospects?.draft(req.params.id);
+    if (!d) return res.status(404).json({ error: 'peluang tidak ditemukan' });
+    res.json(d);
+  });
+
+  router.post('/prospects/:id/status', (req, res) => {
+    const p = sales.prospects; if (!p) return res.status(404).json({ error: 'radar klien tidak aktif' });
+    const { status, notes, value } = req.body || {};
+    if (!PROSPECT_STATUSES.includes(status)) return res.status(400).json({ error: `status harus salah satu dari: ${PROSPECT_STATUSES.join(', ')}` });
+    try { res.json({ ok: true, prospect: p.setStatus(req.params.id, status, { notes: notes ? String(notes).slice(0, 500) : null, value: value != null ? Math.max(0, Math.round(Number(value)) || 0) : null }) }); }
+    catch (e) { res.status(404).json({ error: e.message }); }
+  });
+
+  router.post('/prospects/scan', (req, res) => {
+    const p = sales.prospects; if (!p) return res.status(404).json({ error: 'radar klien tidak aktif' });
+    if (p._scanning) return res.status(202).json({ started: false, message: 'Pemindaian sedang berjalan.' });
+    p.scan({ force: req.body?.force === true }).catch(() => {});
+    res.status(202).json({ started: true });
   });
 
   router.get('/catalog', (_req, res) => {

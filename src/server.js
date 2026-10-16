@@ -67,6 +67,7 @@ import { loadFacts } from './career/facts.js';
 import { channelWarnings, inboxWarnings, providerWarnings } from './career/health.js';
 import { createSales } from './sales/service.js';
 import { createSalesRouter, createInquiryRouter } from './sales/routes.js';
+import { createProspects } from './sales/prospects/service.js';
 import { createCareerRouter } from './career/routes.js';
 import { createCommandCenterRouter } from './command-center/routes.js';
 import { createOwnerContext, createTelegramTranscript, createWhatsAppTranscript } from './memory/owner-context.js';
@@ -227,6 +228,24 @@ const sales = createSales({
   },
 });
 career.sections.push(({ since }) => sales.reportLines({ since }));
+// Client radar: people who may need the owner's services (Freelancer.com projects, local businesses without a website).
+// It prepares messages and nudges the OWNER (08:00 batch, 10:00 follow-ups); it never contacts a prospect itself.
+const prospects = createProspects({
+  db: sqliteDb,
+  getCatalog: () => sales.store.catalog(),
+  getFacts: () => loadFacts(process.env.OWNER_FACTS_FILE || path.join(process.cwd(), 'data', 'owner-facts.json')),
+  ownerChat: () => String(process.env.TELEGRAM_AI_CHAT_IDS || '').split(',')[0]?.trim() || null,
+  notify: automation.channels.has('telegram')
+    ? async (chatId, text) => {
+      const tg = automation.channels.get('telegram');
+      if (tg.mode !== 'live') throw new Error('Telegram belum dikonfigurasi');
+      await tg.send({ to: chatId, text });
+    }
+    : null,
+  log: (e) => career.store.log(e),
+});
+sales.prospects = prospects;
+career.sections.push(({ since }) => prospects.reportLines({ since }));
 // A setting lost silently (e-mail keys, bot token) is called out in the daily report instead of staying silent.
 career.sections.push(() => [...channelWarnings(automation.channels), ...inboxWarnings(automation.inbox), ...providerWarnings(aiManager, process.env)]);
 automation.whatsappInbox.sales = sales;
@@ -3005,6 +3024,7 @@ async function startServer() {
       if (market.start()) console.log('Pasar      : alarm harga aktif (cek tiap menit)');
       if (career.start()) console.log('Karir      : radar lowongan remote aktif (laporan ke Telegram)');
       if (sales.start()) console.log('Penjualan  : meja penjualan aktif (' + (sales.autoReply ? 'balas otomatis' : 'balasan hanya draf') + ')');
+      if (prospects.start()) console.log('Klien      : radar peluang aktif (Freelancer.com + usaha lokal)');
       if (companion.start()) console.log('Peka       : sapaan peduli aktif (maks ' + companion.config.maxPerDay + '/hari, /peka untuk mengatur)');
       if (learning.start()) console.log('Belajar    : pembelajaran otomatis tiap 00:00 (pelajaran disuntik ke prompt)');
       if (briefing.start()) console.log('Briefing   : briefing pagi otomatis di hari kerja (/brief kapan saja)');
@@ -3019,7 +3039,7 @@ async function startServer() {
   }
   for (const sig of ['SIGINT', 'SIGTERM']) {
     process.once(sig, () => {
-      try { automation.scheduler.stop(); automation.inbox.stop(); prayerTimes.stop(); worklog.service.stop(); emailDesk.watcher.stop(); emailDesk.desk.stop(); briefing.stop(); learning.stop(); companion.stop(); market.stop(); career.stop(); sales.stop(); automation.channels.closeAll(); } catch { /* ignore */ }
+      try { automation.scheduler.stop(); automation.inbox.stop(); prayerTimes.stop(); worklog.service.stop(); emailDesk.watcher.stop(); emailDesk.desk.stop(); briefing.stop(); learning.stop(); companion.stop(); market.stop(); career.stop(); sales.stop(); prospects.stop(); automation.channels.closeAll(); } catch { /* ignore */ }
       process.exit(0);
     });
   }

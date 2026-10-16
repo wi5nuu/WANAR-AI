@@ -212,7 +212,7 @@ describe('SalesService.intake', () => {
     expect(notify.mock.calls[0][1]).toMatch(/Prospek panas #1/);
     expect(notify.mock.calls[0][1]).toContain('prospek 1');
     // pesan berikutnya dari orang yang sama: lead sama, pemilik tidak dibombardir
-    await svc.intake({ source: 'whatsapp', contact: '+62 812-3456-7890', text: 'Oke, kapan bisa mulai?' });
+    await svc.intake({ source: 'whatsapp', contact: '+62 812-3456-7890', text: 'Oke, terima kasih infonya.' });
     expect(store.listLeads().total).toBe(1);
     expect(notify).toHaveBeenCalledTimes(1);
   });
@@ -227,16 +227,17 @@ describe('SalesService.intake', () => {
     expect(site.autoSend).toBe(true);
   });
 
-  it('balasan lanjutan singkat, dan setelah 3 balasan otomatis berhenti & minta pemilik', async () => {
+  it('balasan lanjutan menjawab isi pesan (bukan basa-basi), dan setelah 6 balasan otomatis berhenti & minta pemilik', async () => {
     const { svc, store } = make({ env: { SALES_AUTO_REPLY: 'on' } });
     const first = await svc.intake({ source: 'whatsapp', contact: '081200000001', text: 'butuh website toko online' });
     expect(first.reply.length).toBeGreaterThan(200);
-    const second = await svc.intake({ source: 'whatsapp', contact: '081200000001', text: 'budget saya 5 juta' });
-    expect(second.reply.length).toBeLessThan(120);
-    await svc.intake({ source: 'whatsapp', contact: '081200000001', text: 'oke' });
-    const fourth = await svc.intake({ source: 'whatsapp', contact: '081200000001', text: 'halo?' });
-    expect(fourth.reply).toBeNull();
-    expect(fourth.escalate).toBe(true);
+    const second = await svc.intake({ source: 'whatsapp', contact: '081200000001', text: 'katalognya sekitar 200 produk dengan pembayaran online' });
+    expect(second.reply).toContain('sudah saya catat');
+    expect(second.reply).toMatch(/\?|mohon dijawab/); // selalu ada langkah berikutnya yang jelas
+    for (let i = 0; i < 4; i += 1) await svc.intake({ source: 'whatsapp', contact: '081200000001', text: `tambahan informasi nomor ${i} tentang desain` });
+    const seventh = await svc.intake({ source: 'whatsapp', contact: '081200000001', text: 'halo?' });
+    expect(seventh.reply).toBeNull();
+    expect(seventh.escalate).toBe(true);
     expect(store.getLead(first.leadId).escalate_reason.join()).toMatch(/percakapan sudah panjang/);
   });
 
@@ -262,7 +263,7 @@ describe('SalesService.intake', () => {
   it('banjir pesan dari satu kontak: dibatasi', async () => {
     const { svc } = make({ env: { SALES_AUTO_REPLY: 'on' } });
     let last;
-    for (let i = 0; i < 9; i += 1) last = await svc.intake({ source: 'whatsapp', contact: '081400000000', text: `butuh website ${i}` });
+    for (let i = 0; i < 15; i += 1) last = await svc.intake({ source: 'whatsapp', contact: '081400000000', text: `butuh website ${i}` });
     expect(last).toMatchObject({ rateLimited: true, reply: null });
   });
 
