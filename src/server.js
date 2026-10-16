@@ -2913,7 +2913,7 @@ async function startServer() {
       if (companion.start()) console.log('Peka       : sapaan peduli aktif (maks ' + companion.config.maxPerDay + '/hari, /peka untuk mengatur)');
       if (learning.start()) console.log('Belajar    : pembelajaran otomatis tiap 00:00 (pelajaran disuntik ke prompt)');
       if (briefing.start()) console.log('Briefing   : briefing pagi otomatis di hari kerja (/brief kapan saja)');
-      if (prayerTimes.start()) console.log('Waktu Shalat: jadwal Bekasi aktif (' + prayerTimes.status().schedule + ' WIB)');
+      if (prayerTimes.start()) console.log('Waktu Shalat: jadwal Bekasi aktif (5x harian WIB)');
       console.log(emailDesk.watcher.start()
         ? 'Email Desk : memantau balasan email (IMAP IDLE, realtime)'
         : 'Email Desk : aktif tanpa pemantau balasan (IMAP_* belum diatur)');
