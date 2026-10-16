@@ -13,7 +13,11 @@
   .\scripts\deploy\deploy.ps1 -Remote legionasharparfum@103.197.189.21
   .\scripts\deploy\deploy.ps1 -Remote user@ip -WithBrowser      # + Chromium
   .\scripts\deploy\deploy.ps1 -Remote user@ip -SetupOnly        # ulang setup saja
-  .\scripts\deploy\deploy.ps1 -Remote user@ip -SkipEnv          # .env di VPS tidak disentuh
+  .\scripts\deploy\deploy.ps1 -Remote user@ip -IncludeEnv       # HANYA pemasangan pertama: unggah .env laptop
+
+  AMAN SECARA BAWAAN: .env dan data/ di VPS TIDAK PERNAH ditimpa kecuali Anda menulis -IncludeEnv / -IncludeData.
+  (Dulu keduanya ikut terunggah kalau lupa -SkipEnv / -FreshData: itulah yang membuat setelan email, polling
+  Telegram, dan penyedia AI utama di server tertimpa isi .env laptop.)
 #>
 param(
   [Parameter(Mandatory = $true)]
@@ -24,8 +28,10 @@ param(
   [int]$Port = 3100,
 
   [switch]$SkipBuild,    # tidak build ulang frontend
-  [switch]$SkipEnv,      # jangan upload .env (rahasia tetap di VPS)
-  [switch]$FreshData,    # jangan upload data/ (DB mulai kosong)
+  [switch]$IncludeEnv,   # SENGAJA unggah .env laptop (menimpa .env VPS!). Bawaan: tidak diunggah
+  [switch]$IncludeData,  # SENGAJA unggah data/ laptop (menimpa DB VPS!). Bawaan: tidak diunggah
+  [switch]$SkipEnv,      # (lama, tidak berpengaruh lagi: sudah bawaan)
+  [switch]$FreshData,    # (lama, tidak berpengaruh lagi: sudah bawaan)
   [switch]$SetupOnly,    # lewati build & upload, hanya jalankan setup
   [switch]$OpenFirewall, # buka port aplikasi di ufw (hanya bila TANPA nginx/reverse proxy)
   [switch]$WithBrowser   # pasang Playwright + Chromium di VPS
@@ -75,8 +81,13 @@ if (-not $SetupOnly) {
     '--exclude=.claude',
     '--exclude=*.log'
   )
-  if ($SkipEnv)  { $ex += '--exclude=.env' }
-  if ($FreshData) { $ex += '--exclude=data' }
+  # Rahasia dan data hidup di server: tidak pernah ditimpa tanpa izin eksplisit.
+  if ($IncludeEnv) {
+    Write-Host '   PERINGATAN: -IncludeEnv menimpa .env di VPS dengan .env laptop.' -ForegroundColor Yellow
+  } else { $ex += '--exclude=.env' }
+  if ($IncludeData) {
+    Write-Host '   PERINGATAN: -IncludeData menimpa data/ (termasuk wanar.db) di VPS dengan data laptop.' -ForegroundColor Yellow
+  } else { $ex += '--exclude=data' }
 
   if (Test-Path $tgz) { Remove-Item $tgz -Force }
   & tar.exe -czf $tgz -C $root @ex .

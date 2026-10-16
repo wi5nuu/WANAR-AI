@@ -64,7 +64,7 @@ import { createCompanion } from './companion.js';
 import { createMarket } from './market/service.js';
 import { createCareer } from './career/service.js';
 import { loadFacts } from './career/facts.js';
-import { channelWarnings } from './career/health.js';
+import { channelWarnings, inboxWarnings, providerWarnings } from './career/health.js';
 import { createSales } from './sales/service.js';
 import { createSalesRouter, createInquiryRouter } from './sales/routes.js';
 import { createCareerRouter } from './career/routes.js';
@@ -228,7 +228,7 @@ const sales = createSales({
 });
 career.sections.push(({ since }) => sales.reportLines({ since }));
 // A setting lost silently (e-mail keys, bot token) is called out in the daily report instead of staying silent.
-career.sections.push(() => channelWarnings(automation.channels));
+career.sections.push(() => [...channelWarnings(automation.channels), ...inboxWarnings(automation.inbox), ...providerWarnings(aiManager, process.env)]);
 automation.whatsappInbox.sales = sales;
 // "YA" flow: risky chat requests (kirim kampanye) are proposed first; they run
 // through the tools registry + action gate only after the owner replies YA.
