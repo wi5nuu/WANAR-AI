@@ -357,6 +357,13 @@ describe('HTTP /api/career', () => {
     expect(act.some((a) => a.kind === 'status' && a.level === 'good')).toBe(true);
   });
 
+  it('GET /report: teks laporan harian + angka di baliknya', async () => {
+    const { http } = await app();
+    const r = (await request(http).get('/api/career/report')).body;
+    expect(r.text).toMatch(/^Laporan harian agent/);
+    expect(r.facts).toMatchObject({ newJobs: 2, newApply: 1, applied: 0, stalled: false });
+  });
+
   it('lewat proxy tanpa token ditolak; dengan token benar diterima', async () => {
     const { svc } = await app();
     const guarded = express().use('/api/career', createCareerRouter({ career: svc, env: { AUTOMATION_TOKEN: 'rahasia-uji-123456' } }));

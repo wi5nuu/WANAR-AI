@@ -1,262 +1,156 @@
 /**
- * Pusat Agen — everything the agent does on its own, in one place: a live activity feed (what it
- * did and why), the career radar (remote jobs it found, scored against the owner's real profile),
- * and the pipeline each posting moves through. It reads and reports; it never submits anything
- * on the owner's behalf from this screen.
+ * Pusat Agen — one place to see everything the agent does on its own and everything that needs the
+ * owner: what it did and why (Aktivitas), remote jobs it found (Lowongan), people asking for the
+ * owner's services (Klien), what it may sell and at what price (Layanan), and a plain summary
+ * (Ringkasan). It reads and reports; nothing is submitted to an employer from here.
  *
  * by Wisnu Alfian Nur Ashar
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import DashboardLayout from './DashboardLayout';
-import { getAutomationToken } from '../lib/stream.js';
+import { careerApi, salesApi, ago, remember, recall } from './agent/api.js';
+import Overview from './agent/Overview.jsx';
+import ActivityFeed from './agent/ActivityFeed.jsx';
+import JobsTab from './agent/JobsTab.jsx';
+import LeadsTab from './agent/LeadsTab.jsx';
+import ServicesTab from './agent/ServicesTab.jsx';
+import AboutTab from './agent/AboutTab.jsx';
 import './automation.css';
 import './agent-center.css';
 
-const TOKEN_KEY = 'automationToken';
-const TZ = 'Asia/Jakarta';
-const POLL_MS = 4000;
-
-async function api(path, { method = 'GET', body } = {}, retried = false) {
-  const headers = {};
-  if (body) headers['Content-Type'] = 'application/json';
-  const t = getAutomationToken();
-  if (t) headers['X-Automation-Token'] = t;
-  const res = await fetch(`/api/career${path}`, { method, headers, body: body ? JSON.stringify(body) : undefined });
-  let data = {};
-  try { data = await res.json(); } catch { /* non-JSON */ }
-  if (res.status === 401 && !retried) {
-    const entered = window.prompt('Masukkan token otomasi (AUTOMATION_TOKEN di .env server):');
-    if (entered) {
-      try { localStorage.setItem(TOKEN_KEY, entered.trim()); } catch { /* private mode */ }
-      return api(path, { method, body }, true);
-    }
-  }
-  if (!res.ok) throw new Error(data.error || data.message || `Permintaan gagal (HTTP ${res.status})`);
-  return data;
-}
-
-const STATUS_LABEL = {
-  new: 'Baru', shortlisted: 'Dipilih', applying: 'Sedang dilamar', applied: 'Sudah dilamar',
-  interview: 'Wawancara', offer: 'Penawaran', rejected: 'Ditolak', skipped: 'Dilewati',
-};
-const VERDICT_LABEL = { apply: 'Layak dilamar', maybe: 'Perlu dicek', skip: 'Dilewati' };
-const AGENT_LABEL = { career: 'Karir', market: 'Pasar', email: 'Email', system: 'Sistem' };
-
-function ago(ts) {
-  if (!ts) return '—';
-  const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
-  if (s < 45) return 'baru saja';
-  if (s < 3600) return `${Math.round(s / 60)} menit lalu`;
-  if (s < 86400) return `${Math.round(s / 3600)} jam lalu`;
-  return `${Math.round(s / 86400)} hari lalu`;
-}
-const clock = (ts) => new Date(ts).toLocaleTimeString('id-ID', { timeZone: TZ, hour: '2-digit', minute: '2-digit', hour12: false });
-
-function Stat({ label, value, hint, tone }) {
-  return (
-    <div className={`ag-stat ${tone || ''}`}>
-      <span className="ag-stat-v">{value}</span>
-      <span className="ag-stat-l">{label}</span>
-      {hint ? <small>{hint}</small> : null}
-    </div>
-  );
-}
-
-function Feed({ items }) {
-  if (!items.length) return <p className="ag-empty">Belum ada aktivitas. Tekan "Pindai sekarang" atau tunggu pemindaian terjadwal.</p>;
-  return (
-    <ol className="ag-feed" aria-live="polite">
-      {items.map((a) => (
-        <li key={a.id} className={`ag-item lv-${a.level}`}>
-          <span className="ag-dot" aria-hidden="true" />
-          <div className="ag-body">
-            <div className="ag-head">
-              <strong>{a.title}</strong>
-              <span className="ag-tag">{AGENT_LABEL[a.agent] || a.agent}</span>
-            </div>
-            {a.detail ? <pre className="ag-detail">{a.detail}</pre> : null}
-          </div>
-          <time title={new Date(a.ts).toLocaleString('id-ID', { timeZone: TZ })}>{clock(a.ts)}</time>
-        </li>
-      ))}
-    </ol>
-  );
-}
-
-function JobCard({ job, onStatus, busy }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <article className={`ag-job v-${job.verdict}`}>
-      <div className="ag-score" title="Skor kecocokan 0–100"><b>{job.score}</b><small>cocok</small></div>
-      <div className="ag-job-main">
-        <h3>
-          <a href={job.url} target="_blank" rel="noopener noreferrer">{job.title}</a>
-        </h3>
-        <p className="ag-meta">
-          {[job.company, job.location, job.salary_text].filter(Boolean).join(' · ') || 'Detail tidak tersedia'}
-          <span className="ag-src">{job.source.split(':')[0]}</span>
-        </p>
-        <div className="ag-chips">
-          <span className={`ag-badge v-${job.verdict}`}>{VERDICT_LABEL[job.verdict]}</span>
-          {job.reasons.slice(0, open ? 12 : 3).map((r) => <span key={r} className="ag-chip good">{r}</span>)}
-          {job.warnings.slice(0, open ? 12 : 2).map((w) => <span key={w} className="ag-chip warn">{w}</span>)}
-          {(job.reasons.length > 3 || job.warnings.length > 2) && (
-            <button type="button" className="ag-more" onClick={() => setOpen((v) => !v)}>{open ? 'ringkas' : 'semua alasan'}</button>
-          )}
-        </div>
-      </div>
-      <label className="ag-status">
-        <span>Status</span>
-        <select value={job.status} disabled={busy} onChange={(e) => onStatus(job.id, e.target.value)}>
-          {Object.entries(STATUS_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-        </select>
-      </label>
-    </article>
-  );
-}
+const FEED_MS = 4000;
+const SLOW_MS = 20000;
+const TABS = [
+  ['overview', 'Ringkasan'], ['feed', 'Aktivitas'], ['jobs', 'Lowongan'],
+  ['leads', 'Klien'], ['services', 'Layanan'], ['about', 'Cara kerja'],
+];
+const TAB_KEY = 'agentCenterTab';
 
 export default function AgentCenter() {
-  const [tab, setTab] = useState('feed');
+  const [tab, setTab] = useState(() => (TABS.some(([k]) => k === recall(TAB_KEY, '')) ? recall(TAB_KEY, 'overview') : 'overview'));
   const [status, setStatus] = useState(null);
+  const [report, setReport] = useState(null);
+  const [salesSum, setSalesSum] = useState(null);
+  const [topJobs, setTopJobs] = useState([]);
+  const [needLeads, setNeedLeads] = useState([]);
   const [feed, setFeed] = useState([]);
-  const [jobs, setJobs] = useState({ total: 0, jobs: [] });
-  const [verdict, setVerdict] = useState('apply');
-  const [q, setQ] = useState('');
+  const [feedLimit, setFeedLimit] = useState(80);
   const [error, setError] = useState('');
-  const [busy, setBusy] = useState('');
+  const [scanning, setScanning] = useState(false);
   const lastId = useRef(0);
   const alive = useRef(true);
 
+  const go = useCallback((k) => { setTab(k); remember(TAB_KEY, k); window.scrollTo?.({ top: 0 }); }, []);
+  const fail = useCallback((m) => setError(m), []);
+
   const loadStatus = useCallback(async () => {
-    try { setStatus(await api('/status')); setError(''); } catch (e) { setError(e.message); }
+    try { setStatus(await careerApi('/status')); } catch (e) { setError(e.message); }
   }, []);
 
-  const pollFeed = useCallback(async (first = false) => {
+  const loadSlow = useCallback(async () => {
     try {
-      const { items } = await api(`/activity?afterId=${first ? 0 : lastId.current}&limit=${first ? 80 : 40}`);
+      const [r, s, jobs, leads] = await Promise.all([
+        careerApi('/report'), salesApi('/summary'),
+        careerApi('/jobs?verdict=apply&status=new&limit=3'), salesApi('/leads?open=1&limit=20'),
+      ]);
+      if (!alive.current) return;
+      setReport(r); setSalesSum(s); setTopJobs(jobs.jobs);
+      setNeedLeads(leads.leads.filter((l) => l.escalated).slice(0, 3));
+    } catch (e) { setError(e.message); }
+  }, []);
+
+  const pollFeed = useCallback(async (first = false, limit = 80) => {
+    try {
+      const { items } = await careerApi(`/activity?afterId=${first ? 0 : lastId.current}&limit=${first ? limit : 40}`);
       if (!alive.current || !items.length) return;
       lastId.current = Math.max(lastId.current, ...items.map((i) => i.id));
       setFeed((prev) => {
         const seen = new Set(prev.map((p) => p.id));
-        return [...items.filter((i) => !seen.has(i.id)), ...prev].slice(0, 200);
+        return [...items.filter((i) => !seen.has(i.id)), ...prev].sort((a, b) => b.id - a.id).slice(0, 400);
       });
     } catch (e) { setError(e.message); }
   }, []);
 
-  const loadJobs = useCallback(async () => {
-    try {
-      const params = new URLSearchParams({ limit: '60' });
-      if (verdict) params.set('verdict', verdict);
-      if (q.trim()) params.set('q', q.trim());
-      setJobs(await api(`/jobs?${params}`));
-    } catch (e) { setError(e.message); }
-  }, [verdict, q]);
-
   useEffect(() => {
     alive.current = true;
-    loadStatus(); pollFeed(true);
-    const t = setInterval(() => {
-      if (document.hidden) return;
-      pollFeed(); loadStatus();
-    }, POLL_MS);
-    return () => { alive.current = false; clearInterval(t); };
-  }, [loadStatus, pollFeed]);
+    loadStatus(); loadSlow(); pollFeed(true);
+    const fast = setInterval(() => { if (!document.hidden) { pollFeed(); loadStatus(); } }, FEED_MS);
+    const slow = setInterval(() => { if (!document.hidden) loadSlow(); }, SLOW_MS);
+    return () => { alive.current = false; clearInterval(fast); clearInterval(slow); };
+  }, [loadStatus, loadSlow, pollFeed]);
 
-  useEffect(() => {
-    if (tab !== 'jobs') return undefined;
-    const t = setTimeout(loadJobs, q ? 250 : 0);
-    return () => clearTimeout(t);
-  }, [tab, loadJobs, q]);
+  const refreshAll = useCallback(() => { loadStatus(); loadSlow(); pollFeed(); }, [loadStatus, loadSlow, pollFeed]);
 
   const scan = async () => {
-    setBusy('scan');
+    setScanning(true);
     try {
-      const r = await api('/scan', { method: 'POST', body: {} });
+      const r = await careerApi('/scan', { method: 'POST', body: {} });
       if (!r.started) setError(r.message || 'Pemindaian sedang berjalan.');
       await pollFeed(); await loadStatus();
-    } catch (e) { setError(e.message); } finally { setBusy(''); }
+    } catch (e) { setError(e.message); } finally { setScanning(false); }
   };
 
-  const changeStatus = async (id, next) => {
-    setBusy(`job${id}`);
+  const more = async () => {
+    const next = Math.min(300, feedLimit + 120);
+    setFeedLimit(next);
     try {
-      await api(`/jobs/${id}/status`, { method: 'POST', body: { status: next } });
-      await Promise.all([loadJobs(), loadStatus(), pollFeed()]);
-    } catch (e) { setError(e.message); } finally { setBusy(''); }
+      const { items } = await careerApi(`/activity?afterId=0&limit=${next}`);
+      setFeed((prev) => {
+        const seen = new Set(prev.map((p) => p.id));
+        return [...prev, ...items.filter((i) => !seen.has(i.id))].sort((a, b) => b.id - a.id);
+      });
+    } catch (e) { setError(e.message); }
   };
 
-  const by = status?.byStatus || {};
+  const stalled = report?.facts?.stalled;
+  const live = status?.running ? 'run' : stalled ? 'bad' : status?.enabled === false ? 'off' : 'ok';
+  const liveText = { run: 'Sedang memindai…', bad: 'Radar berhenti', off: 'Radar dimatikan', ok: 'Aktif terus' }[live];
+  const counts = { jobs: status?.apply || 0, leads: salesSum?.stats?.needsOwner || 0 };
+
   return (
     <DashboardLayout>
       <div className="au-page ag-page">
-        <header className="au-hero">
+        <header className="ag-hero">
           <div>
             <h1>Pusat Agen</h1>
-            <p className="au-sub">Apa yang dikerjakan agent Anda: dipantau langsung, dengan alasannya.</p>
+            <p>Apa yang dikerjakan agent Anda, apa yang menunggu Anda, dan buktinya.</p>
           </div>
-          <div className="ag-actions">
-            <span className={`ag-live ${status?.running ? 'on' : ''}`}>
-              <i aria-hidden="true" />{status?.running ? 'Sedang memindai…' : (status?.enabled === false ? 'Radar mati' : 'Radar aktif')}
+          <div className="ag-hero-a">
+            <span className={`ag-live ${live}`} title={status?.lastScan ? `Pemindaian terakhir ${ago(status.lastScan)}` : ''}>
+              <i aria-hidden="true" />{liveText}
+              {status?.lastScan ? <small>· {ago(status.lastScan)}</small> : null}
             </span>
-            <button type="button" className="ag-btn" onClick={scan} disabled={busy === 'scan' || status?.running}>
+            <button type="button" className="ag-btn" onClick={scan} disabled={scanning || status?.running}>
               {status?.running ? 'Memindai…' : 'Pindai sekarang'}
             </button>
           </div>
         </header>
 
-        {error ? <div className="ag-error" role="alert">{error}<button type="button" onClick={() => setError('')} aria-label="Tutup">×</button></div> : null}
+        {error ? (
+          <div className="ag-error" role="alert">
+            <span>{error}</span>
+            <button type="button" onClick={() => setError('')} aria-label="Tutup pesan galat">×</button>
+          </div>
+        ) : null}
 
-        <section className="ag-stats" aria-label="Ringkasan">
-          <Stat label="Layak dilamar" value={status?.apply ?? '—'} tone="good" hint="belum diproses" />
-          <Stat label="Perlu dicek" value={status?.maybe ?? '—'} tone="warn" />
-          <Stat label="Baru 24 jam" value={status?.newToday ?? '—'} />
-          <Stat label="Terpantau" value={status?.total ?? '—'} hint={status?.lastScan ? `dipindai ${ago(status.lastScan)}` : 'belum pernah'} />
-          <Stat label="Sudah dilamar" value={by.applied || 0} />
-          <Stat label="Wawancara / penawaran" value={(by.interview || 0) + (by.offer || 0)} tone="good" />
-        </section>
-
-        <div className="ag-tabs" role="tablist">
-          {[['feed', 'Aktivitas'], ['jobs', 'Lowongan'], ['about', 'Cara kerja & batas']].map(([k, label]) => (
-            <button key={k} type="button" role="tab" aria-selected={tab === k} className={tab === k ? 'on' : ''} onClick={() => setTab(k)}>{label}</button>
+        <nav className="ag-tabs" role="tablist" aria-label="Bagian Pusat Agen">
+          {TABS.map(([k, label]) => (
+            <button key={k} type="button" role="tab" aria-selected={tab === k} className={tab === k ? 'on' : ''} onClick={() => go(k)}>
+              {label}
+              {counts[k] ? <em>{counts[k]}</em> : null}
+            </button>
           ))}
-        </div>
+        </nav>
 
-        {tab === 'feed' && <section className="au-card"><Feed items={feed} /></section>}
-
-        {tab === 'jobs' && (
-          <section>
-            <div className="ag-filters">
-              {[['apply', 'Layak dilamar'], ['maybe', 'Perlu dicek'], ['skip', 'Dilewati'], ['', 'Semua']].map(([k, label]) => (
-                <button key={k || 'all'} type="button" className={verdict === k ? 'on' : ''} onClick={() => setVerdict(k)}>{label}</button>
-              ))}
-              <input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Cari judul / perusahaan" aria-label="Cari lowongan" />
-            </div>
-            <p className="ag-count">{jobs.total} lowongan{verdict ? ` · ${VERDICT_LABEL[verdict].toLowerCase()}` : ''}</p>
-            {jobs.jobs.length === 0
-              ? <p className="ag-empty">Tidak ada lowongan di filter ini. Radar memindai tiap beberapa jam; lowongan junior remote yang terbuka untuk Indonesia memang tidak banyak.</p>
-              : jobs.jobs.map((j) => <JobCard key={j.id} job={j} busy={busy === `job${j.id}`} onStatus={changeStatus} />)}
-          </section>
-        )}
-
-        {tab === 'about' && (
-          <section className="au-card ag-about">
-            <h3>Yang dikerjakan agent sendiri</h3>
-            <ul>
-              <li>Membaca lowongan remote dari sumber resmi (API/RSS) tiap {status?.intervalHours || 6} jam.</li>
-              <li>Menilai tiap lowongan terhadap profil Anda dengan aturan tertulis (bukan tebakan AI), lengkap dengan alasannya.</li>
-              <li>Mengirim ke Telegram hanya yang layak dilamar, di luar jam tenang 22.00–06.00 WIB.</li>
-              <li>Mencatat semua langkahnya di tab Aktivitas.</li>
-            </ul>
-            <h3>Batas yang sengaja dipasang</h3>
-            <ul>
-              <li>Tidak mengarang pengalaman, gelar, atau keahlian: hanya fakta dari profil Anda.</li>
-              <li>Tidak melewati CAPTCHA dan tidak mengotomatisasi situs yang melarangnya (mis. LinkedIn, Indeed).</li>
-              <li>Tidak mengirim lamaran dari layar ini. Tahap lamaran otomatis dibangun terpisah dengan bukti (tangkapan layar) dan pemeriksaan ganda.</li>
-            </ul>
-            <p className="ag-note">Perintah Telegram: <code>lowongan baru</code>, <code>pindai lowongan sekarang</code>, <code>status lamaran</code>.</p>
-          </section>
-        )}
+        <main className="ag-panel">
+          {tab === 'overview' && <Overview status={status} report={report} salesSum={salesSum} jobs={topJobs} leads={needLeads} feed={feed} goto={go} />}
+          {tab === 'feed' && <ActivityFeed items={feed} onMore={more} canMore={feed.length >= Math.min(feedLimit, 300) && feedLimit < 300} />}
+          {tab === 'jobs' && <JobsTab status={status} onChanged={refreshAll} setError={fail} />}
+          {tab === 'leads' && <LeadsTab summary={salesSum} goto={go} onChanged={refreshAll} setError={fail} />}
+          {tab === 'services' && <ServicesTab onChanged={refreshAll} setError={fail} />}
+          {tab === 'about' && <AboutTab intervalHours={status?.intervalHours} />}
+        </main>
       </div>
     </DashboardLayout>
   );

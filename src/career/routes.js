@@ -2,6 +2,7 @@
  * src/career/routes.js
  *
  *   GET  /status              radar state + counters
+ *   GET  /report              the daily report text + the numbers behind it
  *   GET  /jobs                postings (?verdict=apply|maybe|skip &status= &q= &minScore= &limit= &offset=)
  *   GET  /jobs/:id            one posting with its description
  *   POST /jobs/:id/status     { status, notes? }  move a posting through the pipeline
@@ -25,6 +26,9 @@ export function createCareerRouter({ career, env = process.env }) {
   router.use(express.json({ limit: '20kb' }));
 
   router.get('/status', (_req, res) => res.json(career.status()));
+
+  // The same text the owner receives at 19.00 WIB, built from live data (read-only).
+  router.get('/report', (_req, res) => res.json(career.reportText()));
 
   router.get('/jobs', (req, res) => {
     const { verdict, status, q, minScore, limit, offset } = req.query;

@@ -301,6 +301,53 @@ describe('WhatsApp inbox — status pengiriman', () => {
   });
 });
 
+// ------------------------------------------------------------- meja penjualan (orang asing)
+
+describe('WhatsApp: calon klien (nomor selain pemilik) dijawab meja penjualan', () => {
+  const sent = (fetchImpl) => fetchImpl.calls.filter((c) => c.url.includes('graph.facebook.com') && c.json?.type === 'text');
+
+  it('orang asing: pesan diteruskan ke meja penjualan dan balasannya dikirim; pemilik tidak ikut', async () => {
+    const { inbox, responder, fetchImpl } = setup();
+    inbox.sales = { intake: vi.fn(async () => ({ autoSend: true, reply: 'Halo, saya asisten AI.', leadId: 7 })) };
+    const stranger = await inbox.handleWebhook(inbound({ from: OTHER, text: 'butuh website toko online', id: 'wamid.s1', profileName: 'Budi' }));
+    expect(stranger.results[0]).toMatchObject({ action: 'sales', leadId: 7 });
+    expect(inbox.sales.intake).toHaveBeenCalledWith({ source: 'whatsapp', contact: OTHER, name: 'Budi', text: 'butuh website toko online' });
+    const out = sent(fetchImpl);
+    expect(out).toHaveLength(1);
+    expect(out[0].json).toMatchObject({ to: OTHER, text: { body: 'Halo, saya asisten AI.' } });
+
+    await inbox.handleWebhook(inbound({ from: OWNER, text: 'halo', id: 'wamid.o1' }));
+    expect(inbox.sales.intake).toHaveBeenCalledTimes(1); // pesan pemilik tidak pernah masuk meja penjualan
+    await vi.waitFor(() => expect(responder).toHaveBeenCalledTimes(1));
+  });
+
+  it('balasan otomatis mati: prospek dicatat tetapi tidak ada pesan keluar', async () => {
+    const { inbox, fetchImpl } = setup();
+    inbox.sales = { intake: vi.fn(async () => ({ autoSend: false, reply: 'draf', leadId: 8 })) };
+    await inbox.handleWebhook(inbound({ from: OTHER, text: 'butuh website', id: 'wamid.s2' }));
+    expect(sent(fetchImpl)).toHaveLength(0);
+  });
+
+  it('meja penjualan error: tidak melempar, tidak membalas', async () => {
+    const { inbox, fetchImpl } = setup();
+    inbox.sales = { intake: vi.fn(async () => { throw new Error('db down'); }) };
+    const r = await inbox.handleWebhook(inbound({ from: OTHER, text: 'butuh website', id: 'wamid.s3' }));
+    expect(r.results[0].action).toBe('ignored');
+    expect(sent(fetchImpl)).toHaveLength(0);
+  });
+
+  it('tanpa meja penjualan perilaku lama tetap: orang asing diabaikan; STOP tetap dihormati', async () => {
+    const { inbox, fetchImpl } = setup();
+    const a = await inbox.handleWebhook(inbound({ from: OTHER, text: 'butuh website', id: 'wamid.s4' }));
+    expect(a.results[0].action).toBe('ignored');
+    expect(sent(fetchImpl)).toHaveLength(0);
+    inbox.sales = { intake: vi.fn() };
+    const stop = await inbox.handleWebhook(inbound({ from: OTHER, text: 'STOP', id: 'wamid.s5' }));
+    expect(stop.results[0].action).toBe('unsubscribed'); // opt-out berlaku untuk semua, tidak masuk penjualan
+    expect(inbox.sales.intake).not.toHaveBeenCalled();
+  });
+});
+
 // ------------------------------------------------------------- Kirimdev (BSP)
 
 const KIRIM_SECRET = 'kirim-signing-secret-test';

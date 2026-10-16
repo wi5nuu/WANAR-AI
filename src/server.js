@@ -64,6 +64,8 @@ import { createCompanion } from './companion.js';
 import { createMarket } from './market/service.js';
 import { createCareer } from './career/service.js';
 import { loadFacts } from './career/facts.js';
+import { createSales } from './sales/service.js';
+import { createSalesRouter, createInquiryRouter } from './sales/routes.js';
 import { createCareerRouter } from './career/routes.js';
 import { createCommandCenterRouter } from './command-center/routes.js';
 import { createOwnerContext, createTelegramTranscript, createWhatsAppTranscript } from './memory/owner-context.js';
@@ -201,6 +203,30 @@ market.on('change', (e) => {
   if (e?.kind === 'fired') career.store.log({ agent: 'market', kind: 'alert_fired', level: 'good', title: 'Alarm harga tercapai dan dikirim ke Telegram' });
 });
 career.addCountSection('Pasar', 'alarm harga tercapai', 'market', 'alert_fired');
+// Sales desk: answers people who ask for the owner's services (website form, WhatsApp), quotes only prices the
+// owner approved, and tells the owner about serious leads. It never contacts anyone who did not write first.
+const sales = createSales({
+  db: sqliteDb,
+  getFacts: () => loadFacts(process.env.OWNER_FACTS_FILE || path.join(process.cwd(), 'data', 'owner-facts.json')),
+  ownerChat: () => String(process.env.TELEGRAM_AI_CHAT_IDS || '').split(',')[0]?.trim() || null,
+  notify: automation.channels.has('telegram')
+    ? async (chatId, text) => {
+      const tg = automation.channels.get('telegram');
+      if (tg.mode !== 'live') throw new Error('Telegram belum dikonfigurasi');
+      await tg.send({ to: chatId, text });
+    }
+    : null,
+  log: (e) => career.store.log(e),
+  senders: {
+    whatsapp: async (to, text) => {
+      const wa = automation.channels.has('whatsapp') ? automation.channels.get('whatsapp') : null;
+      if (!wa || wa.mode !== 'live') throw new Error('WhatsApp belum tersambung');
+      await wa.send({ to, text, freeform: true });
+    },
+  },
+});
+career.sections.push(({ since }) => sales.reportLines({ since }));
+automation.whatsappInbox.sales = sales;
 // "YA" flow: risky chat requests (kirim kampanye) are proposed first; they run
 // through the tools registry + action gate only after the owner replies YA.
 const chatActions = createChatActions({ automation, executeTool, mintApproval: actionGate.mintApproval });
@@ -212,6 +238,7 @@ automation.inbox.responder = makeAssistantResponder({
   companion,
   market,
   career,
+  sales,
   learning,
   chatActions,
   context: ({ text, chatId }) => ownerContext({ text, excludeSessionId: chatId ? telegramTranscript.sessionId(chatId) : null }),
@@ -232,6 +259,7 @@ automation.whatsappInbox.responder = makeAssistantResponder({
   companion,
   market,
   career,
+  sales,
   learning,
   chatActions,
   context: ({ text, chatId }) => ownerContext({ text, excludeSessionId: chatId ? whatsappTranscript.sessionId(chatId) : null }),
@@ -746,6 +774,7 @@ app.use(cors({
 // this route reads the raw body itself (see automation/whatsapp-webhook.js).
 // Public by design — the signature is the authentication.
 app.use('/webhook/whatsapp', createWhatsAppWebhookRouter({ inbox: automation.whatsappInbox }));
+app.use('/webhook/inquiry', createInquiryRouter({ sales }));
 
 app.use(express.json({ limit: '15mb' }));
 
@@ -1140,6 +1169,7 @@ app.use('/api/worklog', createWorklogRouter({ worklog, rateLimiters }));
 app.use('/api/email-desk', createEmailDeskRouter({ emailDesk, rateLimiters }));
 app.use('/api/command-center', createCommandCenterRouter({ worklog, emailDesk, automation, briefing, intel, learning, market, prayerTimes, rateLimiters }));
 app.use('/api/career', createCareerRouter({ career }));
+app.use('/api/sales', createSalesRouter({ sales }));
 app.use('/api/system-map', createSystemMapRouter({ aiManager, db, config, automation, emailDesk, companion, briefing, envFile: path.join(process.cwd(), '.env'), tools: () => getToolDefinitions(), rateLimiters }));
 
 app.get('/api/sessions/:id/messages', (req, res) => {
@@ -2971,6 +3001,7 @@ async function startServer() {
       emailDesk.desk.start(); // follow-up checks
       if (market.start()) console.log('Pasar      : alarm harga aktif (cek tiap menit)');
       if (career.start()) console.log('Karir      : radar lowongan remote aktif (laporan ke Telegram)');
+      if (sales.start()) console.log('Penjualan  : meja penjualan aktif (' + (sales.autoReply ? 'balas otomatis' : 'balasan hanya draf') + ')');
       if (companion.start()) console.log('Peka       : sapaan peduli aktif (maks ' + companion.config.maxPerDay + '/hari, /peka untuk mengatur)');
       if (learning.start()) console.log('Belajar    : pembelajaran otomatis tiap 00:00 (pelajaran disuntik ke prompt)');
       if (briefing.start()) console.log('Briefing   : briefing pagi otomatis di hari kerja (/brief kapan saja)');
@@ -2985,7 +3016,7 @@ async function startServer() {
   }
   for (const sig of ['SIGINT', 'SIGTERM']) {
     process.once(sig, () => {
-      try { automation.scheduler.stop(); automation.inbox.stop(); prayerTimes.stop(); worklog.service.stop(); emailDesk.watcher.stop(); emailDesk.desk.stop(); briefing.stop(); learning.stop(); companion.stop(); market.stop(); career.stop(); automation.channels.closeAll(); } catch { /* ignore */ }
+      try { automation.scheduler.stop(); automation.inbox.stop(); prayerTimes.stop(); worklog.service.stop(); emailDesk.watcher.stop(); emailDesk.desk.stop(); briefing.stop(); learning.stop(); companion.stop(); market.stop(); career.stop(); sales.stop(); automation.channels.closeAll(); } catch { /* ignore */ }
       process.exit(0);
     });
   }

@@ -322,8 +322,22 @@ export class WhatsAppInbox extends EventEmitter {
     }
 
     // Plain text: only the owner's own numbers talk to the AI.
+    // Anyone else who writes in is a possible client: the sales desk answers from the owner's catalog.
+    if (this.sales && !this.isOwner(phone)) return this._maybeSales(phone, name, text);
     if (!this.responder || !this.isOwner(phone)) return { action: 'ignored', phone };
     return this._maybeChat(phone, text, message.id);
+  }
+
+  /** A stranger's message: qualified and answered by the sales desk (never throws). */
+  async _maybeSales(phone, name, text) {
+    try {
+      const r = await this.sales.intake({ source: 'whatsapp', contact: phone, name, text });
+      if (r.autoSend && r.reply) await this._reply(phone, r.reply);
+      return { action: 'sales', phone, leadId: r.leadId };
+    } catch (e) {
+      console.warn('[WHATSAPP-INBOX] sales desk error:', e?.message || e);
+      return { action: 'ignored', phone };
+    }
   }
 
   /** Contact memory (people table): best-effort — must never break messaging. */
