@@ -959,6 +959,20 @@ describe('Telegram assistant: plain language -> validated actions', async () => 
     expect(clean).not.toContain('PELAJARAN');
   });
 
+  it('aksi berisiko (kirim kampanye) ditangani chatActions: usulan lalu YA, tanpa model', async () => {
+    const w = build({ start: T('09:00') });
+    const chatActions = {
+      confirm: vi.fn(async (t) => (String(t).trim().toUpperCase() === 'YA' ? 'DIJALANKAN LEWAT GERBANG' : null)),
+      propose: vi.fn(async (t) => (String(t).toLowerCase().includes('kampanye') ? 'USULAN: balas YA' : null)),
+    };
+    const ai = { chatStream() { throw new Error('model must not be called'); } };
+    const respond = makeAssistantResponder({ aiManager: ai, worklog: w.svc, chatActions });
+
+    expect(await respond({ text: 'kirim kampanye promo', chatId: '1' })).toBe('USULAN: balas YA');
+    expect(await respond({ text: 'YA', chatId: '1' })).toBe('DIJALANKAN LEWAT GERBANG');
+    expect(chatActions.confirm).toHaveBeenCalledTimes(2);
+  });
+
   it('/pengingat and /batal manage reminders from Telegram', async () => {
     const w = build({ start: T('09:00') });
     w.svc.addReminder({ at: `${D} 12:00`, text: 'Meeting Pak Andi' });

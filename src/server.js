@@ -51,6 +51,7 @@ import { getPoolStats } from './providers/http-client.js';
 import sqliteDb from './database.js';
 import { initAutomation } from './automation/runtime.js';
 import { createAutomationRouter } from './automation/routes.js';
+import { createChatActions } from './automation/chat-actions.js';
 import { createPrayerTimesService } from './automation/prayer-times.js';
 import { initWorklog } from './worklog/index.js';
 import { createWorklogRouter } from './worklog/routes.js';
@@ -176,6 +177,9 @@ const market = createMarket({
     }
     : null,
 });
+// "YA" flow: risky chat requests (kirim kampanye) are proposed first; they run
+// through the tools registry + action gate only after the owner replies YA.
+const chatActions = createChatActions({ automation, executeTool, mintApproval: actionGate.mintApproval });
 automation.inbox.responder = makeAssistantResponder({
   aiManager,
   worklog: worklog.service,
@@ -184,6 +188,7 @@ automation.inbox.responder = makeAssistantResponder({
   companion,
   market,
   learning,
+  chatActions,
   context: ({ text, chatId }) => ownerContext({ text, excludeSessionId: chatId ? telegramTranscript.sessionId(chatId) : null }),
 });
 automation.inbox.onExchange = (e) => telegramTranscript.record(e);
@@ -202,6 +207,7 @@ automation.whatsappInbox.responder = makeAssistantResponder({
   companion,
   market,
   learning,
+  chatActions,
   context: ({ text, chatId }) => ownerContext({ text, excludeSessionId: chatId ? whatsappTranscript.sessionId(chatId) : null }),
 });
 automation.whatsappInbox.onExchange = (e) => whatsappTranscript.record(e);

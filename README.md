@@ -246,4 +246,11 @@ sendiri ditandai dan tidak ikut terdaftar. Tanpa env baru — semuanya lokal di 
 ke prompt asisten Telegram **dan** WhatsApp, bukan hanya chat web — sebagai catatan internal yang
 tidak dibacakan ke Anda.
 
+**Persetujuan aksi dari chat ("YA").** Minta hal berisiko lewat WhatsApp/Telegram — mis. "kirim
+kampanye Promo Juli" — dan asisten tidak langsung mengeksekusi: ia menyebutkan kampanye, jumlah
+penerima, dan mode (nyata/simulasi), lalu menunggu balasan **YA** di chat yang sama (berlaku 10
+menit, usulan baru menggantikan yang lama). Eksekusi tetap lewat tool registry sehingga action gate
+meminta dan memakai persetujuan sekali-pakai yang terikat ke kampanye itu — chat lain tidak pernah
+bisa menyetujui, dan frasa "kirim" yang tidak jelas tetap jatuh ke alur biasa.
+
 **Sengaja tidak ada** integrasi WhatsApp tidak resmi (whatsapp-web/Baileys): itu melanggar ketentuan WhatsApp dan berisiko membuat nomor Anda diblokir permanen.

@@ -12,6 +12,7 @@
  *   email_suppressions  addresses that must never be mailed (opt-out/bounce)
  *   inbound_messages    provider message ids already handled (webhook dedup)
  *   people              contact memory: everyone who ever messaged, per channel
+ *   chat_proposals      risky chat actions waiting for the owner's "YA"
  *
  * @author Wisnu Alfian Nur Ashar
  */
@@ -190,6 +191,19 @@ export function createStore(db) {
       PRIMARY KEY (channel, address)
     );
     CREATE INDEX IF NOT EXISTS idx_people_seen ON people(last_seen_at DESC);
+
+    CREATE TABLE IF NOT EXISTS chat_proposals (
+      id TEXT PRIMARY KEY,
+      chat_id TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      payload TEXT NOT NULL DEFAULT '{}',
+      status TEXT NOT NULL DEFAULT 'pending',
+      note TEXT,
+      created_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL,
+      decided_at INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_chat_proposals_pending ON chat_proposals(chat_id, status);
   `);
 
   // Additive migration: databases created before attachments existed.
@@ -581,7 +595,46 @@ export function createStore(db) {
       db.prepare('DELETE FROM people WHERE channel = ? AND address = ?').run(String(channel), String(address)).changes > 0,
   };
 
-  return { jobs, runs, campaigns, outbox, suppressions, attachments, subscribers, inbound, people, _db: db };
+  // ------------------------------------------------------- chat proposals
+  // Risky actions proposed from chat ("kirim kampanye X") wait here until the
+  // owner replies YA in the same chat. Managed by automation/chat-actions.js;
+  // statuses: pending -> approved -> done | failed, or cancelled / expired /
+  // superseded (a newer proposal replaces a stale one).
+
+  const hydrateProposal = (r) => (r ? { ...r, payload: parse(r.payload, {}) } : null);
+
+  const proposals = {
+    /** One live proposal per chat: creating a new one supersedes the previous. */
+    create({ chatId, kind, payload = {}, ttlMs = 600_000, at = Date.now() }) {
+      db.prepare("UPDATE chat_proposals SET status = 'superseded', decided_at = ? WHERE chat_id = ? AND status = 'pending'")
+        .run(at, String(chatId));
+      const pid = id('prp');
+      db.prepare(`
+        INSERT INTO chat_proposals (id, chat_id, kind, payload, status, created_at, expires_at)
+        VALUES (?, ?, ?, ?, 'pending', ?, ?)
+      `).run(pid, String(chatId), String(kind), JSON.stringify(payload || {}), at, at + ttlMs);
+      return proposals.get(pid);
+    },
+    get: (pid) => hydrateProposal(db.prepare('SELECT * FROM chat_proposals WHERE id = ?').get(pid)),
+    /** Latest still-pending proposal for a chat (may be past expiry — caller decides). */
+    latest: (chatId) => hydrateProposal(db.prepare(
+      "SELECT * FROM chat_proposals WHERE chat_id = ? AND status = 'pending' ORDER BY created_at DESC LIMIT 1"
+    ).get(String(chatId))),
+    /** Atomic claim: true only for the first caller (a double YA can never run twice). */
+    decide(pid, status, { note = null, at = Date.now() } = {}) {
+      return db.prepare(
+        "UPDATE chat_proposals SET status = ?, note = ?, decided_at = ? WHERE id = ? AND status = 'pending'"
+      ).run(String(status), note == null ? null : String(note).slice(0, 300), at, String(pid)).changes > 0;
+    },
+    /** Unconditional status set for post-claim outcomes (done / failed / expired). */
+    finish(pid, status, { note = null, at = Date.now() } = {}) {
+      return db.prepare(
+        'UPDATE chat_proposals SET status = ?, note = ?, decided_at = ? WHERE id = ?'
+      ).run(String(status), note == null ? null : String(note).slice(0, 300), at, String(pid)).changes > 0;
+    },
+  };
+
+  return { jobs, runs, campaigns, outbox, suppressions, attachments, subscribers, inbound, people, proposals, _db: db };
 }
 
 let defaultStore = null;

@@ -277,7 +277,7 @@ export function fallbackPlan(text, now = Date.now()) {
  * Builds the responder used for the owner's plain Telegram messages.
  * Same signature as makeChatResponder, so it is a drop-in replacement.
  */
-export function makeAssistantResponder({ aiManager, worklog, emailDesk = null, briefing = null, companion = null, market = null, learning = null, context = null, ownerName = process.env.OWNER_NAME || 'Wisnu Alfian Nur Ashar' }) {
+export function makeAssistantResponder({ aiManager, worklog, emailDesk = null, briefing = null, companion = null, market = null, learning = null, chatActions = null, context = null, ownerName = process.env.OWNER_NAME || 'Wisnu Alfian Nur Ashar' }) {
   const first = String(ownerName).split(/\s+/)[0];
   // The assistant is the owner's subordinate: it addresses him respectfully by name.
   const call = String(process.env.OWNER_CALL || '').trim() || `Mas ${first}`;
@@ -307,6 +307,16 @@ export function makeAssistantResponder({ aiManager, worklog, emailDesk = null, b
     if (briefing && BRIEFING_ASK.test(String(text || '').trim())) {
       traceStep('intent', { name: 'briefing', detail: 'Agenda/briefing disusun dari data jurnal, pengingat & email — tanpa AI, 0 token', model: false });
       return briefing.build();
+    }
+    // Chat-action approvals ("kirim kampanye X" -> propose; "YA" -> run).
+    // Risky actions never run off one message: code proposes first, the owner
+    // confirms in the same chat, and execution still passes the action gate.
+    if (chatActions) {
+      let actionReply = null;
+      try { actionReply = await chatActions.confirm(text, chatId); } catch { actionReply = null; }
+      if (actionReply) { traceStep('intent', { name: 'chat-confirm', detail: 'Balasan YA/TIDAK atas usulan aksi berisiko — dijalankan kode lalu action gate, tanpa AI', model: false }); return actionReply; }
+      try { actionReply = await chatActions.propose(text, chatId); } catch { actionReply = null; }
+      if (actionReply) { traceStep('intent', { name: 'chat-propose', detail: 'Aksi berisiko diusulkan lebih dulu; menunggu balasan YA di chat yang sama', model: false }); return actionReply; }
     }
     // "kirim" / "batal" while an email draft waits: handled by code, instantly.
     if (emailDesk) {
