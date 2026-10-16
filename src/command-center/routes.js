@@ -19,7 +19,7 @@ import { localDate, atTime, addDays } from '../worklog/time.js';
 
 const STARTED = Date.now();
 
-export function createCommandCenterRouter({ worklog, emailDesk = null, automation = null, briefing = null, intel = null, learning = null, market = null, env = process.env, rateLimiters = {} }) {
+export function createCommandCenterRouter({ worklog, emailDesk = null, automation = null, briefing = null, intel = null, learning = null, market = null, prayerTimes = null, env = process.env, rateLimiters = {} }) {
   const svc = worklog.service;
   const desk = emailDesk?.desk || null;
   const watcher = emailDesk?.watcher || null;
@@ -73,6 +73,7 @@ export function createCommandCenterRouter({ worklog, emailDesk = null, automatio
         backgroundJobs: String(env.WANAR_BACKGROUND_JOBS || 'true').toLowerCase() !== 'false',
       },
       briefing: briefing ? briefing.build() : null,
+      prayerTimes: prayerTimes ? prayerTimes.status() : null,
     };
   }));
 
