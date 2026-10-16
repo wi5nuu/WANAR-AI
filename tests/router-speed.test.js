@@ -77,3 +77,18 @@ describe('key errors are recognised in any wording', () => {
     expect(classifyError(msg)).toBe(reason);
   });
 });
+
+describe('providers that answer without a success flag', () => {
+  it('a plain {content} result from chat() is an answer, not "unknown error"', async () => {
+    const plain = {
+      name: 'plain', defaultModel: 'p1', isAvailable: () => true, getAvailableModels: () => [{ id: 'p1' }],
+      supportsStreamingToolCalls: false,
+      async chat() { return { content: 'Halo!', role: 'assistant', tool_calls: [], usage: { prompt_tokens: 10, completion_tokens: 2 } }; },
+      async *chatStream() { yield { type: 'done' }; },
+    };
+    const m = mgr({ plain }, 'plain');
+    const ev = await drain(m.chatWithTools([{ role: 'user', content: 'hai' }], {}));
+    expect(ev.filter((e) => e.type === 'content').map((e) => e.content).join('')).toBe('Halo!');
+    expect(ev.some((e) => e.type === 'error')).toBe(false);
+  });
+});
