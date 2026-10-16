@@ -113,6 +113,7 @@ export function formatPrayerTimesMessage(data, { city = DEFAULT_CITY } = {}) {
   const hijriMonth = hijri.month?.en || '';
   const hijriYear = hijri.year || '';
 
+  const isJumat = weekdayId === 'Jumat';
   const lines = [];
   lines.push(`🕌 Jadwal Waktu Shalat — ${city}`);
   lines.push(
@@ -122,7 +123,13 @@ export function formatPrayerTimesMessage(data, { city = DEFAULT_CITY } = {}) {
   for (const key of ORDER) {
     const waktu = timings[key];
     if (waktu) {
-      lines.push(`${PRAYER_EMOJIS[key]} ${PRAYER_LABELS_ID[key]}: ${waktu}`);
+      let label = PRAYER_LABELS_ID[key];
+      let emoji = PRAYER_EMOJIS[key];
+      if (key === 'Dhuhr' && isJumat) {
+        label = 'Jumat';
+        emoji = '🕌';
+      }
+      lines.push(`${emoji} ${label}: ${waktu}`);
     }
   }
   lines.push('');
@@ -232,6 +239,10 @@ export function createPrayerTimesService({
   }
 
   function status() {
+    const nowId = new Date().toLocaleDateString('id-ID', {
+      weekday: 'long',
+      timeZone: env.AUTOMATION_TZ || 'Asia/Jakarta',
+    });
     return {
       enabled,
       configured: Boolean(channel && channel.configured),
@@ -240,6 +251,7 @@ export function createPrayerTimesService({
       country,
       method,
       schedule,
+      weekday: nowId,
       chatId: targetChatId || null,
       running: Boolean(timer),
       lastRunAt,

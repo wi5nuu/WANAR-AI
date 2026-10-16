@@ -504,10 +504,14 @@ function PrayerTimesCard({ prayerTimes, busy, act }) {
     return () => clearInterval(t);
   }, []);
 
+  const isJumat = pt.weekday === 'Jumat';
   const nextSubuh = pt.city && pt.schedule ? `tiap hari ${pt.schedule.replace('daily@', '')} WIB` : '—';
   const lastSent = pt.lastRunAt ? ago(pt.lastRunAt) : 'belum pernah';
   const modeLabel = pt.live ? 'live' : pt.configured ? 'simulasi' : 'tidak dikonfigurasi';
   const ok = pt.enabled && pt.live && pt.running;
+  const label = isJumat ? 'Jumat' : 'Subuh';
+  const emoji = isJumat ? '🕌' : '🌅';
+  const desc = isJumat ? 'ganti Dzuhur pada hari Jumat' : 'sebelum fajar · jadwal dari Aladhan API';
 
   return (
     <div className={`au-card cc-gap ${ok ? '' : 'cc-warn'}`}>
@@ -518,8 +522,8 @@ function PrayerTimesCard({ prayerTimes, busy, act }) {
       <div className="au-list">
         <div className="wl-row">
           <div className="grow cc-ellipsis">
-            <div className="t">Subuh</div>
-            <div className="au-muted">sebelum fajar · jadwal dari Aladhan API</div>
+            <div className="t">{emoji} {label}</div>
+            <div className="au-muted">{desc}</div>
           </div>
           <div className={`au-chip ${ok ? 'ok' : 'warn'}`}>{ok ? 'aktif' : 'tidak aktif'}</div>
         </div>
