@@ -232,6 +232,13 @@ export function createAlarms({
           onChange();
         }
         // ringing: fast at first, slower later, with a hard cap
+        if (a.status === 'ringing' && t - a.at > ALARM_STALE_MS) {
+          q.expire.run(a.id);
+          onChange();
+          const cid = a.chat_id || chatId();
+          if (notify && cid) notify(cid, `Alarm ${localTime(a.at)} (${a.label}) saya hentikan karena sudah terlambat lebih dari ${Math.round((t - a.at) / 60_000)} menit. ${cfg.callName} belum menjawab.`).catch(() => {});
+          continue;
+        }
         if (a.fires >= cfg.maxFires) {
           q.expire.run(a.id);
           onChange();
@@ -258,8 +265,9 @@ export function createAlarms({
     const t = now();
     let n = 0;
     for (const a of q.active.all()) {
-      if (a.status === 'armed' && a.at <= t && t - a.at > ALARM_STALE_MS) {
-        n += q.expire.run(a.id).changes;
+      if (a.at <= t && t - a.at > ALARM_STALE_MS) {
+        if (a.status === 'armed') n += q.expire.run(a.id).changes;
+        else if (a.status === 'ringing') n += q.cancel.run(t, a.id).changes;
       }
     }
     if (n) onChange();
