@@ -63,6 +63,7 @@ import { createNightlyLearning } from './command-center/nightly-learning.js';
 import { createCompanion } from './companion.js';
 import { createMarket } from './market/service.js';
 import { createCareer } from './career/service.js';
+import { loadFacts } from './career/facts.js';
 import { createCareerRouter } from './career/routes.js';
 import { createCommandCenterRouter } from './command-center/routes.js';
 import { createOwnerContext, createTelegramTranscript, createWhatsAppTranscript } from './memory/owner-context.js';
@@ -184,6 +185,8 @@ const market = createMarket({
 const career = createCareer({
   db: sqliteDb,
   getProfile: () => db.getProfile(),
+  // Fact sheet imported from the owner's portfolio (scripts/import-portfolio.mjs); data/ is git-ignored.
+  getFacts: () => loadFacts(process.env.OWNER_FACTS_FILE || path.join(process.cwd(), 'data', 'owner-facts.json')),
   chatId: () => String(process.env.TELEGRAM_AI_CHAT_IDS || '').split(',')[0]?.trim() || null,
   notify: automation.channels.has('telegram')
     ? async (chatId, text) => {
@@ -193,6 +196,11 @@ const career = createCareer({
     }
     : null,
 });
+// Other agents report into the same feed, and so into the owner's daily report.
+market.on('change', (e) => {
+  if (e?.kind === 'fired') career.store.log({ agent: 'market', kind: 'alert_fired', level: 'good', title: 'Alarm harga tercapai dan dikirim ke Telegram' });
+});
+career.addCountSection('Pasar', 'alarm harga tercapai', 'market', 'alert_fired');
 // "YA" flow: risky chat requests (kirim kampanye) are proposed first; they run
 // through the tools registry + action gate only after the owner replies YA.
 const chatActions = createChatActions({ automation, executeTool, mintApproval: actionGate.mintApproval });

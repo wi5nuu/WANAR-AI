@@ -17,6 +17,11 @@ import { scoreJob, requiredYears, eligibility, parseSkills } from '../src/career
 import { CareerStore } from '../src/career/store.js';
 import { createCareer, inQuietHours } from '../src/career/service.js';
 import { createCareerRouter } from '../src/career/routes.js';
+import { extractLiteral, parseProfileTs, normalizeProfile, importPortfolio } from '../src/career/portfolio.js';
+import { validateFacts, loadFacts, cleanSkill, skillsFromFacts, experienceMonths, factSummary } from '../src/career/facts.js';
+import nodeFs from 'node:fs';
+import nodeOs from 'node:os';
+import nodePath from 'node:path';
 
 const SKILLS = parseSkills('Python, C++, Java, PHP, Golang, PostgreSQL, MySQL, MongoDB, React, Next.js, TypeScript, Tailwind CSS, Laravel, Docker, Cybersecurity, Kali Linux, FastAPI, Node.js, Burp Suite, Zero-Trust Architecture');
 const PROFILE = { skills: SKILLS, maxYears: 2, now: Date.parse('2026-10-16T05:00:00Z') };
@@ -232,7 +237,7 @@ function makeService({ jobs, notify, chat = '55555', now, env = {} } = {}) {
   const sources = [{ id: 's1', label: 'S1', fetch: async () => jobs }];
   const svc = createCareer({
     store, sources, notify, chatId: () => chat, now: () => clock,
-    getProfile: () => ({ skills: 'React, Node.js, PostgreSQL, TypeScript' }), env: { CAREER_GREENHOUSE_BOARDS: '', ...env },
+    getProfile: () => ({ skills: 'React, Node.js, PostgreSQL, TypeScript' }), env: { CAREER_GREENHOUSE_BOARDS: '', CAREER_TELEGRAM: 'on', CAREER_INSTANT_DIGEST: 'on', ...env },
   });
   return { svc, store, tick: (ms) => { clock += ms; } };
 }
@@ -430,5 +435,253 @@ describe('quickCareer (perintah bahasa biasa)', () => {
       if (q === 'lowongan') expect(r).not.toBeNull(); // kata tunggal ini sah: setara "lowongan baru"
       else expect(r, q).toBeNull();
     }
+  });
+});
+
+
+// --------------------------------------------------------------- laporan harian, penjaga 24 jam
+
+const D = (iso) => Date.parse(iso); // WIB = UTC+7: '2026-10-16T12:00:00Z' = 19.00 WIB
+
+describe('laporan harian (satu pesan, jam 19.00 WIB)', () => {
+  const jobs = [job({ source: 's1', extId: 'a', url: 'https://x/a', title: 'Junior Full Stack Developer', postedAt: D('2026-10-16T01:00:00Z') })];
+
+  it('pemindaian tidak lagi mengirim pesan per pemindaian (bawaan: mati)', async () => {
+    const notify = vi.fn(async () => {});
+    const { svc } = makeService({ jobs, notify, env: { CAREER_INSTANT_DIGEST: '' } });
+    expect((await svc.scan()).announced).toBe(0);
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it('instance yang tidak dinyalakan untuk Telegram (mis. laptop) tidak pernah mengirim', async () => {
+    const notify = vi.fn(async () => {});
+    const { svc } = makeService({ jobs, notify, now: D('2026-10-16T12:30:00Z'), env: { CAREER_TELEGRAM: '' } });
+    await svc.scan();
+    expect(await svc.dailyReport()).toBe('off');
+    expect(await svc.dailyReport({ force: true })).toBe('off');
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it('belum jam 19.00 = tidak kirim; setelahnya kirim SEKALI per hari, selamat dari restart', async () => {
+    const notify = vi.fn(async () => {});
+    const { svc, store, tick } = makeService({ jobs, notify, now: D('2026-10-16T11:30:00Z'), env: { CAREER_INSTANT_DIGEST: '' } }); // 18.30 WIB
+    await svc.scan();
+    expect(await svc.dailyReport()).toBe('not_yet');
+    tick(45 * 60_000); // 19.15 WIB
+    expect(await svc.dailyReport()).toBe('sent');
+    expect(await svc.dailyReport()).toBe('already');
+    // proses baru memakai database yang sama (restart/deploy): tetap tidak mengirim ulang
+    const again = createCareer({ store, sources: [], notify, chatId: () => '55555', now: () => D('2026-10-16T13:00:00Z'), env: { CAREER_TELEGRAM: 'on' } });
+    expect(await again.dailyReport()).toBe('already');
+    expect(notify).toHaveBeenCalledTimes(1);
+    tick(24 * 3_600_000); // besok 19.15 WIB
+    expect(await svc.dailyReport()).toBe('sent');
+    expect(notify).toHaveBeenCalledTimes(2);
+  });
+
+  it('isi laporan: ringkas, angka lamaran, kabar baik, kesehatan, dan satu hal untuk diputuskan', async () => {
+    const { svc } = makeService({ jobs, notify: async () => {}, now: D('2026-10-16T12:00:00Z') });
+    await svc.scan();
+    const { text } = svc.reportText();
+    expect(text).toMatch(/^Laporan harian agent - Jumat, 16 Okt \(19\.00 WIB\)/);
+    expect(text).toContain('Lamaran: 0 terkirim dalam 24 jam (total 0)');
+    expect(text).toContain('Kabar baik: belum ada');
+    expect(text).toMatch(/Radar: 1 lowongan baru dibaca, 1 layak dilamar, 0 perlu dicek/);
+    expect(text).toMatch(/Kesehatan: aktif terus \(1 pemindaian, terakhir 19\.00 WIB, restart 0x/);
+    expect(text).toContain('Menunggu keputusan Mas: 1 lowongan layak dilamar');
+    expect(text.length).toBeLessThan(900); // terbaca dalam sepuluh detik
+  });
+
+  it('kabar baik & lamaran terkirim dihitung dari status yang berubah dalam 24 jam', async () => {
+    const mk = (n) => job({ source: 's1', extId: n, url: `https://x/${n}`, title: `Junior Full Stack Developer ${n}` });
+    const { svc, store, tick } = makeService({ jobs: [mk('a'), mk('b'), mk('c')], notify: async () => {}, now: D('2026-10-16T05:00:00Z') });
+    await svc.scan();
+    const ids = store.listJobs().jobs.map((j) => j.id);
+    store.setStatus(ids[0], 'applied'); store.setStatus(ids[1], 'interview'); store.setStatus(ids[2], 'offer');
+    tick(3_600_000);
+    const { text, facts } = svc.reportText();
+    expect(text).toContain('Lamaran: 1 terkirim dalam 24 jam (total 3)');
+    expect(text).toContain('Kabar baik: 1 penawaran kerja, 1 undangan wawancara');
+    expect(facts).toMatchObject({ applied: 1, interview: 1, offer: 1 });
+    expect(text).toContain('Tidak ada yang perlu Mas putuskan sekarang.');
+  });
+
+  it('modul lain menambah baris lewat addCountSection; hanya muncul bila ada isinya', async () => {
+    const { svc, store } = makeService({ jobs: [], notify: async () => {}, now: D('2026-10-16T12:00:00Z') });
+    svc.addCountSection('Pasar', 'alarm harga tercapai', 'market', 'alert_fired');
+    expect(svc.reportText().text).not.toContain('Pasar:');
+    store.log({ agent: 'market', kind: 'alert_fired', title: 'x' }); store.log({ agent: 'market', kind: 'alert_fired', title: 'y' });
+    expect(svc.reportText().text).toContain('Pasar: 2 alarm harga tercapai');
+  });
+
+  it('bagian laporan yang rusak tidak menggagalkan laporan', async () => {
+    const { svc } = makeService({ jobs: [], notify: async () => {}, now: D('2026-10-16T12:00:00Z') });
+    svc.sections.push(() => { throw new Error('boom'); });
+    expect(svc.reportText().text).toContain('Kesehatan:');
+  });
+
+  it('gagal kirim dicoba lagi paling banyak 3 kali; perintah manual tetap bisa', async () => {
+    const notify = vi.fn().mockRejectedValue(new Error('telegram down'));
+    const { svc } = makeService({ jobs: [], notify, now: D('2026-10-16T12:30:00Z') });
+    expect(await svc.dailyReport()).toBe('failed');
+    expect(await svc.dailyReport()).toBe('failed');
+    expect(await svc.dailyReport()).toBe('failed');
+    expect(notify).toHaveBeenCalledTimes(3);
+    expect(await svc.dailyReport()).toBe('failed'); // jatah habis: tidak memberondong
+    expect(notify).toHaveBeenCalledTimes(3);
+    notify.mockResolvedValue(undefined);
+    expect(await svc.dailyReport({ force: true })).toBe('sent');
+  });
+});
+
+describe('penjaga 24 jam (watchdog)', () => {
+  it('radar diam > 2 interval: dicatat, pemindaian dinyalakan ulang, pemilik diberi tahu SEKALI', async () => {
+    const notify = vi.fn(async () => {});
+    const jobs = [job({ source: 's1', extId: 'a', url: 'https://x/a', title: 'Junior Full Stack Developer', postedAt: D('2026-10-16T01:00:00Z') })];
+    const { svc, store, tick } = makeService({ jobs, notify, now: D('2026-10-16T01:00:00Z') });
+    await svc.scan({ announce: false });
+    tick(13 * 3_600_000); // 13 jam tanpa pemindaian (interval 6 jam)
+    await svc.tick();
+    expect(store.activity().some((a) => a.kind === 'stalled')).toBe(true);
+    await svc._scanning; // pemindaian ulang yang dipicu penjaga
+    await svc.tick(); await svc.tick();
+    expect(notify.mock.calls.filter(([, t]) => /berhenti memindai/.test(t))).toHaveLength(1);
+    expect(store.activity().some((a) => a.kind === 'recovered')).toBe(true); // sudah memindai lagi: pulih tercatat
+  });
+
+  it('radar sehat: tidak ada peringatan', async () => {
+    const notify = vi.fn(async () => {});
+    const { svc, store, tick } = makeService({ jobs: [], notify, now: D('2026-10-16T03:00:00Z') });
+    svc.startedAt = D('2026-10-16T03:00:00Z');
+    await svc.scan({ announce: false });
+    tick(5 * 3_600_000);
+    await svc.tick();
+    expect(store.activity().some((a) => a.kind === 'stalled')).toBe(false);
+  });
+});
+
+describe('perintah "laporan agent"', () => {
+  it('menjawab dengan laporan yang sama; tidak membajak kalimat lain', async () => {
+    const { svc } = makeService({ jobs: [], notify: async () => {}, now: D('2026-10-16T12:00:00Z') });
+    for (const q of ['laporan agent', 'rekap harian agen', 'laporan kerja agent', 'agent hari ini ngapain aja?', 'agen kerja apa']) {
+      expect(await quickCareer(svc, q), q).toMatch(/^Laporan harian agent/);
+    }
+    for (const q of ['laporan keuangan bulan ini', 'buat laporan harian untuk kantor', 'agent saya error', 'laporan']) {
+      expect(await quickCareer(svc, q), q).toBeNull();
+    }
+  });
+});
+
+// --------------------------------------------------------------- portofolio -> lembar fakta
+
+const PROFILE_TS = `
+interface Profile { personalInfo: { name: string } }
+// komentar { dengan kurung
+export const profile: Profile = {
+  personalInfo: { name: "Wisnu Contoh", role: "Full-Stack Engineer", location: "Bekasi", tagline: "t", summary: "Ringkasan {dengan} kurung", email: "a@b.c", phone: "+62", linkedin: "l", github: "g", website: "https://contoh.my.id" },
+  skills: {
+    programming: [{ name: "Python", icon: "python" }, { name: "Golang" }],
+    webTech: [{ name: "Next.js", icon: "n" }, { name: "React" }, { name: "Technical SEO" }],
+    aiMl: [{ name: "MCP (Model Context Protocol)" }, { name: "RAG & LLM Integration" }],
+    securityCloud: [{ name: "Cloudflare (WAF, DNS & SSL)" }],
+    tools: [{ name: "Node.js" }],
+    soft: [{ name: "Teamwork" }]
+  },
+  experience: [
+    { role: "Software Developer Intern", company: "PT A", type: "Internship", duration: "August 2026 - December 2026", location: "x", description: "d", skills: ["PHP", "Agile", "SDLC"] },
+    { role: "Full Stack Engineer", company: "Toko", type: "Self-employed", duration: "December 2025 - Present", location: "x", description: "d", skills: ["Laravel"] },
+    { role: "Web Development Intern", company: "B", type: "Internship", duration: "April 2026 - July 2026", location: "x", description: "d", skills: ["WordPress"] }
+  ],
+  organizationalExperience: [{ role: "Member", company: "Org", type: "Organization", duration: "2026", location: "x", description: "d", skills: [] }],
+  projects: [{ title: "P1", role: "dev", status: "Production", link: "https://p1", description: "d", techStack: ["Next.js 16", "PostgreSQL 16", "Redis 7", "Go (Golang)", "JWT"] }],
+  education: { institution: "Univ", degree: "S1", duration: "2023-2027", location: "Bekasi", focus: "IT" },
+  educationHistory: ["SMA"], organization: [],
+  certifications: [{ name: "C1", issuer: "I", date: "2026", id: "x", description: "d" }],
+  competitions: [], openSource: []
+};
+export const other = { a: 1 };
+`;
+
+describe('portfolio.js (membaca profile.ts)', () => {
+  it('extractLiteral: kurung dalam string/komentar tidak mengacaukan pencocokan', () => {
+    const lit = extractLiteral(PROFILE_TS);
+    expect(lit.startsWith('{')).toBe(true);
+    expect(lit.trim().endsWith('}')).toBe(true);
+    expect(lit).not.toContain('export const other');
+    expect(parseProfileTs(PROFILE_TS).personalInfo.summary).toContain('{dengan}');
+  });
+
+  it('literal berbahaya tidak bisa menjalankan kode (sandbox kosong)', () => {
+    expect(() => parseProfileTs('export const profile: P = { a: process.exit(1) };')).toThrow();
+    expect(() => parseProfileTs("export const profile: P = { a: require('fs').readFileSync('x') };")).toThrow();
+    expect(() => parseProfileTs('export const profile: P = { a: (() => { while(true){} })() };')).toThrow();
+    expect(() => parseProfileTs('const nothing = 1;')).toThrow(/tidak ditemukan/);
+  });
+
+  it('importPortfolio dari folder: membaca HANYA src/data/profile*.ts, tidak membuka .env', () => {
+    const dir = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'wanar-pf-'));
+    nodeFs.mkdirSync(nodePath.join(dir, 'src', 'data'), { recursive: true });
+    nodeFs.writeFileSync(nodePath.join(dir, 'src', 'data', 'profile.ts'), PROFILE_TS);
+    nodeFs.writeFileSync(nodePath.join(dir, '.env'), 'RAHASIA_JANGAN_DIBACA=abc123');
+    nodeFs.writeFileSync(nodePath.join(dir, 'src', 'data', 'backupdatesocialregis'), 'password=hunter2');
+    const facts = importPortfolio(dir, { now: new Date('2026-10-16T00:00:00Z') });
+    expect(facts).toMatchObject({ version: 1, importedAt: '2026-10-16T00:00:00.000Z', id: null });
+    expect(JSON.stringify(facts)).not.toMatch(/RAHASIA|hunter2|abc123/);
+    expect(validateFacts(facts).ok).toBe(true);
+    expect(() => importPortfolio(nodePath.join(dir, 'kosong'))).toThrow(/tidak ditemukan/);
+  });
+});
+
+describe('facts.js (lembar fakta di run time)', () => {
+  const facts = { version: 1, importedAt: 'x', en: normalizeProfile(parseProfileTs(PROFILE_TS)), id: null };
+
+  it('validateFacts menolak data rusak', () => {
+    expect(validateFacts(facts).ok).toBe(true);
+    expect(validateFacts(null).ok).toBe(false);
+    expect(validateFacts({ ...facts, version: 2 }).ok).toBe(false);
+    expect(validateFacts({ version: 1, en: { personalInfo: { name: 'x' }, experience: [], projects: [], skills: {} } }).errors.join()).toMatch(/keahlian kosong/);
+  });
+
+  it('cleanSkill & skillsFromFacts: versi/kurung dibuang, filler dibuang, varian nextjs ditambah', () => {
+    expect(cleanSkill('Next.js 16')).toBe('next.js');
+    expect(cleanSkill('Cloudflare (WAF, DNS & SSL)')).toBe('cloudflare');
+    expect(cleanSkill('Go (Golang)')).toBe('golang');
+    expect(cleanSkill('PostgreSQL 16')).toBe('postgresql');
+    const sk = skillsFromFacts(facts);
+    expect(sk).toEqual(expect.arrayContaining(['python', 'golang', 'next.js', 'nextjs', 'react', 'mcp', 'rag', 'llm integration', 'cloudflare', 'node.js', 'php', 'laravel', 'postgresql', 'redis']));
+    for (const noise of ['teamwork', 'agile', 'sdlc', 'jwt']) expect(sk).not.toContain(noise);
+    expect(new Set(sk).size).toBe(sk.length);
+  });
+
+  it('experienceMonths: gabungan periode tumpang tindih, dibatasi sampai "sekarang", organisasi tidak dihitung', () => {
+    // Des 2025 - sekarang (16 Okt 2026) mencakup Apr-Jul 2026; Agu-Des 2026 dipotong di "sekarang"
+    expect(experienceMonths(facts, D('2026-10-16T00:00:00Z'))).toBe(10);
+    expect(experienceMonths(facts, D('2025-06-01T00:00:00Z'))).toBe(0);
+    expect(experienceMonths({ en: { experience: [] } })).toBe(0);
+    expect(experienceMonths(null)).toBe(0);
+  });
+
+  it('factSummary hanya berisi hitungan, bukan data pribadi', () => {
+    const s = factSummary(facts, D('2026-10-16T00:00:00Z'));
+    expect(s).toMatchObject({ experience: 3, organizations: 1, projects: 1, certifications: 1, professionalMonths: 10, hasIndonesian: false });
+    expect(JSON.stringify(s)).not.toMatch(/Wisnu|a@b\.c|\+62/);
+  });
+
+  it('loadFacts: file hilang / rusak = null (bukan error), dan cache mengikuti perubahan file', () => {
+    const dir = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'wanar-ff-'));
+    const file = nodePath.join(dir, 'owner-facts.json');
+    expect(loadFacts(file)).toBeNull();
+    nodeFs.writeFileSync(file, '{ bukan json');
+    expect(loadFacts(file)).toBeNull();
+    nodeFs.writeFileSync(file, JSON.stringify(facts));
+    nodeFs.utimesSync(file, new Date(), new Date(Date.now() + 5000));
+    expect(loadFacts(file)?.en.personalInfo.name).toBe('Wisnu Contoh');
+  });
+
+  it('service.profile menggabungkan keahlian profil lama dengan portofolio', () => {
+    const { svc } = makeService({ jobs: [] });
+    svc.getFacts = () => facts;
+    const p = svc.profile();
+    expect(p.skills).toEqual(expect.arrayContaining(['react', 'laravel', 'cloudflare']));
   });
 });

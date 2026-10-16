@@ -142,8 +142,13 @@ export class CareerStore {
       maybe: q("SELECT COUNT(*) n FROM career_jobs WHERE verdict = 'maybe' AND status = 'new'").n,
       newToday: q('SELECT COUNT(*) n FROM career_jobs WHERE first_seen >= ?', day).n,
       byStatus: Object.fromEntries(this.db.prepare('SELECT status, COUNT(*) n FROM career_jobs GROUP BY status').all().map((r) => [r.status, r.n])),
-      lastScan: q("SELECT ts FROM agent_activity WHERE agent = 'career' AND kind = 'scan' ORDER BY id DESC LIMIT 1")?.ts || null,
+      lastScan: this.lastGoodScan(),
     };
+  }
+
+  /** Timestamp of the last scan that finished without error (what "the radar is alive" means). */
+  lastGoodScan() {
+    return this.db.prepare("SELECT MAX(ts) AS t FROM agent_activity WHERE agent = 'career' AND kind = 'scan' AND level != 'error'").get().t || null;
   }
 
   // ---------------------------------------------------------- activity feed
