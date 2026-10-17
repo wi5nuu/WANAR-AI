@@ -30,6 +30,7 @@ import { quickMarket } from '../market/quick.js';
 import { quickCareer } from '../career/quick.js';
 import { quickSales } from '../sales/quick.js';
 import { salesPromptLines } from '../sales/prompt.js';
+import { appPromptLines } from './self-knowledge.js';
 
 const MAX_ACTIONS = 8;
 const ACTION_TYPES = ['reminder', 'cancel_reminder', 'task', 'finance', 'clock', 'schedule', 'report', ...EMAIL_ACTION_TYPES];
@@ -280,7 +281,7 @@ export function fallbackPlan(text, now = Date.now()) {
  * Builds the responder used for the owner's plain Telegram messages.
  * Same signature as makeChatResponder, so it is a drop-in replacement.
  */
-export function makeAssistantResponder({ aiManager, worklog, emailDesk = null, briefing = null, companion = null, market = null, career = null, sales = null, learning = null, chatActions = null, context = null, ownerName = process.env.OWNER_NAME || 'Wisnu Alfian Nur Ashar' }) {
+export function makeAssistantResponder({ aiManager, worklog, emailDesk = null, briefing = null, companion = null, market = null, career = null, sales = null, learning = null, chatActions = null, automation = null, context = null, ownerName = process.env.OWNER_NAME || 'Wisnu Alfian Nur Ashar' }) {
   const first = String(ownerName).split(/\s+/)[0];
   // The assistant is the owner's subordinate: it addresses him respectfully by name.
   const call = String(process.env.OWNER_CALL || '').trim() || `Mas ${first}`;
@@ -405,6 +406,7 @@ export function makeAssistantResponder({ aiManager, worklog, emailDesk = null, b
         ? '- Kamu TIDAK bisa mengirim pesan chat ke orang lain, membuka file, atau browsing dari sini (email bisa, lihat bagian EMAIL).'
         : '- Kamu TIDAK bisa mengirim email/pesan ke orang lain, membuka file, atau browsing dari sini.',
       ...(emailDesk ? emailPromptLines(emailDesk) : []),
+      ...appPromptLines({ aiManager, automation, emailDesk, sales, career, market }),
       ...salesPromptLines({ sales, career }),
       lessons ? `PELAJARAN DARI PENGALAMAN SEBELUMNYA (catatan internalmu — pakai agar makin tepat, JANGAN dibacakan atau disebut ke ${first}):\n${lessons}` : '',
       '',

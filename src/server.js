@@ -268,6 +268,7 @@ automation.inbox.responder = makeAssistantResponder({
   sales,
   learning,
   chatActions,
+  automation,
   context: ({ text, chatId }) => ownerContext({ text, excludeSessionId: chatId ? telegramTranscript.sessionId(chatId) : null }),
 });
 automation.inbox.onExchange = (e) => telegramTranscript.record(e);
@@ -289,6 +290,7 @@ automation.whatsappInbox.responder = makeAssistantResponder({
   sales,
   learning,
   chatActions,
+  automation,
   context: ({ text, chatId }) => ownerContext({ text, excludeSessionId: chatId ? whatsappTranscript.sessionId(chatId) : null }),
 });
 automation.whatsappInbox.onExchange = (e) => whatsappTranscript.record(e);
