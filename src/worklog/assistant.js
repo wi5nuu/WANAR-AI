@@ -31,6 +31,7 @@ import { quickCareer } from '../career/quick.js';
 import { quickSales } from '../sales/quick.js';
 import { salesPromptLines } from '../sales/prompt.js';
 import { appPromptLines } from './self-knowledge.js';
+import { quickOps } from '../ops/manager.js';
 
 const MAX_ACTIONS = 8;
 const ACTION_TYPES = ['reminder', 'cancel_reminder', 'task', 'finance', 'clock', 'schedule', 'report', ...EMAIL_ACTION_TYPES];
@@ -281,7 +282,7 @@ export function fallbackPlan(text, now = Date.now()) {
  * Builds the responder used for the owner's plain Telegram messages.
  * Same signature as makeChatResponder, so it is a drop-in replacement.
  */
-export function makeAssistantResponder({ aiManager, worklog, emailDesk = null, briefing = null, companion = null, market = null, career = null, sales = null, learning = null, chatActions = null, automation = null, context = null, ownerName = process.env.OWNER_NAME || 'Wisnu Alfian Nur Ashar' }) {
+export function makeAssistantResponder({ aiManager, worklog, emailDesk = null, briefing = null, companion = null, market = null, career = null, sales = null, ops = null, learning = null, chatActions = null, automation = null, context = null, ownerName = process.env.OWNER_NAME || 'Wisnu Alfian Nur Ashar' }) {
   const first = String(ownerName).split(/\s+/)[0];
   // The assistant is the owner's subordinate: it addresses him respectfully by name.
   const call = String(process.env.OWNER_CALL || '').trim() || `Mas ${first}`;
@@ -314,6 +315,11 @@ export function makeAssistantResponder({ aiManager, worklog, emailDesk = null, b
       if (careerReply) { traceStep('intent', { name: 'career', detail: 'Radar lowongan/status lamaran — dijawab kode dari data radar, tanpa AI', model: false }); return careerReply; }
     }
     // Sales desk: "prospek", "prospek 12 menang 5jt", "setujui harga" — the owner's side, answered by code.
+    if (ops) {
+      let opsReply = null;
+      try { opsReply = quickOps(ops, text); } catch { opsReply = null; }
+      if (opsReply) { traceStep('intent', { name: 'ops-status', detail: 'Status sistem — hasil pemeriksaan nyata tiap bagian, dijawab kode tanpa AI', model: false }); return opsReply; }
+    }
     if (sales) {
       let salesReply = null;
       try { salesReply = await quickSales(sales, text); } catch { salesReply = null; }

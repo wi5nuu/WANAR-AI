@@ -63,6 +63,8 @@ import { createNightlyLearning } from './command-center/nightly-learning.js';
 import { createCompanion } from './companion.js';
 import { createMarket } from './market/service.js';
 import { createCareer } from './career/service.js';
+import { inQuietHours } from './career/service.js';
+import { OpsManager, buildChecks } from './ops/manager.js';
 import { loadFacts } from './career/facts.js';
 import { channelWarnings, inboxWarnings, providerWarnings } from './career/health.js';
 import { createSales } from './sales/service.js';
@@ -251,6 +253,21 @@ sales.prospects = prospects;
 // A visitor's message relayed by the portfolio form (Web3Forms email) becomes a sales lead.
 emailDesk.desk.onFormLead = ({ name, contact, message }) => sales.intake({ source: 'site', contact, name, text: message });
 career.sections.push(({ since }) => prospects.reportLines({ since }));
+// Operations manager: one health view over every part, a background watchdog that tells the owner once per problem.
+const ops = new OpsManager({
+  checks: buildChecks({ automation, aiManager, emailDesk: emailDesk.desk, career, sales }),
+  quiet: (ts) => inQuietHours(ts),
+  log: (e) => career.store.log(e),
+  notify: automation.channels.has('telegram')
+    ? async (text) => {
+      const chatId = String(process.env.TELEGRAM_AI_CHAT_IDS || '').split(',')[0]?.trim();
+      const tg = automation.channels.get('telegram');
+      if (!chatId || tg.mode !== 'live') return;
+      await tg.send({ to: chatId, text });
+      try { automation.inbox.noteOutgoing(chatId, text); } catch { /* the chat history is best-effort */ }
+    }
+    : null,
+});
 // A setting lost silently (e-mail keys, bot token) is called out in the daily report instead of staying silent.
 career.sections.push(() => [...channelWarnings(automation.channels), ...inboxWarnings(automation.inbox), ...providerWarnings(aiManager, process.env)]);
 automation.whatsappInbox.sales = sales;
@@ -266,6 +283,7 @@ automation.inbox.responder = makeAssistantResponder({
   market,
   career,
   sales,
+  ops,
   learning,
   chatActions,
   automation,
@@ -288,6 +306,7 @@ automation.whatsappInbox.responder = makeAssistantResponder({
   market,
   career,
   sales,
+  ops,
   learning,
   chatActions,
   automation,
@@ -3031,6 +3050,7 @@ async function startServer() {
       if (market.start()) console.log('Pasar      : alarm harga aktif (cek tiap menit)');
       if (career.start()) console.log('Karir      : radar lowongan remote aktif (laporan ke Telegram)');
       if (sales.start()) console.log('Penjualan  : meja penjualan aktif (' + (sales.autoReply ? 'balas otomatis' : 'balasan hanya draf') + ')');
+      if (ops.start()) console.log("Operasional: pengawas kesehatan sistem aktif (cek tiap 10 menit)");
       if (prospects.start()) console.log('Klien      : radar peluang aktif (Freelancer.com + usaha lokal)');
       if (companion.start()) console.log('Peka       : sapaan peduli aktif (maks ' + companion.config.maxPerDay + '/hari, /peka untuk mengatur)');
       if (learning.start()) console.log('Belajar    : pembelajaran otomatis tiap 00:00 (pelajaran disuntik ke prompt)');
@@ -3046,7 +3066,7 @@ async function startServer() {
   }
   for (const sig of ['SIGINT', 'SIGTERM']) {
     process.once(sig, () => {
-      try { automation.scheduler.stop(); automation.inbox.stop(); prayerTimes.stop(); worklog.service.stop(); emailDesk.watcher.stop(); emailDesk.desk.stop(); briefing.stop(); learning.stop(); companion.stop(); market.stop(); career.stop(); sales.stop(); prospects.stop(); automation.channels.closeAll(); } catch { /* ignore */ }
+      try { automation.scheduler.stop(); automation.inbox.stop(); prayerTimes.stop(); worklog.service.stop(); emailDesk.watcher.stop(); emailDesk.desk.stop(); briefing.stop(); learning.stop(); companion.stop(); market.stop(); career.stop(); sales.stop(); prospects.stop(); ops.stop(); automation.channels.closeAll(); } catch { /* ignore */ }
       process.exit(0);
     });
   }
