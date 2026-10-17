@@ -47,6 +47,30 @@ const BULK_BODY = /(unsubscribe|berhenti berlangganan|berhenti menerima|manage (
 const TRACKING_LINKS = /(utm_(campaign|medium|source)=|sendgrid\.net|mcauto-images|mailchimp|list-manage\.com|lacak\.|click\.|links?\.|track(ing)?\.|\/CL0\/|email\.awscloud\.com|mkt\d*\.)/i;
 const BOT_SENDER = /^(no-?reply|do-?not-?reply|mailer-daemon|postmaster|bounces?|notifications?)([+.-]|@)/i;
 
+/** Every automatic reply says so: people have the right to know a machine wrote it. */
+export const AUTO_DISCLOSURE = '— Balasan otomatis dari asisten AI (Wanar AI). Pesanmu sudah diteruskan; pemilik akan membacanya dan menjawab sendiri bila perlu.';
+export const withDisclosure = (body) => (String(body).includes(AUTO_DISCLOSURE) ? String(body) : `${String(body).trimEnd()}
+
+${AUTO_DISCLOSURE}`);
+
+/**
+ * Web3Forms relays portfolio contact-form submissions as an email from notify+...@web3forms.com:
+ *   name  : ...\nemail  : ...\nphone  : ...\nmessage  : ...
+ * That sender is a robot, but the visitor inside is a lead. Returns {name, email, phone, message} or null.
+ */
+export function parseFormNotification(mail) {
+  const from = String(mail?.from?.address || '').toLowerCase();
+  if (!/@(?:[a-z0-9-]+\.)*web3forms\.com$/.test(from)) return null;
+  const text = String(mail?.text || '').replace(/\r/g, '');
+  const field = (k) => new RegExp(`^\\s*${k}\\s*:\\s*(.*)$`, 'im').exec(text)?.[1]?.trim() || '';
+  const msgAt = /^\s*message\s*:\s*/im.exec(text);
+  const message = msgAt ? text.slice(msgAt.index + msgAt[0].length).split(/\n\s*\n--|\n-{3,}/)[0].trim() : '';
+  const email = field('email');
+  const phone = field('phone');
+  if (!message || (!email && !phone)) return null;
+  return { name: field('name'), email, phone, message };
+}
+
 const clip = (s, n) => {
   const t = String(s || '').replace(/\r/g, '').trim();
   return t.length > n ? `${t.slice(0, n - 1)}…` : t;
@@ -150,6 +174,7 @@ export class EmailDesk {
     this.onSent = null;
     /** @type {null|((meeting:object, ctx:object)=>Promise<any>)} puts a meeting found in an email into the schedule */
     this.onMeeting = null;
+    this.onFormLead = null;
     this.listeners = new Set();
     this._timer = null;
     this.sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -466,7 +491,8 @@ export class EmailDesk {
       if (d.in_reply_to) headers['In-Reply-To'] = d.in_reply_to;
       if (d.refs || d.in_reply_to) headers.References = d.refs || d.in_reply_to;
       if (auto) headers['Auto-Submitted'] = 'auto-replied';
-      const info = await this.mailer.send({ to: d.to_addr, subject: d.subject, text: d.body, headers });
+      const text = auto ? withDisclosure(d.body) : d.body;
+      const info = await this.mailer.send({ to: d.to_addr, subject: d.subject, text, headers });
 
       let thread = d.thread_id ? this.store.threads.get(d.thread_id) : null;
       if (!thread) {
@@ -478,7 +504,7 @@ export class EmailDesk {
       }
       this.store.messages.add({
         threadId: thread.id, direction: 'out', messageId: info.messageId || null, inReplyTo: d.in_reply_to,
-        from: this.ownAddress || null, to: d.to_addr, subject: d.subject, body: d.body, auto,
+        from: this.ownAddress || null, to: d.to_addr, subject: d.subject, body: text, auto,
       });
       if (auto) this.store.threads.countAuto(thread.id);
       if (d.follow_up_days) this.store.threads.setFollowUp(thread.id, this.now() + d.follow_up_days * DAY_MS);
@@ -486,7 +512,7 @@ export class EmailDesk {
       // Best effort, never blocks or fails the send: keep a copy in the mailbox's Sent folder.
       if (this.onSent && !info.dryRun) {
         Promise.resolve(this.onSent({
-          from: this.ownAddress, fromName: this.ownerName, to: d.to_addr, subject: d.subject, text: d.body,
+          from: this.ownAddress, fromName: this.ownerName, to: d.to_addr, subject: d.subject, text,
           messageId: info.messageId || null, inReplyTo: d.in_reply_to || null, references: d.refs || d.in_reply_to || null, auto,
         })).catch(() => {});
       }
@@ -611,6 +637,9 @@ export class EmailDesk {
 
   async _handleInboundCore(mail) {
     if (mail.messageId && this.store.messages.byMessageId(mail.messageId)) return { matched: false, action: 'duplicate' };
+    // A visitor's message from the website form: a lead for the sales desk, never an auto-reply to the relay address.
+    const form = parseFormNotification(mail);
+    if (form) return this._handleFormLead(form, mail);
     let thread = this.matchThread(mail);
     let isNew = false;
     if (!thread) {
@@ -645,6 +674,21 @@ export class EmailDesk {
     }
 
     return this._respond(thread, mail, fresh, { isNew });
+  }
+
+  async _handleFormLead(form, mail) {
+    const chat = this.defaultChatId();
+    const contact = form.email || form.phone;
+    const who = [form.name, form.email, form.phone].filter(Boolean).join(' · ');
+    let r = null;
+    if (this.onFormLead) {
+      try { r = await this.onFormLead({ name: form.name, contact, message: form.message, phone: form.phone }); } catch (e) { console.warn('[EMAIL-DESK] lead formulir gagal:', e.message); }
+    }
+    const head = `Pesan dari formulir situs portofolio\n${who}\n\n${clip(form.message, 1000)}`;
+    const note = r?.reply ? `\n\nSaran balasan (belum dikirim, silakan Mas yang menjawab):\n${clip(r.reply, 600)}` : '';
+    const saved = this.onFormLead ? '\n\nSudah masuk ke daftar prospek penjualan. Saya tidak membalas otomatis ke alamat relay formulir.' : '';
+    await this._tell(chat, head + note + saved);
+    return { matched: true, action: 'form_lead' };
   }
 
   /**

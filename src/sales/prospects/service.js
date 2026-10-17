@@ -356,6 +356,11 @@ export class ProspectService extends EventEmitter {
     const total = (by.local || 0) + (by.marketplace || 0);
     if (total) out.push(`Peluang klien: ${total} baru cocok (usaha lokal ${by.local || 0}, Freelancer ${by.marketplace || 0}). Ketik "peluang" untuk melihatnya`);
     if (s.dueFollowUps) out.push(`Tindak lanjut: ${s.dueFollowUps} calon klien belum membalas`);
+    // An honest report: a radar that quietly stopped must say so instead of looking healthy.
+    if (this.enabled) {
+      const last = this._lastRun('freelancer');
+      if (!last || this.now() - last > 18 * 3_600_000) out.push(`PERINGATAN radar klien: pindaian Freelancer terakhir ${last ? `${Math.round((this.now() - last) / 3_600_000)} jam lalu` : 'belum pernah berhasil'} (seharusnya tiap 6 jam)`);
+    }
     return out;
   }
 

@@ -248,6 +248,8 @@ const prospects = createProspects({
   log: (e) => career.store.log(e),
 });
 sales.prospects = prospects;
+// A visitor's message relayed by the portfolio form (Web3Forms email) becomes a sales lead.
+emailDesk.desk.onFormLead = ({ name, contact, message }) => sales.intake({ source: 'site', contact, name, text: message });
 career.sections.push(({ since }) => prospects.reportLines({ since }));
 // A setting lost silently (e-mail keys, bot token) is called out in the daily report instead of staying silent.
 career.sections.push(() => [...channelWarnings(automation.channels), ...inboxWarnings(automation.inbox), ...providerWarnings(aiManager, process.env)]);

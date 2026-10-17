@@ -10,6 +10,7 @@
  */
 
 import { priceRange } from './catalog.js';
+import { skillsFromFacts } from '../career/facts.js';
 
 const clip = (s, n) => (String(s || '').length > n ? `${String(s).slice(0, n - 1)}…` : String(s || ''));
 const hhmm = (ts) => new Date(ts).toLocaleTimeString('id-ID', { timeZone: 'Asia/Jakarta', hour: '2-digit', minute: '2-digit', hour12: false }).replace(':', '.');
@@ -38,6 +39,17 @@ export function salesPromptLines({ sales, career = null }) {
     out.push(approved.length
       ? `- HARGA yang sudah disetujui pemilik (satu-satunya yang boleh kamu sebut): ${approved.map((s) => `${s.name}: ${priceRange(s.price)}`).join('; ')}. Bila ditanya kisaran harga, jawab dari daftar ini; JANGAN mengarang angka pasar sendiri. Bila pemilik ingin tarif lebih rendah untuk usaha kecil, sarankan perintah: atur harga landing 750rb - 2jt.`
       : '- Belum ada harga yang disetujui pemilik. JANGAN menyebut angka harga; minta pemilik menyetujui lewat perintah "setujui harga".');
+    const facts = sales.getFacts?.();
+    const p = facts?.en?.personalInfo;
+    if (p) {
+      const projects = (facts.en.projects || []).map((x) => x.name || x.title).filter(Boolean);
+      out.push(
+        `- PORTOFOLIO pemilik (TERHUBUNG, diimpor dari situsnya ${p.website || ''}): ${p.name}, ${p.role || 'pengembang'}, ${p.location || ''}. GitHub: ${p.github || '-'}. `
+        + `Keahlian: ${clip(skillsFromFacts(facts).slice(0, 14).join(', '), 220)}. `
+        + (projects.length ? `Proyek: ${clip(projects.slice(0, 8).join('; '), 220)}. ` : '')
+        + 'JANGAN bilang kamu belum terhubung atau tidak tahu portofolio pemilik; pakai data ini untuk menjual kemampuannya.',
+      );
+    }
   } catch { /* the business block is best-effort: never break the chat */ }
   out.push('- Perintah yang bisa pemilik ketik: peluang, "peluang lagi", peluang <id>, peluang <id> dihubungi/balas/menang/kalah/lewati, saran balasan: <pesan klien>, prospek, balas prospek <id>: <pesan>, setujui harga, atur harga <layanan> <min> - <maks>, laporan agent, lowongan baru, kit <id>.');
   void career;

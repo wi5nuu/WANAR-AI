@@ -403,7 +403,10 @@ describe('paket pagi & tindak lanjut (selalu dikirim ke PEMILIK, tidak pernah ke
     const id = store.list({ kind: 'local', verdict: 'good' }).prospects[0].id;
     svc.setStatus(id, 'contacted'); tick(3 * DAY);
     expect(svc.reportLines({ since: NOON + 2 * DAY }).join('\n')).toContain('Tindak lanjut: 1 calon klien belum membalas');
-    expect(makeSvc().svc.reportLines({ since: 0 })).toEqual([]);
+    // belum pernah memindai = peringatan jujur, bukan laporan yang tampak sehat
+    expect(makeSvc().svc.reportLines({ since: 0 }).join(' ')).toContain('PERINGATAN radar klien: pindaian Freelancer terakhir belum pernah berhasil');
+    tick(20 * 3_600_000);
+    expect(svc.reportLines({ since: NOON + 9 * DAY }).join(' ')).toMatch(/PERINGATAN radar klien: pindaian Freelancer terakhir \d+ jam lalu/);
   });
 
   it('Telegram gagal di tengah paket: yang sudah terkirim tetap ditandai, tidak melempar', async () => {
