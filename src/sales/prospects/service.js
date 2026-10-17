@@ -29,6 +29,26 @@ const FOLLOWUP_HOUR = 10;              // 10.00 WIB: who to follow up
 const jparse = (v, d) => { try { return JSON.parse(v); } catch { return d; } };
 const sleep = (ms) => (ms > 0 ? new Promise((r) => setTimeout(r, ms)) : Promise.resolve());
 
+/** Words too common in business names to identify one ("Toko", "Laundry", the street, the city). */
+const GENERIC = new Set(['toko', 'kedai', 'warung', 'laundry', 'restoran', 'resto', 'cafe', 'kafe', 'coffee', 'shop', 'store', 'official', 'bekasi', 'jakarta', 'depok', 'indah', 'harapan', 'raya', 'jalan',
+  'mie', 'bakso', 'ayam', 'salon', 'bengkel', 'apotek', 'klinik', 'sekolah', 'cabang', 'outlet', 'factory', 'boutique', 'bisa', 'kiloan', 'antar', 'jemput', 'barat', 'timur', 'selatan', 'utara', 'pusat', 'group', 'jaya', 'makmur', 'sejahtera']);
+
+const tokens = (s) => [...new Set(String(s || '').toLowerCase().normalize('NFKC').split(/[^\p{L}\p{N}]+/u).filter((w) => w.length >= 4))];
+
+/** Equal, or one typo apart (Asmi ~ Azmi): only for words of 4+ letters. */
+function within1(a, b) {
+  if (a === b) return true;
+  if (Math.abs(a.length - b.length) > 1) return false;
+  let i = 0; let j = 0; let edits = 0;
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) { i += 1; j += 1; continue; }
+    edits += 1;
+    if (edits > 1) return false;
+    if (a.length === b.length) { i += 1; j += 1; } else if (a.length > b.length) i += 1; else j += 1;
+  }
+  return edits + (a.length - i) + (b.length - j) <= 1;
+}
+
 export class ProspectStore {
   constructor(db, { now = Date.now } = {}) {
     this.db = db; this.now = now;
@@ -232,16 +252,21 @@ export class ProspectService extends EventEmitter {
     return Boolean(this.store.db.prepare('SELECT 1 FROM agent_activity WHERE kind = ? AND ref = ?').get(kind, wibDay(this.now())));
   }
 
-  /** 08.00 WIB: today's best local businesses, each with a ready message and a one-tap WhatsApp link. */
-  async morningBatch({ force = false } = {}) {
+  /**
+   * 08.00 WIB: today's best local businesses, each with a ready message and a one-tap WhatsApp link.
+   * `force` (the owner asked: "peluang lagi") skips the schedule and the once-a-day rule, and `count` sets how many.
+   */
+  async morningBatch({ force = false, count = null } = {}) {
     if (!this.notify || !this.ownerChat()) return 0;
     if (!force && (wib(this.now()).h < BATCH_HOUR || inQuietHours(this.now()) || this._doneToday('outreach_batch'))) return 0;
+    const kind = force ? 'outreach_extra' : 'outreach_batch';
+    const limit = Math.min(15, Math.max(1, Number(count) || this.perDay));
     const rows = this.store.db.prepare("SELECT id FROM sales_prospects WHERE kind = 'local' AND verdict = 'good' AND status = 'new' AND mobile = 1 AND pushed_at IS NULL ORDER BY score DESC, first_seen LIMIT ?")
-      .all(this.perDay);
-    if (!rows.length) { this.log({ agent: 'sales', kind: 'outreach_batch', ref: wibDay(this.now()), title: 'Paket kontak pagi: tidak ada usaha lokal baru yang cocok' }); return 0; }
+      .all(limit);
+    if (!rows.length) { this.log({ agent: 'sales', kind, ref: wibDay(this.now()), title: 'Paket kontak: tidak ada usaha lokal baru yang cocok' }); return 0; }
     const sent = [];
     try {
-      await this.notify(this.ownerChat(), `Pagi, Mas. Ada ${rows.length} usaha lokal tanpa website yang cocok untuk dihubungi hari ini. Tiap pesan di bawah siap dikirim: ketuk tautannya, WhatsApp terbuka dengan pesan terisi, tinggal tekan kirim. Setelah terkirim, balas "peluang <nomor> dihubungi" supaya saya menindaklanjuti dua hari lagi.`);
+      await this.notify(this.ownerChat(), `${force ? 'Siap, Mas. Ini' : 'Pagi, Mas. Ada'} ${rows.length} usaha lokal tanpa website yang cocok${force ? ' (tambahan)' : ' untuk dihubungi hari ini'}. Tiap pesan di bawah siap dikirim: ketuk tautannya, WhatsApp terbuka dengan pesan terisi, tinggal tekan kirim. Setelah terkirim, balas "peluang <nomor> dihubungi" supaya saya menindaklanjuti dua hari lagi.`);
       for (const { id } of rows) {
         const d = this.draft(id);
         await this.notify(this.ownerChat(), [`Peluang #${id}: ${d.prospect.title} (${d.prospect.description.split(' · ')[0] || d.prospect.category}), skor ${d.prospect.score}`, '', d.link ? `Buka WhatsApp: ${d.link}` : 'Tidak ada nomor ponsel.', '', 'Pesan:', d.text].join('\n'));
@@ -251,8 +276,55 @@ export class ProspectService extends EventEmitter {
       this.log({ agent: 'sales', kind: 'outreach_fail', level: 'warn', title: 'Paket kontak pagi gagal terkirim sebagian', detail: String(e?.message || e) });
     }
     if (sent.length) this.store.markPushed(sent);
-    this.log({ agent: 'sales', kind: 'outreach_batch', level: 'good', ref: wibDay(this.now()), title: `Paket kontak pagi terkirim ke Telegram (${sent.length} usaha lokal)` });
+    this.log({ agent: 'sales', kind, level: 'good', ref: wibDay(this.now()), title: `Paket kontak ${force ? 'tambahan ' : 'pagi '}terkirim ke Telegram (${sent.length} usaha lokal)` });
     return sent.length;
+  }
+
+  // ------------------------------------------------------------ what the owner asks about
+
+  /** Everything the owner's chat needs to talk about the radar truthfully (also feeds the assistant's prompt). */
+  overview() {
+    const stats = this.store.stats();
+    const q = this.store.db.prepare("SELECT MAX(ts) t FROM agent_activity WHERE agent = 'sales' AND kind = ?");
+    const recent = this.store.db.prepare("SELECT id, title, status FROM sales_prospects WHERE pushed_at IS NOT NULL ORDER BY pushed_at DESC, id DESC LIMIT 6").all();
+    return {
+      stats, areas: this.areas, recent,
+      lastFreelancer: this._lastRun('freelancer') || null,
+      lastBatch: q.get('outreach_batch')?.t || null,
+    };
+  }
+
+  /** The answer to "hasil pencarian?" / "sudah dapat berapa klien?". */
+  overviewText() {
+    const o = this.overview(); const s = o.stats;
+    const hhmm = (ts) => new Date(ts).toLocaleTimeString('id-ID', { timeZone: 'Asia/Jakarta', hour: '2-digit', minute: '2-digit', hour12: false }).replace(':', '.');
+    const lines = [
+      'Hasil radar klien (jalan otomatis setiap hari, tanpa Mas minta):',
+      `- ${s.total} peluang terdata: ${s.goodLocal} usaha lokal tanpa website yang cocok, ${s.goodMarket} proyek Freelancer yang cocok.`,
+      `- Freelancer.com dipindai tiap 6 jam (terakhir ${o.lastFreelancer ? `${hhmm(o.lastFreelancer)} WIB` : 'belum'}); usaha lokal tiap 3 hari (${o.areas.join(', ')}).`,
+      `- Paket pagi terakhir: ${o.lastBatch ? `${hhmm(o.lastBatch)} WIB` : 'belum pernah'}. Sudah dihubungi: ${s.byStatus.contacted || 0}, membalas: ${s.byStatus.replied || 0}, menang: ${s.byStatus.won || 0}.`,
+      'Saya tidak menghubungi calon klien sendiri; Mas yang mengetuk tautan WhatsApp di paket pagi.',
+      'Ketik "peluang" untuk daftarnya, atau "peluang lagi" untuk tambahan usaha sekarang.',
+    ];
+    return lines.join('\n');
+  }
+
+  /**
+   * A business the owner mentions by name ("Asmi laundry tadi nanya tarif"): fuzzy on distinctive words only,
+   * tolerant of one typo, and only among prospects already sent to or worked by the owner.
+   * @returns {object|null} the prospect row, or null when nothing (or more than one thing) matches
+   */
+  findByName(text) {
+    const words = tokens(text);
+    if (!words.length) return null;
+    const rows = this.store.db.prepare("SELECT * FROM sales_prospects WHERE kind = 'local' AND (pushed_at IS NOT NULL OR status != 'new') ORDER BY COALESCE(pushed_at, status_at) DESC LIMIT 400").all();
+    let best = null; let bestScore = 0; let tie = false;
+    for (const r of rows) {
+      const hit = tokens(r.title).filter((t) => !GENERIC.has(t)).filter((t) => words.some((w) => within1(w, t))).length;
+      if (!hit) continue;
+      if (hit > bestScore) { best = r; bestScore = hit; tie = false; } else if (hit === bestScore) tie = true;
+    }
+    return best && !tie ? this.store._shape(best) : null;
   }
 
   /** 10.00 WIB: contacted prospects who have not answered, with the follow-up text ready. Max two per prospect. */

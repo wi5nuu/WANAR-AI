@@ -197,6 +197,7 @@ const career = createCareer({
       const tg = automation.channels.get('telegram');
       if (tg.mode !== 'live') throw new Error('Telegram belum dikonfigurasi');
       await tg.send({ to: chatId, text });
+      try { automation.inbox.noteOutgoing(chatId, text); } catch { /* the chat history is best-effort */ }
     }
     : null,
 });
@@ -216,6 +217,7 @@ const sales = createSales({
       const tg = automation.channels.get('telegram');
       if (tg.mode !== 'live') throw new Error('Telegram belum dikonfigurasi');
       await tg.send({ to: chatId, text });
+      try { automation.inbox.noteOutgoing(chatId, text); } catch { /* the chat history is best-effort */ }
     }
     : null,
   log: (e) => career.store.log(e),
@@ -240,6 +242,7 @@ const prospects = createProspects({
       const tg = automation.channels.get('telegram');
       if (tg.mode !== 'live') throw new Error('Telegram belum dikonfigurasi');
       await tg.send({ to: chatId, text });
+      try { automation.inbox.noteOutgoing(chatId, text); } catch { /* the chat history is best-effort */ }
     }
     : null,
   log: (e) => career.store.log(e),

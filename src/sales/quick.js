@@ -35,6 +35,29 @@ const SUGGEST = /^\s*saran\s+balasan\s*[:,-]\s*([\s\S]{3,1200})$/i;
 const P_STATUS = { dihubungi: 'contacted', balas: 'replied', dibalas: 'replied', nego: 'negotiating', menang: 'won', deal: 'won', kalah: 'lost', lewati: 'skipped', skip: 'skipped' };
 const P_STATUS_ID = { new: 'baru', contacted: 'sudah dihubungi', replied: 'sudah membalas', negotiating: 'negosiasi', won: 'menang', lost: 'kalah', skipped: 'dilewati' };
 
+// Everyday phrasing, handled by code so the owner never meets "I cannot search the internet":
+//   "lanjut cari klien / cari orang yang butuh website"  -> scan now + what the radar already found
+//   "hasil pencarian?" / "apa yang kamu temukan?" / "sudah dapat berapa klien?" -> the radar's real numbers
+//   "peluang lagi" / "kirim 10 peluang"                   -> more businesses right now
+//   "Asmi laundry tadi nanyain tarifnya" (a business already sent to the owner) -> mark replied + suggested answer
+const SEARCH_NOW = /^\s*(?:tolong\s+)?(?:lanjut(?:kan)?\s+)?cari(?:kan)?\s+(?:saya\s+|aku\s+)?(?:ratusan\s+|banyak\s+|lebih\s+banyak\s+)?(?:calon\s+)?(?:klien|client|customer|pelanggan)\b|^\s*(?:tolong\s+)?(?:lanjut(?:kan)?\s+)?cari(?:kan)?\s+(?:calon\s+)?orang\s+yang\s+(?:butuh|perlu|mau)\s+(?:web|website|situs|jasa)/i;
+const RESULTS = /(?:hasil|temuan)\s+(?:dari\s+)?(?:pencarian|cari|radar|kerja)|(?:apa|berapa)\s+(?:saja\s+)?(?:klien|peluang|calon\s+klien|usaha)?\s*(?:yang\s+)?(?:sudah\s+)?(?:kamu\s+)?(?:temukan|ditemukan|dapatkan|ketemu)\b|sudah\s+dapat\s+berapa|(?:dapat|ketemu)\s+berapa\s+(?:klien|peluang)/i;
+const MORE = /^\s*(?:peluang|kontak|paket|usaha)\s+(?:lagi|tambahan)(?:\s+(\d{1,2}))?\s*[.!?]*\s*$|^\s*(?:kirim|tambah(?:kan)?|minta)\s+(?:(\d{1,2})\s+)?(?:peluang|paket|usaha|kontak)(?:\s+(?:lagi|tambahan))?(?:\s+(\d{1,2}))?\s*[.!?]*\s*$/i;
+const NAME_ACT = /\b(?:nanya(?:in)?|tanya|bertanya|menanyakan|bilang|balas(?:an)?|membalas|jawab|minta|nawar|menawar|nego|tertarik|setuju|deal|oke|boleh)\b/i;
+const INTENT_ID = { stop: 'menolak', ready: 'siap lanjut', haggle: 'menawar harga', call: 'minta bicara', trust: 'meragukan', price: 'bertanya harga', timeline: 'bertanya waktu', proof: 'minta contoh karya', ack: 'konfirmasi', brief: 'memberi detail' };
+
+/** "Peluang klien yang cocok" list, or null when there is nothing to show. */
+function listProspects(pr) {
+  const local = pr.store.list({ kind: 'local', verdict: 'good', status: 'new', limit: 4 }).prospects;
+  const market = pr.store.list({ kind: 'marketplace', verdict: 'good', status: 'new', limit: 4 }).prospects;
+  if (!local.length && !market.length) return null;
+  const l = ['Peluang klien yang cocok:'];
+  if (local.length) l.push('', 'Usaha lokal tanpa website:', ...local.map((p) => `#${p.id} [${p.score}] ${clip(p.title, 40)} (${p.description.split(' · ')[0] || p.category})`));
+  if (market.length) l.push('', 'Freelancer.com:', ...market.map((p) => `#${p.id} [${p.score}] ${clip(p.title, 46)} (${p.bids} penawar)`));
+  l.push('', 'Ketik "peluang <nomor>" untuk pesan siap kirim.');
+  return l.join('\n');
+}
+
 const STATUS_WORD = { dihubungi: 'contacted', kualifikasi: 'qualified', penawaran: 'proposal', nego: 'negotiating', menang: 'won', deal: 'won', kalah: 'lost', batal: 'lost', spam: 'spam' };
 const STATUS_ID = { new: 'baru', contacted: 'sudah dihubungi', qualified: 'terkualifikasi', proposal: 'penawaran', negotiating: 'negosiasi', won: 'menang', lost: 'kalah', spam: 'spam' };
 const ALIAS = { landing: 'landing', profil: 'landing', company: 'landing', toko: 'ecommerce', ecommerce: 'ecommerce', web: 'webapp', webapp: 'webapp', aplikasi: 'webapp', sistem: 'webapp',
@@ -73,6 +96,35 @@ export async function quickSales(sales, text, { now = Date.now() } = {}) {
   // ---- client radar (only when it is switched on)
   const pr = sales.prospects;
   if (pr) {
+    // "lanjut cari klien": the radar already searches every day; run a pass now and say what it has.
+    if (SEARCH_NOW.test(t)) {
+      if (!pr._scanning) pr.scan({ force: true }).catch(() => {});
+      return `Siap, Mas. Radar sebenarnya sudah mencari sendiri setiap hari. Saya jalankan satu pindaian lagi sekarang (hasilnya masuk dalam beberapa menit), dan ini yang sudah ada:\n\n${pr.overviewText()}`;
+    }
+    // "hasilnya mana?": the radar's real numbers plus the best ones.
+    if (RESULTS.test(t)) return `${pr.overviewText()}\n\n${listProspects(pr) || ''}`.trim();
+    // "peluang lagi": more businesses now, on request.
+    const more = MORE.exec(t);
+    if (more) {
+      const n = Number(more[1] || more[2] || more[3]) || null;
+      const sent = await pr.morningBatch({ force: true, count: n });
+      return sent
+        ? `Itu ${sent} usaha tambahan di atas, Mas. Setelah terkirim, balas "peluang <nomor> dihubungi" supaya saya mengingatkan tindak lanjutnya.`
+        : 'Belum ada usaha lokal baru yang cocok untuk dikirim. Radar menambah data tiap beberapa hari; kalau mau, tambahkan area di SALES_LOCAL_AREAS.';
+    }
+    // "Asmi laundry tadi nanyain tarifnya": a business the owner already worked, named in passing.
+    if (NAME_ACT.test(t) && t.length <= 400) {
+      const hit = pr.findByName(t);
+      if (hit) {
+        if (['new', 'contacted'].includes(hit.status)) pr.setStatus(hit.id, 'replied');
+        const s = sales.suggest({ text: t, serviceId: hit.service_id });
+        const out = [`Itu Peluang #${hit.id}: ${hit.title}. Saya tandai sudah membalas supaya masuk hitungan.`, '', `Maksud pesannya: ${INTENT_ID[s.intent] || s.intent}.`, '', 'Saran balasan:', s.text];
+        if (s.intent === 'price') out.push('', 'Catatan: kisaran di atas adalah harga yang Mas setujui di katalog. Kalau mau tarif khusus untuk usaha kecil seperti ini, ketik: atur harga landing 750rb - 2jt.');
+        if (s.escalate) out.push('', `Catatan: ${s.reasons.join('; ')}. Bagian ini sebaiknya Mas sendiri yang menjawab.`);
+        return out.join('\n');
+      }
+    }
+
     let pm = SUGGEST.exec(t);
     if (pm) {
       try {
@@ -116,16 +168,7 @@ export async function quickSales(sales, text, { now = Date.now() } = {}) {
       return out.join('\n');
     }
 
-    if (P_LIST.test(t)) {
-      const local = pr.store.list({ kind: 'local', verdict: 'good', status: 'new', limit: 4 }).prospects;
-      const market = pr.store.list({ kind: 'marketplace', verdict: 'good', status: 'new', limit: 4 }).prospects;
-      if (!local.length && !market.length) return 'Belum ada peluang klien yang cocok. Radar memindai Freelancer.com tiap 6 jam dan usaha lokal tiap 3 hari.';
-      const l = ['Peluang klien yang cocok:'];
-      if (local.length) l.push('', 'Usaha lokal tanpa website:', ...local.map((p) => `#${p.id} [${p.score}] ${clip(p.title, 40)} (${p.description.split(' · ')[0] || p.category})`));
-      if (market.length) l.push('', 'Freelancer.com:', ...market.map((p) => `#${p.id} [${p.score}] ${clip(p.title, 46)} (${p.bids} penawar)`));
-      l.push('', 'Ketik "peluang <nomor>" untuk pesan siap kirim.');
-      return l.join('\n');
-    }
+    if (P_LIST.test(t)) return listProspects(pr) || 'Belum ada peluang klien yang cocok. Radar memindai Freelancer.com tiap 6 jam dan usaha lokal tiap 3 hari.';
   }
 
   let m = SETPRICE.exec(t);

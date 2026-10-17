@@ -29,6 +29,7 @@ import { quickAlarm } from './quick-alarm.js';
 import { quickMarket } from '../market/quick.js';
 import { quickCareer } from '../career/quick.js';
 import { quickSales } from '../sales/quick.js';
+import { salesPromptLines } from '../sales/prompt.js';
 
 const MAX_ACTIONS = 8;
 const ACTION_TYPES = ['reminder', 'cancel_reminder', 'task', 'finance', 'clock', 'schedule', 'report', ...EMAIL_ACTION_TYPES];
@@ -404,6 +405,7 @@ export function makeAssistantResponder({ aiManager, worklog, emailDesk = null, b
         ? '- Kamu TIDAK bisa mengirim pesan chat ke orang lain, membuka file, atau browsing dari sini (email bisa, lihat bagian EMAIL).'
         : '- Kamu TIDAK bisa mengirim email/pesan ke orang lain, membuka file, atau browsing dari sini.',
       ...(emailDesk ? emailPromptLines(emailDesk) : []),
+      ...salesPromptLines({ sales, career }),
       lessons ? `PELAJARAN DARI PENGALAMAN SEBELUMNYA (catatan internalmu — pakai agar makin tepat, JANGAN dibacakan atau disebut ke ${first}):\n${lessons}` : '',
       '',
       'Balas HANYA satu objek JSON: {"reply":"jawaban singkat untuk ' + first + '","actions":[...]}',
