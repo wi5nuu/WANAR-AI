@@ -266,6 +266,31 @@ export class WhatsAppInbox extends EventEmitter {
 
     if (message.type !== 'text') {
       this._touchPerson(phone, name, null); // still remembered in the contact list
+
+      // A shared location (message.type "location") can become a named place: the
+      // owner is asked how to name it, and nothing is stored until he says so.
+      // The chat id mirrors the responder's ("wa:<phone>") so the follow-up
+      // message finds the pending pin.
+      if (message.type === 'location' && this.isOwner(phone) && typeof this.onLocationPin === 'function') {
+        const loc = message.location || {};
+        try {
+          const reply = String((await this.onLocationPin({
+            chatId: `wa:${phone}`,
+            lat: Number(loc.latitude),
+            lon: Number(loc.longitude),
+            title: loc.name || null,
+            person: name,
+          })) || '');
+          if (reply) {
+            await this._reply(phone, reply);
+            return { action: 'location', phone };
+          }
+        } catch (e) {
+          console.warn('[WHATSAPP-INBOX] penanganan lokasi gagal:', e?.message || e);
+        }
+        return { action: 'location_ignored', phone };
+      }
+
       // Voice notes / photos / documents are not readable yet.
       if (this.isOwner(phone) && this.responder) {
         await this._reply(phone, 'Maaf, saya baru bisa membaca pesan teks di WhatsApp. Tulis saja ya.');

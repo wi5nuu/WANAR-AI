@@ -265,3 +265,114 @@ meminta dan memakai persetujuan sekali-pakai yang terikat ke kampanye itu — ch
 bisa menyetujui, dan frasa "kirim" yang tidak jelas tetap jatuh ke alur biasa.
 
 **Sengaja tidak ada** integrasi WhatsApp tidak resmi (whatsapp-web/Baileys): itu melanggar ketentuan WhatsApp dan berisiko membuat nomor Anda diblokir permanen.
+
+---
+
+## Pelacakan Lokasi, Darurat, Motor & Memori Pribadi
+
+Dasbor: **http://localhost:3000/tracking** — halaman pelacak untuk HP: **http://localhost:3000/track**.
+
+| Tab | Isi |
+| --- | --- |
+| **Live** | Peta Leaflet + OpenStreetMap (gratis, tanpa API key), posisi terakhir + kualitas GPS, kontrol sesi pelacakan (mulai/jeda/lanjutkan/hentikan), daftar perangkat + token perangkat, dan simulasi perjalanan untuk uji coba tanpa GPS nyata |
+| **Riwayat** | Perjalanan (jarak lintasan GPS, durasi, kecepatan), jalur di peta, ringkasan harian, tanya "di mana saya tadi", koreksi titik berhenti ("saya berhenti di bengkel") |
+| **Tempat** | Tempat + geofence (rumah/kantor/bengkel/SPBU/…), tambah/ubah/hapus; klasifikasi berhenti memakai tempat terdekat — nama yang tidak pasti tetap "Belum teridentifikasi", tidak pernah dikarang |
+| **Darurat** | Mode (simulasi/nyata), kontak darurat (tambah → **verifikasi** → uji), hitung mundur 25 detik, riwayat kejadian beserta langkah eskalasi satu per satu |
+| **Kendaraan** | Profil motor (default Honda Vario 160 CBS, Pertamax), catatan isi BBM full-to-full, odometer, jadwal servis + riwayat, kalibrasi konsumsi, laporan kesehatan |
+| **Memori** | Apa yang AI boleh ingat: jenis (preferensi/fakta/tempat/orang/rutinitas/catatan), sumbernya terlihat, bisa diubah/dilupakan, plus pratinjau "blok konteks" yang benar-benar dibaca AI |
+
+### Aturan jujur yang dipegang modul ini
+
+- **Jarak = lintasan GPS**, bukan odometer. Angka odometer hanya dari bacaan Anda/servis.
+- **Konsumsi BBM & sisa bensin = estimasi model** dari catatan isi BBM (matematika full-to-full), bukan sensor. Tanpa `VEHICLE_TANK_LITERS`, sisa liter ditampilkan "tidak tersedia" — tidak dikarang.
+- **Deteksi kecelakaan bersifat deterministik** (pola berhenti mendadak, gerak/flip sinyal, lokasi jauh dari tempat biasa, tanpa jawaban). Ponsel yang mengirim data akselerometer (halaman `/track` mengirim `mag`/`rot` dari DeviceMotion bila tersedia) menaikkan tingkat keyakinan; **tanpa data sensor, tingkat maksimum adalah "pantauan (watch)"** — server tidak berpura-pura tahu.
+- **AI tidak punya tool darurat.** Darurat hanya bisa dipicu tombol pemilik di dasbor, tombol di `/track`, atau balasan "butuh bantuan" atas kejadian yang sudah berjalan; AI hanya bisa membaca status dan menjawab.
+- **GPS hanya direkam saat sesi menyala** (persetujuan eksplisit per sesi); tanpa sesi aktif, ingest ditolak.
+
+### Alur darurat & eskalasi
+
+1. Pemicu: tombol SOS dasbor, tombol di `/track`, deteksi anomali berkendara, atau balasan "butuh bantuan".
+2. Hitung mundur (`countdownMs`, bawaan 25 dtk) dengan bunyi/notifikasi: "Saya aman" membatalkan, "Butuh bantuan" langsung eskalasi, tidak ada jawaban → eskalasi otomatis.
+3. Pemilik diberi tahu lebih dulu (kanal owner yang hidup), lalu kontak darurat **terverifikasi** dihubungi berurutan sesuai prioritas; tiap percobaan dicatat (kanal, ke-berapa, hasil).
+4. Kanal yang benar-benar hidup saja yang dipakai: Telegram (bot), WhatsApp (Cloud API, jika diatur), email (SMTP), webhook (`EMERGENCY_WEBHOOK_URL`). Kanal yang belum diatur muncul **`unavailable`** dan dilaporkan apa adanya; tanpa kontak terverifikasi statusnya **`escalated_no_contacts`** — bukan klaim palsu "sudah menghubungi".
+5. **Bawaan `EMERGENCY_MODE=simulate`:** seluruh alur berjalan (hitung mundur, eskalasi, catatan percobaan) tetapi **tidak ada pesan yang benar-benar terkirim**. Ganti ke `live` hanya setelah kontak diverifikasi dan kanal diuji.
+6. Balasan chat pemilik ("aman"/"selesai") bisa menutup kejadian; lokasi terakhir ikut dilampirkan bila ada.
+
+**Kontak darurat** dibuat berstatus *belum terverifikasi*; tombol **verifikasi** (uji kanal) harus dijalankan sebelum kontak dipakai eskalasi mode live. Uji kontak di mode simulasi hanya mencatat percobaan `simulated`.
+
+### Halaman pelacak HP (`/track`)
+
+Buka `/track` di HP, tempel token perangkat (dibuat sekali di dasbor → perangkat), mulai. Halaman ini: `watchPosition` GPS dengan interval adaptif (rapat saat bergerak, hemat saat diam), gerbang gerak 25 m, antrean offline di `localStorage` saat sinyal hilang, Wake Lock agar layar tidak mati, dan DeviceMotion (bila diizinkan) untuk data guncangan + peringatan lokal ≥3 g dengan opsi auto-SOS. Status server (termasuk hitung mundur darurat) dipantau tiap 15 detik sehingga tombol "Saya aman" bisa ditekan dari HP.
+
+**Keterbatasan platform (jujur):** browser tidak bisa melacak saat halaman benar-benar ditutup. Untuk pelacakan latar belakang penuh dibutuhkan aplikasi native atau klien eksternal yang mengirim ke `POST /api/location/device/ingest` dengan header `x-device-token` (tidak ada klaim sebaliknya di UI).
+
+### Tanya & simpan tempat lewat chat (Telegram / WhatsApp)
+
+Pesan dari chat pemilik dijawab **kode deterministik lebih dulu** (`src/location/quick.js`) — sama sekali tanpa panggilan model:
+
+| Anda kirim | Yang terjadi |
+| --- | --- |
+| "posisi saya di mana?" | Posisi terkini/terakhir + akurasi + nama area + jarak hari ini |
+| "di mana rumah?" | Koordinat tempat **tersimpan** itu (radius, kategori, kunjungan terakhir). Nama yang belum tersimpan dijelaskan cara menyimpannya — tidak ditebak |
+| "daftar tempat" atau Telegram `/tempat [kata kunci]` | Daftar tempat tersimpan dari database |
+| Bagikan lokasi (pin) di Telegram/WhatsApp | Pin ditahan **di memori maksimal 15 menit** (tidak ditulis ke DB); bot membalas cara menamainya |
+| "simpan lokasi ini sebagai Rumah" | Tempat dibuat dari pin itu + balasan konfirmasi; ikut masuk ke memori pribadi |
+| "simpan lokasi -6.2383, 106.9756 sebagai Warung Bu Tini" | Tempat dibuat dari koordinat yang Anda tulis |
+| "simpan lokasi saat ini sebagai Kantor" | Dipakai hanya bila posisi terakhir **≤ 15 menit**; lebih tua → ditolak dengan penjelasan |
+
+Kategori (rumah/kantor/bengkel/…) ditebak dari nama sebagai kenyamanan — **selalu bisa diubah** di dasbor Pelacakan → tab Tempat. Pin kedaluwarsa sendiri; permintaan simpan tanpa pin/koordinat/posisi segar ditolak dengan contoh perintah (bukan disimpan ke tempat yang salah). Pin dari orang lain dan grup tidak pernah diproses. Model AI tetap membaca daftar tempat lewat blok konteks untuk pertanyaan bebas, tetapi **menyimpan tempat tidak pernah lewat AI** — hanya kode deterministik.
+
+### Kendaraan & perawatan
+
+- Profil bawaan mengikuti motor Anda: **Honda Vario 160 CBS, Pertamax, acuan 50 km/L** (acuan tetap sampai Anda mengubahnya; tidak pernah diubah diam-diam).
+- Catatan isi BBM: liter, harga, odometer, full-tank atau tidak. Konsumsi dihitung **full-to-full** (akurat) atau estimasi dari acuan 50 km/L (diberi label jelas).
+- Jadwal servis bawaan (oli mesin, oli gardan, CVT, filter udara, busi, rem, minyak rem, ban, aki, coolant, kelistrikan, servis berkala) berstatus **"usulan awal, belum diverifikasi"** — angkanya dari praktik umum dealer, bukan buku manual. Konfirmasi di halaman Kendaraan agar pengingat memakai jadwal resmi Anda.
+- Kalibrasi konsumsi butuh **≥ 3 pengisian full-to-full**; sebelum itu tombolnya nonaktif dengan alasan — tidak ada tebakan.
+- Laporan kesehatan kendaraan memisahkan jatuh tempo / akan datang / **data tidak memadai** (dan mengatakan apa yang perlu diisi).
+
+### Memori pribadi
+
+Item memori punya `kind`, `key`, `value`, `source` (pemilik/perangkat/modul) dan riwayat perubahan. Sumber otomatis saat ini: koreksi tempat ("Rumah = bengkel langganan…"), kejadian darurat (dibatalkan/diselesaikan), konsumsi bahan bakar terkalibrasi, dan servis yang dicatat. **"Lihat yang dibaca AI"** menampilkan blok prompt + daftar id yang dipakai untuk sebuah pertanyaan. Kredensial yang tampak seperti token/sandi di-redact sebelum ke model. Lupa: `POST /api/memory/forget` dengan frasa, atau semua dengan konfirmasi `LUPA SEMUA`.
+
+### Privasi & keamanan
+
+- Persetujuan per sesi; hentikan sesi = tidak ada perekaman. Riwayat bisa dipangkas (`privacy/purge`, lebih tua dari N hari) atau dihapus semua (`privacy/reset` dengan `HAPUS SEMUA`) — **pengaturan, tempat, dan perangkat dipertahankan**; sampel, perjalanan, berhenti, sesi, dan catatan peristiwa lokasi terhapus.
+- Token perangkat: server hanya menyimpan **hash SHA-256**; token asli ditampilkan sekali.
+- Semua route dasbor di balik akses loopback atau `AUTOMATION_TOKEN` + rate limit; route perangkat memakai token perangkat sendiri dan hanya menerima data koordinat untuk perangkat terdaftar.
+- Geocoding memakai layanan gratis OpenStreetMap (Nominatim + Overpass) dengan throttle + cache SQLite; matikan total dengan `LOCATION_GEOCODE=off` — klasifikasi geofence (tempat yang Anda tandai sendiri) tetap bekerja tanpa internet.
+
+### Variabel `.env` baru
+
+| Variabel | Arti | Bawaan |
+| --- | --- | --- |
+| `LOCATION_GEOCODE` | `off` mematikan nama jalan/POI dari OSM | `on` |
+| `LOCATION_NOMINATIM_URL` / `LOCATION_OVERPASS_URL` | instance sendiri (opsional) | layanan publik |
+| `LOCATION_GEOCODE_CONTACT` | email untuk user-agent Nominatim (etika) | kosong |
+| `EMERGENCY_MODE` | `simulate` (bawaan) / `live` | `simulate` |
+| `EMERGENCY_WEBHOOK_URL` | webhook JSON saat eskalasi darurat | kosong |
+| `VEHICLE_NAME`, `VEHICLE_FUEL` | profil motor | Vario 160 / Pertamax |
+| `FUEL_BASELINE_KMPL` | acuan konsumsi | `50` (tidak diubah diam-diam) |
+| `VEHICLE_TANK_LITERS` | kapasitas tangki → estimasi sisa liter | kosong (sisa liter "tidak tersedia") |
+| `FUEL_RESERVE_KM` | cadangan sebelum peringatan | `60` |
+| `FUEL_PRICE_PER_LITER` | harga BBM → estimasi rupiah | kosong |
+
+### Troubleshooting
+
+| Gejala | Sebab & solusi |
+| --- | --- |
+| Posisi live tidak muncul | Belum ada sesi aktif atau HP belum mengirim. Buka `/track`, pastikan token benar dan izin lokasi "selalu/aktif" |
+| Peta kosong | Vite dev / server hidup? Tiles OSM butuh internet; kegagalan tile tidak memblokir data |
+| Nama tempat "Belum teridentifikasi" | Tanpa POI/geofence yang cocok — koreksi sekali di tab Riwayat, tempat itu dikenali seterusnya |
+| Tidak ada nama jalan/POI | `LOCATION_GEOCODE=off` atau Nominatim tidak terjangkau; cek log `[LOCATION]` |
+| Darurat tidak eskalasi ke kontak | Mode `simulate` (bawaan) atau kontak belum diverifikasi; status akhir `escalated_no_contacts` berarti memang belum ada kontak siap |
+| Uji kontak gagal `bad_state`/`unavailable` | Kanal belum dikonfigurasi (Telegram/WA/SMTP); isi env lalu uji ulang |
+| Sisa bensin "$?" | `VEHICLE_TANK_LITERS` kosong — isi sesuai buku manual |
+| Kalibrasi tidak tersedia | Butuh ≥ 3 pengisian full-to-full |
+| Pelacakan HP berhenti di latar belakang | Batasan browser; jaga halaman tetap terbuka (Wake Lock) atau pakai klien eksternal ke `/device/ingest` |
+| Log `[TELEGRAM-INBOX] bentrok … (409)` | Ada consumer lain memakai bot yang sama (webhook aktif atau proses kedua yang ikut polling) — biasanya tumpang-tindih singkat saat deploy. Inbox **tidak berhenti lagi**: ia mencoba ulang berkala (15 dtk → 5 mnt) dan kembali normal sendiri begitu bebas; cek `getWebhookInfo` bila menetap |
+
+### Monitoring & backup
+
+- Log server menandai modul aktif saat start (`Pelacakan : aktif … · Darurat: mode … · Kendaraan: …`) dan error berprefix `[LOCATION]`/`[EMERGENCY]`/`[VEHICLE]`/`[MEMORY]`.
+- Semua tabel baru bersifat aditif (`loc_*`, `emg_*`, `veh_*`, `mem_*`) — rollback = berhenti memakai halaman ini; tidak ada tabel lama yang diubah. Backup mengikuti database SQLite yang sudah ada (`data/*.db`).
+- Realtime memakai SSE `/api/location/events` (dan varian per modul) dengan reconnect otomatis di klien.

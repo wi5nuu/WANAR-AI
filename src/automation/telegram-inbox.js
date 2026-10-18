@@ -137,6 +137,9 @@ export class TelegramInbox extends EventEmitter {
     this.running = false;
     this._abort = false;
     this._loopPromise = null;
+    // Consecutive 409s (another consumer polling this bot). Transient during
+    // deploy overlaps; exposed in status() so the dashboard can show it.
+    this.conflictStreak = 0;
   }
 
   /**
@@ -166,6 +169,7 @@ export class TelegramInbox extends EventEmitter {
       enabled: this.enabled,
       wanted: this.wanted,
       running: this.running,
+      conflicts: this.conflictStreak || 0,
       requiresJoinCode: Boolean(this.joinCode),
       restricted: this.allowed.size > 0,
       aiChat: { enabled: Boolean(this.responder) && this.aiChats.size > 0, chats: this.aiChats.size },
@@ -186,12 +190,27 @@ export class TelegramInbox extends EventEmitter {
     await Promise.race([this._loopPromise, sleep(1500)]);
   }
 
+  /** Sleep that gives up early when stop() is called (keeps shutdown quick). */
+  async _wait(ms) {
+    const end = Date.now() + ms;
+    while (!this._abort && Date.now() < end) {
+      await sleep(Math.max(10, Math.min(250, end - Date.now())));
+    }
+  }
+
   async _loop() {
     let backoff = 2000;
+    let conflictWait = 0;
     while (!this._abort) {
       try {
         const updates = await this.channel.getUpdates(this.offset, this.pollSeconds);
         backoff = 2000;
+        if (conflictWait) {
+          conflictWait = 0;
+          this.conflictStreak = 0;
+          console.warn('[TELEGRAM-INBOX] polling Telegram normal kembali (409 selesai).');
+          this.emit('conflict_resolved', {});
+        }
         for (const u of updates) {
           this.offset = u.update_id + 1;
           try {
@@ -207,9 +226,19 @@ export class TelegramInbox extends EventEmitter {
           return;
         }
         if (e.responseCode === 409) {
-          console.error('[TELEGRAM-INBOX] bentrok dengan webhook/consumer lain (409) — inbox dihentikan.');
-          this.emit('error_fatal', e);
-          return;
+          // Another consumer (a webhook or a second poller) is using this bot right
+          // now. This is usually transient — e.g. two processes overlapping during
+          // a deploy — so retry with a long backoff instead of stopping for good,
+          // which used to leave the owner's Telegram silent until the next restart.
+          this.conflictStreak = (this.conflictStreak || 0) + 1;
+          if (this.conflictStreak === 1) {
+            console.error('[TELEGRAM-INBOX] bentrok dengan webhook/consumer lain (409) — inbox mencoba lagi berkala.');
+            this.emit('conflict', e);
+          }
+          conflictWait = conflictWait ? Math.min(conflictWait * 2, 300_000) : 15_000;
+          traceStep('error', { channel: 'telegram', kind: 'conflict', streak: this.conflictStreak, retryMs: conflictWait });
+          await this._wait(conflictWait);
+          continue;
         }
         await sleep(backoff);
         backoff = Math.min(backoff * 2, 60_000);
@@ -220,13 +249,42 @@ export class TelegramInbox extends EventEmitter {
   /** Processes a single Telegram update. Exposed for tests. */
   async handleUpdate(update) {
     const msg = update.message;
-    if (!msg?.chat || typeof msg.text !== 'string') return null;
+    if (!msg?.chat) return null;
 
     const chatId = String(msg.chat.id);
-    const text = msg.text.trim();
     const person = msg.chat.type === 'private'
       ? [msg.from?.first_name, msg.from?.last_name].filter(Boolean).join(' ')
       : msg.chat.title || '';
+
+    // A shared location ("kirim lokasi") is not text: it is offered to be saved
+    // as a named place. Owner + private chat only — anyone else's pin is ignored.
+    const pin = msg.location || msg.venue?.location;
+    if (pin && msg.chat.type === 'private' && this.isOwner(chatId)) {
+      if (typeof this.onLocationPin !== 'function') return { action: 'location_ignored', chatId };
+      traceStep('receive', { channel: 'telegram', kind: 'location', from: maskChat(chatId) });
+      try {
+        const reply = String((await this.onLocationPin({
+          chatId,
+          lat: Number(pin.latitude),
+          lon: Number(pin.longitude),
+          title: msg.venue?.title || null,
+          person,
+        })) || '');
+        if (reply) {
+          const parts = chunkText(reply, 3500);
+          for (const part of parts) await this._reply(chatId, escapeHtml(part));
+          traceStep('deliver', { channel: 'telegram', kind: 'location', parts: parts.length, chars: reply.length, ok: true, preview: reply.slice(0, 160) });
+        }
+        return { action: 'location', chatId };
+      } catch (e) {
+        console.warn('[TELEGRAM-INBOX] penanganan lokasi gagal:', e?.message || e);
+        traceStep('error', { error: String(e?.message || e).slice(0, 200) });
+        return { action: 'location_ignored', chatId };
+      }
+    }
+
+    if (typeof msg.text !== 'string') return null;
+    const text = msg.text.trim();
     const username = msg.from?.username || msg.chat.username || null;
     // Contact memory ("siapa yang chat tadi?"): one cheap upsert per message.
     try {

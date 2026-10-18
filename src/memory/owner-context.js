@@ -72,8 +72,12 @@ const WIB = (sqlTime) => {
  * @param {object} deps.db          better-sqlite3 handle (chat_sessions / chat_messages)
  * @param {object} [deps.automation] automation module
  * @param {object} [deps.worklog]   { service }
+ * @param {object} [deps.memory]    personal memory module ({ service })
+ * @param {object} [deps.location]  tracking module ({ service })
+ * @param {object} [deps.vehicle]   vehicle module ({ service })
+ * @param {object} [deps.emergency] emergency module ({ service })
  */
-export function createOwnerContext({ db, automation = null, worklog = null }) {
+export function createOwnerContext({ db, automation = null, worklog = null, memory = null, location = null, vehicle = null, emergency = null }) {
   // ------------------------------------------------------------ sections
 
   function journalSection() {
@@ -219,6 +223,45 @@ export function createOwnerContext({ db, automation = null, worklog = null }) {
     }
   }
 
+  function personalSection(question) {
+    if (!memory?.service) return '';
+    try {
+      const block = memory.service.buildPromptBlock({ text: question || '' });
+      return block.text || '';
+    } catch {
+      return '';
+    }
+  }
+
+  function trackingSection() {
+    if (!location?.service) return '';
+    try {
+      const st = location.service.currentStatus();
+      const lines = ['LOKASI & MOTOR (angka nyata dari modul pelacakan; jangan menghitung sendiri):'];
+      if (!st.position) {
+        lines.push('- Posisi: belum ada data lokasi (pelacakan mati atau HP belum mengirim).');
+      } else {
+        lines.push(`- ${st.position.fresh ? 'Posisi terkini' : `Lokasi terakhir yang diketahui (${Math.round(st.position.ageMs / 60000)} menit lalu)`}: ${st.position.lat.toFixed(5)}, ${st.position.lon.toFixed(5)} (±${st.position.accuracy != null ? `${Math.round(st.position.accuracy)} m` : '?'})${st.place ? `, di area "${st.place.label}"` : ''}.`);
+        lines.push(`- Hari ini: ${(st.today.distanceM / 1000).toFixed(1)} km lintasan GPS, ${st.today.trips} perjalanan, ${st.today.stops} kunjungan (jarak GPS ≠ odometer).`);
+      }
+      try {
+        const places = (location.service.store?.places?.list?.() || []).slice(0, 8);
+        if (places.length) {
+          lines.push(`- Tempat tersimpan: ${places.map((p) => `${p.name} (${Number(p.lat).toFixed(5)}, ${Number(p.lon).toFixed(5)}${p.radius_m ? ` ±${p.radius_m} m` : ''})`).join('; ')}.`);
+        }
+      } catch { /* places are optional */ }
+      if (vehicle?.service) {
+        try { lines.push(`- ${vehicle.service.summaryLine()}`); } catch { /* vehicle optional */ }
+      }
+      if (emergency?.service) {
+        try { lines.push(`- ${emergency.service.summaryLine()}`); } catch { /* emergency optional */ }
+      }
+      return lines.join('\n');
+    } catch {
+      return '';
+    }
+  }
+
   // ---------------------------------------------------------------- build
 
   /**
@@ -231,6 +274,8 @@ export function createOwnerContext({ db, automation = null, worklog = null }) {
       journalSection(),
       automationSection(),
       peopleSection(),
+      trackingSection(),
+      personalSection(text),
       relevantChatsSection(text, excludeSessionId),
       recentChatsSection(),
     ].filter(Boolean);

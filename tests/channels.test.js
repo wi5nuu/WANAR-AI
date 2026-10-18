@@ -660,6 +660,38 @@ describe('Telegram inbox (opt-in / opt-out)', () => {
     expect(replies[0].html).toContain('Budi Santoso');
   });
 
+  it('409 dari consumer lain: mencoba lagi berkala, bukan mematikan inbox selamanya', async () => {
+    const calls = [];
+    const inbox = new TelegramInbox({
+      channel: {
+        mode: 'live',
+        async getUpdates() {
+          calls.push(1);
+          const e = new Error('Conflict: terminated by other getUpdates request');
+          e.responseCode = 409;
+          throw e;
+        },
+        reply: async () => {},
+      },
+      store: { subscribers: { upsert() {}, setActive() {}, counts: () => ({}) }, suppressions: { add() {}, remove() {} } },
+      env: { TELEGRAM_POLLING: 'true', TELEGRAM_BOT_TOKEN: TG_TOKEN },
+    });
+    const conflicts = [];
+    inbox.on('conflict', (e) => conflicts.push(e));
+    expect(inbox.start()).toBe(true);
+    await new Promise((r) => setTimeout(r, 80)); // first 409 handled, now in backoff
+    expect(calls.length).toBe(1);
+    expect(inbox.running).toBe(true);          // the old behaviour stopped the inbox here
+    expect(inbox.conflictStreak).toBe(1);
+    expect(inbox.status().conflicts).toBe(1);
+    expect(conflicts).toHaveLength(1);         // emitted once per conflict streak
+
+    await inbox.stop();
+    const t0 = Date.now();
+    while (inbox.running && Date.now() - t0 < 2000) await new Promise((r) => setTimeout(r, 25));
+    expect(inbox.running).toBe(false);
+  });
+
   it('merekam setiap pengirim ke memori kontak (people)', async () => {
     const { a, inbox } = setup();
     await inbox.handleUpdate(msg(55555, 'halo, ada?'));
@@ -1304,6 +1336,57 @@ describe('Telegram inbox: AI chat replies', () => {
   it('reports AI chat as enabled in status when allow-listed', () => {
     const { inbox } = setup({ env: { TELEGRAM_AI_CHAT_IDS: `${OWNER}, 222222` } });
     expect(inbox.status().aiChat).toEqual({ enabled: true, chats: 2 });
+  });
+
+  // Shared locations: these are not text, and they may become named places.
+
+  const pinMsg = (chatId, extra = {}) => ({
+    update_id: 7,
+    message: {
+      chat: { id: Number(chatId), type: 'private' }, from: { first_name: 'Wisnu' },
+      location: { latitude: -6.2383, longitude: 106.9756 }, ...extra,
+    },
+  });
+
+  it('offers to save a shared location pin from the owner', async () => {
+    const { inbox, sent } = setup({ env: { TELEGRAM_AI_CHAT_IDS: OWNER } });
+    const calls = [];
+    inbox.onLocationPin = async (pin) => { calls.push(pin); return '📍 Lokasi diterima. Balas: simpan lokasi ini sebagai <nama>.'; };
+    const r = await inbox.handleUpdate(pinMsg(OWNER));
+    expect(r).toEqual({ action: 'location', chatId: OWNER });
+    expect(calls).toEqual([{ chatId: OWNER, lat: -6.2383, lon: 106.9756, title: null, person: 'Wisnu' }]);
+    expect(sent).toEqual([{ chatId: OWNER, html: '📍 Lokasi diterima. Balas: simpan lokasi ini sebagai &lt;nama&gt;.' }]);
+  });
+
+  it('passes a venue title through and escapes the reply', async () => {
+    const { inbox, sent } = setup({ env: { TELEGRAM_AI_CHAT_IDS: OWNER } });
+    let got = null;
+    inbox.onLocationPin = async (pin) => { got = pin; return 'Simpan <b>"Kopi"</b>?'; };
+    const r = await inbox.handleUpdate({
+      update_id: 8,
+      message: {
+        chat: { id: Number(OWNER), type: 'private' }, from: { first_name: 'Wisnu' },
+        venue: { title: 'Kopi Tuku', location: { latitude: -6.9, longitude: 107.6 } },
+      },
+    });
+    expect(r.action).toBe('location');
+    expect(got).toMatchObject({ chatId: OWNER, title: 'Kopi Tuku', lat: -6.9, lon: 107.6 });
+    expect(sent[0].html).toBe('Simpan &lt;b&gt;"Kopi"&lt;/b&gt;?');
+  });
+
+  it('never reacts to a pin from a stranger, group, or without a handler', async () => {
+    const { inbox, sent, resp } = setup({ env: { TELEGRAM_AI_CHAT_IDS: OWNER } });
+    const calls = [];
+    inbox.onLocationPin = async (pin) => { calls.push(pin); return 'x'; };
+    // Strangers are ignored exactly like their text messages: no reaction at all.
+    expect(await inbox.handleUpdate(pinMsg('99999999'))).toBeNull();
+    expect(await inbox.handleUpdate(pinMsg(OWNER, { chat: { id: Number(OWNER), type: 'supergroup' } }))).toBeNull();
+    expect(calls).toHaveLength(0);
+
+    const noHandler = setup({ env: { TELEGRAM_AI_CHAT_IDS: OWNER } }).inbox; // onLocationPin not wired
+    expect((await noHandler.handleUpdate(pinMsg(OWNER))).action).toBe('location_ignored');
+    expect(resp).not.toHaveBeenCalled();
+    expect(sent).toHaveLength(0);
   });
 });
 

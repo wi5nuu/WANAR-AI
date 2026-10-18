@@ -12,6 +12,7 @@ import { browserApplyTools, executeBrowserApplyTool } from './browser-apply.js';
 import { desktopTools, executeDesktopTool } from './desktop.js';
 import { automationTools, executeAutomationTool } from './automation.js';
 import { worklogTools, executeWorklogTool } from './worklog.js';
+import { locationTools, executeLocationTool } from './location.js';
 import {
   authorizeToolCall,
   refusalResult,
@@ -40,6 +41,7 @@ export const allTools = [
   ...desktopTools,
   ...automationTools,
   ...worklogTools,
+  ...locationTools,
 ];
 
 const toolExecutors = {
@@ -99,6 +101,17 @@ const toolExecutors = {
   worklog_summary: executeWorklogTool,
   worklog_log: executeWorklogTool,
   worklog_clock: executeWorklogTool,
+  // Location / vehicle / personal memory (own data only; no emergency trigger)
+  location_status: executeLocationTool,
+  location_history: executeLocationTool,
+  location_name_place: executeLocationTool,
+  vehicle_status: executeLocationTool,
+  fuel_log: executeLocationTool,
+  odometer_read: executeLocationTool,
+  maintenance_status: executeLocationTool,
+  maintenance_log: executeLocationTool,
+  memory_remember: executeLocationTool,
+  memory_search: executeLocationTool,
   // Agent Delegation
   agent_explore: executeAgentDelegationTool,
   agent_security: executeAgentDelegationTool,

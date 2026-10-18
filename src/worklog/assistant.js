@@ -32,6 +32,9 @@ import { quickSales } from '../sales/quick.js';
 import { salesPromptLines } from '../sales/prompt.js';
 import { appPromptLines } from './self-knowledge.js';
 import { quickOps } from '../ops/manager.js';
+import { quickLocation } from '../location/quick.js';
+import { quickVehicle } from '../vehicle/quick.js';
+import { quickMemory } from '../memory/quick.js';
 
 const MAX_ACTIONS = 8;
 const ACTION_TYPES = ['reminder', 'cancel_reminder', 'task', 'finance', 'clock', 'schedule', 'report', ...EMAIL_ACTION_TYPES];
@@ -282,12 +285,40 @@ export function fallbackPlan(text, now = Date.now()) {
  * Builds the responder used for the owner's plain Telegram messages.
  * Same signature as makeChatResponder, so it is a drop-in replacement.
  */
-export function makeAssistantResponder({ aiManager, worklog, emailDesk = null, briefing = null, companion = null, market = null, career = null, sales = null, ops = null, learning = null, chatActions = null, automation = null, context = null, ownerName = process.env.OWNER_NAME || 'Wisnu Alfian Nur Ashar' }) {
+export function makeAssistantResponder({ aiManager, worklog, emailDesk = null, briefing = null, companion = null, market = null, career = null, sales = null, ops = null, learning = null, chatActions = null, automation = null, location = null, vehicle = null, emergency = null, memory = null, context = null, ownerName = process.env.OWNER_NAME || 'Wisnu Alfian Nur Ashar' }) {
   const first = String(ownerName).split(/\s+/)[0];
   // The assistant is the owner's subordinate: it addresses him respectfully by name.
   const call = String(process.env.OWNER_CALL || '').trim() || `Mas ${first}`;
 
   return async ({ history = [], text, commands = [], chatId = null }) => {
+    // SAFETY FIRST: while an emergency incident is waiting for an answer, a
+    // short "aman"/"bantuan" must reach the escalation engine before anything
+    // else (including the AI) can interpret it.
+    if (emergency) {
+      const open = emergency.service.store.events.openOne();
+      const answer = /^\s*(aman|saya aman|aku aman|baik|oke|ok|ya|sudah aman)\s*[.!]?\s*$/i.test(String(text || ''))
+        ? 'safe'
+        : /^\s*(bantuan|butuh bantuan|tolong|sos|darurat|help)\s*[.!]?\s*$/i.test(String(text || ''))
+          ? 'help'
+          : /^\s*(selesai|sudah selesai|sudah beres)\s*[.!]?\s*$/i.test(String(text || ''))
+            ? 'resolve'
+            : null;
+      if (open && answer === 'safe') {
+        emergency.service.respond(open.id, 'safe');
+        traceStep('intent', { name: 'emergency-safe', detail: 'Pemilik menyatakan aman — hitung mundur darurat dibatalkan oleh kode, bukan AI', model: false });
+        return 'Siap, eskalasi darurat saya batalkan. Kejadiannya tetap tercatat untuk mengevaluasi sensitivitas deteksi.';
+      }
+      if (open && answer === 'help') {
+        await emergency.service.respond(open.id, 'help');
+        traceStep('intent', { name: 'emergency-help', detail: 'Pemilik meminta bantuan — prosedur darurat dijalankan oleh kode, bukan AI', model: false });
+        return 'Baik, prosedur darurat saya jalankan sekarang: kontak darurat akan dihubungi sesuai urutan. Saya kabari setiap hasilnya.';
+      }
+      if (open && answer === 'resolve') {
+        emergency.service.resolve(open.id, { resolution: 'ditutup pemilik lewat chat' });
+        traceStep('intent', { name: 'emergency-resolve', detail: 'Kejadian darurat ditutup pemilik lewat chat — dijalankan kode', model: false });
+        return 'Kejadian darurat saya tutup. Terima kasih sudah mengabari.';
+      }
+    }
     // Any message from the boss counts as "he is here"; and he can pause or resume check-ins in words.
     if (companion) {
       try { companion.noteOwnerMessage(); } catch { /* best effort */ }
@@ -324,6 +355,26 @@ export function makeAssistantResponder({ aiManager, worklog, emailDesk = null, b
       let salesReply = null;
       try { salesReply = await quickSales(sales, text); } catch { salesReply = null; }
       if (salesReply) { traceStep('intent', { name: 'sales', detail: 'Prospek/harga layanan — dijawab kode dari data penjualan, tanpa AI', model: false }); return salesReply; }
+    }
+    // Location: "posisi saya di mana?", "hari ini ke mana saja?", "mulai/matikan pelacakan".
+    // Geometry and place names come from stored data only; nothing is inferred here.
+    // chatId lets "simpan lokasi ini" pick up the pin shared in this same chat.
+    if (location) {
+      let locReply = null;
+      try { locReply = quickLocation(location.service, text, { chatId }); } catch { locReply = null; }
+      if (locReply) { traceStep('intent', { name: 'location', detail: 'Posisi/riwayat/pelacakan — dijawab kode dari data GPS tersimpan, tanpa AI', model: false }); return locReply; }
+    }
+    // Motorcycle: fuel estimate (model, not a sensor), odometer, maintenance schedule.
+    if (vehicle) {
+      let vehReply = null;
+      try { vehReply = quickVehicle(vehicle.service, text); } catch { vehReply = null; }
+      if (vehReply) { traceStep('intent', { name: 'vehicle', detail: 'Bensin/odometer/servis — dijawab kode dari catatan pemilik, tanpa AI', model: false }); return vehReply; }
+    }
+    // Personal memory: "ingat ya ...", "lupakan ...", "kamu ingat apa soal ...".
+    if (memory) {
+      let memReply = null;
+      try { memReply = quickMemory(memory, text); } catch { memReply = null; }
+      if (memReply) { traceStep('intent', { name: 'memory', detail: 'Menyimpan/melupakan/membaca memori pribadi — dijalankan kode, tanpa AI', model: false }); return memReply; }
     }
     // "agenda hari ini" / "briefing": answered from data, instantly and for free.
     if (briefing && BRIEFING_ASK.test(String(text || '').trim())) {

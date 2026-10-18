@@ -1,0 +1,217 @@
+/**
+ * tracking.css — styles for the Tracking dashboard ("Pelacakan & Motor")
+ * and the phone tracker page (/track). Prefix: trk-
+ * Works together with automation.css (au-*) which provides the page shell.
+ */
+
+.trk-grid {
+  display: grid;
+  gap: 0.9rem;
+}
+.trk-cols-2 { grid-template-columns: 1fr 1fr; }
+.trk-cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@media (max-width: 1000px) { .trk-cols-3 { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 700px) { .trk-cols-2, .trk-cols-3 { grid-template-columns: 1fr; } }
+
+.trk-map {
+  width: 100%;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid var(--border-primary);
+  background: var(--bg-secondary, #1a1d24);
+  position: relative;
+  z-index: 0;
+}
+.trk-map .leaflet-container { background: #10131a; }
+.trk-map-empty {
+  height: 180px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-tertiary);
+  font-size: 0.85rem;
+}
+
+.trk-live-dot {
+  display: inline-block;
+  width: 9px; height: 9px;
+  border-radius: 50%;
+  margin-right: 6px;
+  background: var(--re, #ef4444);
+}
+.trk-live-dot.stale { background: #f59e0b; }
+.trk-live-dot.on { background: #22c55e; animation: trk-pulse 1.6s infinite; }
+@keyframes trk-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.55); }
+  70% { box-shadow: 0 0 0 7px rgba(34, 197, 94, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0); }
+}
+
+.trk-kv {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.3rem 0.9rem;
+  font-size: 0.86rem;
+}
+.trk-kv dt { color: var(--text-tertiary); }
+.trk-kv dd { margin: 0; color: var(--text-primary); word-break: break-word; }
+
+.trk-timeline { display: flex; flex-direction: column; gap: 0.45rem; }
+.trk-tl-row {
+  display: flex;
+  gap: 0.7rem;
+  align-items: flex-start;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--border-primary);
+  border-radius: 10px;
+  background: var(--bg-secondary, rgba(255,255,255,0.02));
+}
+.trk-tl-row.trip { border-left: 3px solid #38bdf8; }
+.trk-tl-row.stop { border-left: 3px solid #a78bfa; }
+.trk-tl-row.stop.unknown { border-left-color: #64748b; }
+.trk-tl-time { color: var(--text-tertiary); font-size: 0.78rem; min-width: 86px; font-variant-numeric: tabular-nums; }
+.trk-tl-body { flex: 1; font-size: 0.86rem; }
+.trk-tl-sub { color: var(--text-tertiary); font-size: 0.78rem; margin-top: 2px; }
+
+.trk-chip {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+.trk-chip.ok      { background: rgba(34,197,94,.14);  color: #4ade80; border-color: rgba(34,197,94,.35); }
+.trk-chip.warn    { background: rgba(245,158,11,.14); color: #fbbf24; border-color: rgba(245,158,11,.35); }
+.trk-chip.err     { background: rgba(239,68,68,.14);  color: #f87171; border-color: rgba(239,68,68,.35); }
+.trk-chip.info    { background: rgba(56,189,248,.14); color: #38bdf8; border-color: rgba(56,189,248,.35); }
+.trk-chip.muted   { background: rgba(148,163,184,.12); color: #94a3b8; border-color: rgba(148,163,184,.3); }
+.trk-chip.sim     { background: rgba(168,85,247,.16); color: #c084fc; border-color: rgba(168,85,247,.4); }
+.trk-chip.live    { background: rgba(239,68,68,.18);  color: #fca5a5; border-color: rgba(239,68,68,.5); }
+
+.trk-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.trk-row.between { justify-content: space-between; }
+.trk-spacer { flex: 1; }
+.trk-muted { color: var(--text-tertiary); font-size: 0.8rem; }
+.trk-small { font-size: 0.78rem; }
+.trk-mono { font-variant-numeric: tabular-nums; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+.trk-stat {
+  padding: 0.7rem 0.9rem;
+  border: 1px solid var(--border-primary);
+  border-radius: 12px;
+  background: var(--bg-secondary, rgba(255,255,255,0.02));
+}
+.trk-stat .v { font-size: 1.25rem; font-weight: 700; color: var(--text-primary); }
+.trk-stat .l { font-size: 0.75rem; color: var(--text-tertiary); margin-top: 2px; }
+
+.trk-countdown {
+  text-align: center;
+  padding: 0.9rem;
+  border-radius: 14px;
+  border: 1px solid rgba(239,68,68,.5);
+  background: rgba(239,68,68,.1);
+}
+.trk-countdown .num {
+  font-size: 2.4rem;
+  font-weight: 800;
+  color: #f87171;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+.trk-countdown .cap { color: var(--text-secondary); font-size: 0.85rem; margin-top: 4px; }
+
+.trk-people { display: flex; flex-direction: column; gap: 0.5rem; }
+.trk-person {
+  display: flex;
+  gap: 0.7rem;
+  align-items: center;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--border-primary);
+  border-radius: 12px;
+}
+.trk-person .name { font-weight: 600; }
+.trk-person .meta { font-size: 0.78rem; color: var(--text-tertiary); }
+.trk-person .grow { flex: 1; min-width: 0; }
+
+.trk-attempts { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+.trk-attempts th { text-align: left; color: var(--text-tertiary); font-weight: 500; padding: 4px 8px; border-bottom: 1px solid var(--border-primary); }
+.trk-attempts td { padding: 5px 8px; border-bottom: 1px solid var(--border-primary); vertical-align: top; }
+
+.trk-table { width: 100%; border-collapse: collapse; font-size: 0.84rem; }
+.trk-table th { text-align: left; color: var(--text-tertiary); font-weight: 500; padding: 6px 8px; border-bottom: 1px solid var(--border-primary); }
+.trk-table td { padding: 7px 8px; border-bottom: 1px solid var(--border-primary); vertical-align: top; }
+.trk-table tr:hover td { background: rgba(148,163,184,.05); }
+
+.trk-token {
+  display: block;
+  padding: 0.6rem 0.75rem;
+  border-radius: 10px;
+  background: rgba(34,197,94,.08);
+  border: 1px dashed rgba(34,197,94,.45);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.82rem;
+  word-break: break-all;
+  color: var(--text-primary);
+}
+
+.trk-honesty {
+  border: 1px dashed var(--border-primary);
+  border-radius: 10px;
+  padding: 0.55rem 0.75rem;
+  font-size: 0.78rem;
+  color: var(--text-tertiary);
+}
+.trk-honesty b { color: var(--text-secondary); }
+
+.trk-timeline-mini {
+  height: 26px;
+  border-radius: 8px;
+  overflow: hidden;
+  display: flex;
+  border: 1px solid var(--border-primary);
+}
+.trk-timeline-mini i { display: block; height: 100%; }
+
+/* ---------------------------------------------------------------- tracker */
+
+.trk-track-root {
+  min-height: 100vh;
+  padding: 1rem;
+  max-width: 560px;
+  margin: 0 auto;
+  font-size: 15px;
+}
+.trk-track-big {
+  font-size: 2rem;
+  font-weight: 800;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.trk-track-sos {
+  width: 100%;
+  padding: 1.4rem;
+  border-radius: 18px;
+  border: 2px solid rgba(239,68,68,.65);
+  background: rgba(239,68,68,.14);
+  color: #f87171;
+  font-size: 1.35rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+.trk-track-sos:active { transform: scale(0.985); }
+.trk-track-btn {
+  width: 100%;
+  padding: 0.85rem;
+  border-radius: 12px;
+  font-weight: 700;
+  font-size: 1rem;
+}
+@media (display-mode: standalone) { .trk-track-root { padding-top: 2rem; } }

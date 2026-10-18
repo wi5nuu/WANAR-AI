@@ -182,6 +182,68 @@ describe('WhatsApp inbox — obrolan AI dengan pemilik', () => {
   });
 });
 
+// ---------------------------------------------- lokasi dibagikan (pin)
+
+describe('WhatsApp inbox — lokasi yang dibagikan pemilik', () => {
+  const locationPayload = ({ from = OWNER, id = 'wamid.loc.1', lat = -6.2383, lon = 106.9756, name } = {}) => ({
+    object: 'whatsapp_business_account',
+    entry: [{
+      id: 'WABA-ID',
+      changes: [{
+        field: 'messages',
+        value: {
+          messaging_product: 'whatsapp',
+          metadata: { display_phone_number: '6281230000000', phone_number_id: '1234567890' },
+          contacts: [{ profile: { name: 'Wisnu' }, wa_id: from }],
+          messages: [{
+            from, id, timestamp: '1700000000', type: 'location',
+            location: { latitude: lat, longitude: lon, ...(name ? { name } : {}) },
+          }],
+        },
+      }],
+    }],
+  });
+
+  it('menawarkan simpan pin dan membalas di chat yang sama', async () => {
+    const { inbox, fetchImpl } = setup();
+    const calls = [];
+    inbox.onLocationPin = async (pin) => { calls.push(pin); return `📍 Lokasi diterima (${pin.lat}, ${pin.lon}).`; };
+    const p = locationPayload();
+    const r = await inbox.handleMessage(firstValue(p), firstMessage(p));
+    expect(r).toEqual({ action: 'location', phone: OWNER });
+    expect(calls).toEqual([{ chatId: `wa:${OWNER}`, lat: -6.2383, lon: 106.9756, title: null, person: 'Wisnu' }]);
+    const sent = fetchImpl.calls.find((c) => c.json?.to === OWNER);
+    expect(sent.json.type).toBe('text');
+    expect(sent.json.text.body).toMatch(/Lokasi diterima/);
+  });
+
+  it('meneruskan nama tempat dari WhatsApp sebagai judul', async () => {
+    const { inbox } = setup();
+    let got = null;
+    inbox.onLocationPin = async (pin) => { got = pin; return 'ok'; };
+    const p = locationPayload({ id: 'wamid.loc.2', name: 'Warung Bu Tini' });
+    await inbox.handleMessage(firstValue(p), firstMessage(p));
+    expect(got).toMatchObject({ chatId: `wa:${OWNER}`, title: 'Warung Bu Tini' });
+  });
+
+  it('mengabaikan pin dari nomor asing tanpa balasan apa pun', async () => {
+    const { inbox } = setup();
+    const calls = [];
+    inbox.onLocationPin = async (pin) => { calls.push(pin); return 'x'; };
+    const p = locationPayload({ from: OTHER, id: 'wamid.loc.3' });
+    const r = await inbox.handleMessage(firstValue(p), firstMessage(p));
+    expect(r).toEqual({ action: 'ignored', phone: OTHER });
+    expect(calls).toHaveLength(0);
+  });
+
+  it('tanpa penangan pin: pesan non-teks pemilik tetap diberi tahu seperti biasa', async () => {
+    const { inbox } = setup();
+    const p = locationPayload({ id: 'wamid.loc.4' });
+    const r = await inbox.handleMessage(firstValue(p), firstMessage(p));
+    expect(r.action).toBe('unsupported_reply');
+  });
+});
+
 // --------------------------------------------------------- opt-in / opt-out
 
 describe('WhatsApp inbox — STOP / START', () => {

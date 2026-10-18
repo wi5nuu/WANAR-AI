@@ -55,6 +55,15 @@ import { createChatActions } from './automation/chat-actions.js';
 import { createPrayerTimesService } from './automation/prayer-times.js';
 import { initWorklog } from './worklog/index.js';
 import { createWorklogRouter } from './worklog/routes.js';
+import { initLocation } from './location/index.js';
+import { createLocationRouter } from './location/routes.js';
+import { quickLocationPin, listPlacesText } from './location/quick.js';
+import { initEmergency } from './emergency/index.js';
+import { createEmergencyRouter } from './emergency/routes.js';
+import { initVehicle } from './vehicle/index.js';
+import { createVehicleRouter } from './vehicle/routes.js';
+import { initMemory } from './memory/index.js';
+import { createMemoryRouter } from './memory/routes.js';
 import { initEmailDesk } from './email-desk/index.js';
 import { createEmailDeskRouter } from './email-desk/routes.js';
 import { createBriefing } from './briefing.js';
@@ -122,6 +131,108 @@ const prayerTimes = createPrayerTimesService({
 // Work journal (jam kerja, tugas, keuangan, laporan, evaluasi). Shares the
 // Telegram bot: adds owner-only commands and gives the AI chat today's context.
 const worklog = initWorklog({ db: sqliteDb, aiManager, automation });
+
+// Personal memory: small owner-controlled facts (preferences, routines, named
+// places, notes). Tracking/emergency/vehicle feed it; the AI reads it through
+// the prompt block in memory/owner-context.js and it is editable in /memory UI.
+const personalMemory = initMemory({ db: sqliteDb });
+
+// The one place the owner receives routine notices: his own Telegram chat.
+const ownerChatId = () => String(process.env.TELEGRAM_AI_CHAT_IDS || '').split(',')[0]?.trim() || null;
+const ownerTelegram = automation.channels.has('telegram') ? automation.channels.get('telegram') : null;
+const sendOwner = async (text) => {
+  const chat = ownerChatId();
+  if (!chat || !ownerTelegram) return { ok: false, channel: null, error: 'chat Telegram pemilik belum dikonfigurasi (TELEGRAM_AI_CHAT_IDS)' };
+  if (ownerTelegram.mode !== 'live') return { ok: false, channel: 'telegram', error: 'token bot Telegram belum dikonfigurasi' };
+  const r = await ownerTelegram.send({ to: chat, text });
+  if (r?.dryRun) return { ok: false, channel: 'telegram', error: 'kanal mengembalikan dry-run' };
+  try { automation.inbox.noteOutgoing(chat, text); } catch { /* transcript best-effort */ }
+  return { ok: true, channel: 'telegram', id: r?.messageId || null };
+};
+
+// Realtime tracking. The phone posts fixes with its own device token; the
+// server stores, classifies and reports. Raw coordinates stay in this SQLite DB
+// and are served only to the owner's dashboard.
+const location = initLocation({
+  db: sqliteDb,
+  deliver: async ({ text }) => sendOwner(text),
+  memory: (e) => personalMemory.service.ingest(e),
+});
+
+// Chat locations: a Telegram/WhatsApp pin is offered to be saved as a named
+// place ("simpan lokasi ini sebagai Rumah"), and /tempat lists what is saved.
+// Both sides are deterministic code — saving a place never goes through the AI.
+automation.inbox.onLocationPin = (pin) => quickLocationPin(location.service, pin);
+if (automation.whatsappInbox) automation.whatsappInbox.onLocationPin = (pin) => quickLocationPin(location.service, pin);
+automation.inbox.registerCommands({
+  tempat: {
+    description: 'Daftar/cari tempat tersimpan (mis. /tempat rumah)',
+    run: ({ arg }) => listPlacesText(location.service, arg || null),
+  },
+});
+
+// Emergency workflow: deterministic detection + escalation. Contacts are only
+// ever messaged through channels that are actually live; the default mode is
+// simulate (see EMERGENCY_MODE / settings).
+const waChannel = automation.channels.has('whatsapp') ? automation.channels.get('whatsapp') : null;
+const emailChannel = automation.channels.has('email') ? automation.channels.get('email') : null;
+const emergency = initEmergency({
+  db: sqliteDb,
+  location,
+  channels: {
+    telegram: ownerTelegram
+      ? async (chatId, text) => {
+        if (ownerTelegram.mode !== 'live') return { ok: false, error: 'Telegram belum dikonfigurasi' };
+        const r = await ownerTelegram.send({ to: chatId, text });
+        return { ok: !r?.dryRun, id: r?.messageId || null, error: r?.dryRun ? 'mode simulasi kanal' : null };
+      }
+      : null,
+    whatsapp: waChannel
+      ? async (phone, text) => {
+        if (waChannel.mode !== 'live') return { ok: false, error: 'WhatsApp belum dikonfigurasi' };
+        const r = await waChannel.send({ to: phone, text, freeform: true });
+        return { ok: !r?.dryRun, id: r?.messageId || null, error: r?.dryRun ? 'mode simulasi kanal' : null };
+      }
+      : null,
+    email: emailChannel
+      ? async ({ to, subject, text }) => {
+        if (emailChannel.mode !== 'live') return { ok: false, error: 'SMTP belum dikonfigurasi' };
+        const r = await emailChannel.send({ to, subject, text });
+        return { ok: !r?.dryRun, id: r?.messageId || null, error: r?.dryRun ? 'mode simulasi kanal' : null };
+      }
+      : null,
+    webhook: process.env.EMERGENCY_WEBHOOK_URL
+      ? async (payload) => {
+        try {
+          const r = await fetch(process.env.EMERGENCY_WEBHOOK_URL, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+          return { ok: r.ok, id: null, error: r.ok ? null : `HTTP ${r.status}` };
+        } catch (e) {
+          return { ok: false, error: e.message };
+        }
+      }
+      : null,
+  },
+  ownerNotify: (text) => sendOwner(text),
+  memory: (e) => personalMemory.service.ingest(e),
+  log: (m) => console.log(m),
+});
+
+// Motorcycle care: fuel, odometer, maintenance, reminders.
+const vehicle = initVehicle({
+  db: sqliteDb,
+  location,
+  deliver: async (notice) => sendOwner(notice.text),
+  memory: (e) => personalMemory.service.ingest(e),
+});
+
+// Every accepted GPS batch is also scored by the emergency detector (throttled
+// and sensor-honest: without accelerometer data the score is capped and says so).
+location.service.onSamples = (e) => { try { emergency.service.feed(e); } catch { /* detection is best-effort here */ } };
+
 // One shared memory: the Telegram AI sees the journal, automation and past
 // chats (web + Telegram), and its own conversations become chat sessions too.
 // Email Desk: draft/send email from Telegram, watch replies (IMAP IDLE), auto-reply policy.
@@ -169,7 +280,7 @@ const companion = createCompanion({
   remember: (chatId, text) => automation.inbox.noteOutgoing(chatId, text),
 });
 automation.inbox.registerCommands(companion.commands());
-const ownerContext = createOwnerContext({ db: sqliteDb, automation, worklog });
+const ownerContext = createOwnerContext({ db: sqliteDb, automation, worklog, memory: personalMemory, location, vehicle, emergency });
 const telegramTranscript = createTelegramTranscript({ db: sqliteDb });
 // The owner's plain messages go to an assistant that can also ACT (reminders,
 // journal, schedule) through a validated whitelist — one model call per message.
@@ -287,6 +398,10 @@ automation.inbox.responder = makeAssistantResponder({
   learning,
   chatActions,
   automation,
+  location,
+  vehicle,
+  emergency,
+  memory: personalMemory,
   context: ({ text, chatId }) => ownerContext({ text, excludeSessionId: chatId ? telegramTranscript.sessionId(chatId) : null }),
 });
 automation.inbox.onExchange = (e) => telegramTranscript.record(e);
@@ -310,6 +425,10 @@ automation.whatsappInbox.responder = makeAssistantResponder({
   learning,
   chatActions,
   automation,
+  location,
+  vehicle,
+  emergency,
+  memory: personalMemory,
   context: ({ text, chatId }) => ownerContext({ text, excludeSessionId: chatId ? whatsappTranscript.sessionId(chatId) : null }),
 });
 automation.whatsappInbox.onExchange = (e) => whatsappTranscript.record(e);
@@ -1218,6 +1337,10 @@ app.use('/api/email-desk', createEmailDeskRouter({ emailDesk, rateLimiters }));
 app.use('/api/command-center', createCommandCenterRouter({ worklog, emailDesk, automation, briefing, intel, learning, market, prayerTimes, rateLimiters }));
 app.use('/api/career', createCareerRouter({ career }));
 app.use('/api/sales', createSalesRouter({ sales }));
+app.use('/api/location', createLocationRouter({ location, emergency, rateLimiters }));
+app.use('/api/emergency', createEmergencyRouter({ emergency, rateLimiters }));
+app.use('/api/vehicle', createVehicleRouter({ vehicle, rateLimiters }));
+app.use('/api/memory', createMemoryRouter({ memory: personalMemory, rateLimiters }));
 app.use('/api/system-map', createSystemMapRouter({ aiManager, db, config, automation, emailDesk, companion, briefing, envFile: path.join(process.cwd(), '.env'), tools: () => getToolDefinitions(), rateLimiters }));
 
 app.get('/api/sessions/:id/messages', (req, res) => {
@@ -3046,6 +3169,10 @@ async function startServer() {
       if (automation.whatsappInbox?.enabled) console.log('WhatsApp   : webhook aktif di /webhook/whatsapp (balasan AI untuk WHATSAPP_AI_CHAT_IDS)');
       worklog.service.start();
       console.log('Worklog    : jurnal kerja aktif (laporan Telegram terjadwal)');
+      location.service.start();
+      emergency.service.start();
+      vehicle.service.start();
+      console.log(`Pelacakan  : aktif (geocoding ${location.geocoder ? 'Nominatim/OSM' : 'MATI'}) · Darurat: mode ${emergency.service.effectiveMode()} · Kendaraan: pengingat servis aktif`);
       emailDesk.desk.start(); // follow-up checks
       if (market.start()) console.log('Pasar      : alarm harga aktif (cek tiap menit)');
       if (career.start()) console.log('Karir      : radar lowongan remote aktif (laporan ke Telegram)');
@@ -3066,7 +3193,7 @@ async function startServer() {
   }
   for (const sig of ['SIGINT', 'SIGTERM']) {
     process.once(sig, () => {
-      try { automation.scheduler.stop(); automation.inbox.stop(); prayerTimes.stop(); worklog.service.stop(); emailDesk.watcher.stop(); emailDesk.desk.stop(); briefing.stop(); learning.stop(); companion.stop(); market.stop(); career.stop(); sales.stop(); prospects.stop(); ops.stop(); automation.channels.closeAll(); } catch { /* ignore */ }
+      try { automation.scheduler.stop(); automation.inbox.stop(); prayerTimes.stop(); worklog.service.stop(); location.service.stop(); emergency.service.stop(); vehicle.service.stop(); emailDesk.watcher.stop(); emailDesk.desk.stop(); briefing.stop(); learning.stop(); companion.stop(); market.stop(); career.stop(); sales.stop(); prospects.stop(); ops.stop(); automation.channels.closeAll(); } catch { /* ignore */ }
       process.exit(0);
     });
   }

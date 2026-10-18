@@ -18,6 +18,8 @@ import AgentFlow, { AgentLiveBar } from './components/AgentFlow';
 import AuroraBackground from './components/AuroraBackground';
 import Automation from './components/Automation';
 import Worklog from './components/Worklog';
+import Tracking from './components/Tracking';
+import Tracker from './components/Tracker';
 import CommandCenter from './components/CommandCenter';
 import AgentCenter from './components/AgentCenter';
 // three.js is large: the map page is fetched only when opened
@@ -237,6 +239,8 @@ export default function App() {
       <Route path="/voice" element={<VoiceTalk />} />
       <Route path="/automation" element={<Automation />} />
       <Route path="/worklog" element={<Worklog />} />
+      <Route path="/tracking" element={<Tracking />} />
+      <Route path="/track" element={<Tracker />} />
       <Route path="/command-center" element={<CommandCenter />} />
       <Route path="/agent-center" element={<AgentCenter />} />
       <Route path="/system-map" element={<Suspense fallback={<div style={{ padding: 24 }}>Memuat peta 3D…</div>}><SystemMapPage /></Suspense>} />

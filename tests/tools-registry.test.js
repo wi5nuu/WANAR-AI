@@ -29,6 +29,7 @@ import { desktopTools } from '../src/tools/desktop.js';
 import { automationTools } from '../src/tools/automation.js';
 import { worklogTools } from '../src/tools/worklog.js';
 import { securityTools } from '../src/tools/security.js';
+import { locationTools } from '../src/tools/location.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Registry: allTools & getToolDefinitions
@@ -532,6 +533,29 @@ describe('taskManagementTools definitions', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 // Total count
 // ─────────────────────────────────────────────────────────────────────────────
+describe('locationTools definitions', () => {
+  it('has the location / vehicle / memory tools', () => {
+    const names = locationTools.map(t => t.function.name);
+    for (const n of [
+      'location_status', 'location_history', 'location_name_place',
+      'vehicle_status', 'fuel_log', 'odometer_read', 'maintenance_status', 'maintenance_log',
+      'memory_remember', 'memory_search',
+    ]) {
+      expect(names).toContain(n);
+    }
+  });
+  it('never exposes an emergency tool to the AI', () => {
+    for (const t of locationTools) {
+      expect(t.function.name).not.toMatch(/emergency|sos|escalat/);
+    }
+  });
+  it('all location tools have required params defined', () => {
+    for (const t of locationTools) {
+      expect(Array.isArray(t.function.parameters.required)).toBe(true);
+    }
+  });
+});
+
 describe('total tool count', () => {
   it('allTools has at least 30 tools', () => expect(allTools.length).toBeGreaterThanOrEqual(30));
 
@@ -541,7 +565,7 @@ describe('total tool count', () => {
       systemTools.length + securityTools.length + taskManagementTools.length +
       webFetchTools.length + agentDelegationTools.length + codeIntelligenceTools.length +
       browserTools.length + browserApplyTools.length + desktopTools.length +
-      automationTools.length + worklogTools.length;
+      automationTools.length + worklogTools.length + locationTools.length;
     expect(allTools.length).toBe(expected);
   });
 });

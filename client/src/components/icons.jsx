@@ -46,3 +46,8 @@ export const IconRadar = (p) => <Svg {...p}><circle cx="12" cy="12" r="8.5" /><c
 export const IconMail = (p) => <Svg {...p}><rect x="3" y="5" width="18" height="14" rx="2.5" /><path d="m4 7 8 6 8-6" /></Svg>;
 export const IconBell = (p) => <Svg {...p}><path d="M6 16V11a6 6 0 1 1 12 0v5l1.5 2h-15L6 16z" /><path d="M10 20.5a2 2 0 0 0 4 0" /></Svg>;
 export const IconServer = (p) => <Svg {...p}><rect x="3.5" y="4" width="17" height="7" rx="2" /><rect x="3.5" y="13" width="17" height="7" rx="2" /><path d="M7.5 7.5h.01M7.5 16.5h.01" /></Svg>;
+export const IconMap = (p) => <Svg {...p}><path d="m9 4.5-5.5 2v13l5.5-2 6 2 5.5-2v-13l-5.5 2-6-2z" /><path d="M9 4.5v13M15 6.5v13" /></Svg>;
+export const IconPin = (p) => <Svg {...p}><path d="M12 21s-6.5-5.6-6.5-10.5a6.5 6.5 0 1 1 13 0C18.5 15.4 12 21 12 21z" /><circle cx="12" cy="10.5" r="2.3" /></Svg>;
+export const IconBike = (p) => <Svg {...p}><circle cx="6" cy="16" r="3.5" /><circle cx="18" cy="16" r="3.5" /><path d="M6 16l3.5-7h5L18 16M9.5 9 12 6.5h3M14.5 9.5H17" /></Svg>;
+export const IconFuel = (p) => <Svg {...p}><rect x="4" y="4" width="9" height="17" rx="2" /><path d="M13 8h3.5A2.5 2.5 0 0 1 19 10.5V16a1.8 1.8 0 0 0 3.6 0v-6L20 7" /><path d="M4 10h9" /></Svg>;
+export const IconAlert = (p) => <Svg {...p}><path d="M12 4 2.5 20h19L12 4z" /><path d="M12 10v4.5M12 17.5h.01" /></Svg>;

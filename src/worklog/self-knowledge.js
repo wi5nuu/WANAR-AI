@@ -19,6 +19,8 @@ export const WEB_PAGES = [
   ['/worklog', 'Jurnal Kerja', 'tugas harian, catatan uang (masuk/keluar), jam kerja (start/jeda/stop), laporan harian, pengingat'],
   ['/command-center', 'Command Center', 'ringkasan hari ini: pengingat & alarm, Email Desk (draf, percakapan, kontak, kebijakan balas), pasar (watchlist, alert, skenario), briefing pagi, intel'],
   ['/agent-center', 'Pusat Agen', '7 tab: Ringkasan, Aktivitas (log semua agen), Lowongan (radar karier + paket lamaran + unduh CV), Calon Klien (lead yang menulis sendiri), Peluang (radar klien Freelancer & usaha lokal), Layanan (katalog & harga), Tentang'],
+  ['/tracking', 'Pelacakan', 'peta live & riwayat perjalanan (OpenStreetMap), tempat yang dikenal + koreksi nama, kontak & alur darurat (mode simulasi/live), kendaraan (bensin/odometer/servis), memori pribadi'],
+  ['/track', 'Pelacak HP', 'halaman khusus di HP: kirim GPS ke server dengan token perangkat, interval adaptif, tombol darurat; penamaan file dibuat agar mudah dibuka di ponsel'],
   ['/automation', 'Otomasi', 'kampanye email/WhatsApp/Telegram, penerima, templat, jadwal, status kanal'],
   ['/job-agent', 'Job Agent', 'agen pencari kerja versi awal'],
   ['/system-map', 'Peta Sistem 3D', 'peta langsung seluruh sistem: provider, kuota, jejak (trace) tiap permintaan, keamanan'],
@@ -34,6 +36,9 @@ const FEATURES = [
   'Radar klien: Freelancer.com tiap 6 jam + usaha lokal tanpa website tiap 3 hari; paket pagi 08.00 WIB; sistem TIDAK menghubungi calon klien sendiri',
   'Meja penjualan: katalog 6 layanan, harga hanya yang disetujui pemilik, lead dari formulir situs portofolio & WhatsApp, saran balasan',
   'Pasar & briefing: watchlist, alert harga, briefing pagi hari kerja, waktu shalat Bekasi, sapaan peduli (Peka), pembelajaran otomatis tiap 00.00',
+  'Pelacakan & darurat: posisi live (SSE), riwayat perjalanan & tempat (jarak GPS, bukan odometer), deteksi darurat deterministik dengan hitung mundur + eskalasi ke kontak terverifikasi (mode simulasi bawaan), tombol SOS di HP',
+  'Kendaraan: catatan bensin (estimasi model, bukan sensor), odometer manual, jadwal servis dengan interval usulan yang ditandai belum terverifikasi',
+  'Memori pribadi: kesukaan, rutinitas, tempat bernama, orang dan catatan — bisa diubah/dihapus pemilik kapan saja',
 ];
 
 /** Models/providers behind the chat: the live current one plus the configured fallbacks. */
