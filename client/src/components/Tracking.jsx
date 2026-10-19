@@ -496,10 +496,17 @@ function LiveTab({ loc, refresh, notify, tick }) {
           </>
         ) : (
           <>
-            <MapView height={200} center={null} zoom={13} rev="empty" />
+            <MapView
+              height={200}
+              center={null}
+              zoom={13}
+              fit
+              markers={(loc.places || []).filter((p) => p.active).map((p) => ({ lat: p.lat, lon: p.lon, label: `${p.name} (${kindLabel(p.kind)})`, color: '#a78bfa', radiusM: p.radius_m }))}
+              rev={`empty|${(loc.places || []).length}`}
+            />
             <div className="trk-muted" style={{ marginTop: 8 }}>
-              Belum ada titik lokasi tersimpan. Nyalakan <b>GPS browser</b> di kartu bawah (browser akan meminta izin lokasi), atau buka halaman <b>/track</b> di HP dengan token perangkat.
-              Server hanya menyimpan kiriman itu — server tidak punya GPS sendiri.
+              Belum ada posisi (fix GPS) yang diterima. Nyalakan <b>GPS browser</b> di kartu bawah (browser akan meminta izin lokasi), atau buka halaman <b>/track</b> di HP dengan token perangkat.
+              Peta di atas tetap menampilkan tempat yang sudah dikenal. Server hanya menyimpan kiriman GPS — server tidak punya GPS sendiri.
             </div>
           </>
         )}
@@ -554,8 +561,9 @@ function LiveTab({ loc, refresh, notify, tick }) {
         </div>
         {!(status.places || []).length ? (
           <div className="trk-muted" style={{ marginTop: 6 }}>
-            Belum ada tempat tersimpan. Buka tab <b>Tempat</b> → "Simpan posisi sekarang" untuk menyimpan posisi ini sebagai Rumah/Kantor/Toko.
-            Setelah itu di sini akan tampil jarak meter dari tiap tempat, realtime.
+            {(loc.places || []).length
+              ? 'Tempat sudah tersimpan, tetapi belum ada posisi untuk menghitung jarak. Nyalakan GPS browser di kartu atas (atau buka /track di HP), lalu jarak ke tiap tempat muncul di sini.'
+              : <>Belum ada tempat tersimpan. Buka tab <b>Tempat</b> → "Simpan posisi sekarang" untuk menyimpan posisi ini sebagai Rumah/Kantor/Toko. Setelah itu di sini akan tampil jarak meter dari tiap tempat, realtime.</>}
           </div>
         ) : (
           <table className="trk-table" style={{ marginTop: 6 }}>
