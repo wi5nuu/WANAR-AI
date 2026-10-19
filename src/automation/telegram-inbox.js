@@ -177,6 +177,18 @@ export class TelegramInbox extends EventEmitter {
     this.onExchange = null;   // ({chatId, user, assistant, guest}) => void
     this.onOutgoing = null;   // ({chatId, assistant}) => void  (assistant-initiated messages)
     this.loadHistory = null;  // (chatId) => [{role, content}]
+    /**
+     * Consent-gate hooks for the partner persona (set by the server):
+     * - loverDirect(chatId): true only when the recipient has consented
+     * - loverConsent(chatId): consent state for /help
+     * - onLoverConsent({chatId, agree}): /setuju and /tariksetuju
+     * - onLoverFailure({chatId,error,text}): owner-only failure notice
+     * Absent hooks fail closed: partner text is never sent directly.
+     */
+    this.loverDirect = null;
+    this.loverConsent = null;
+    this.onLoverConsent = null;
+    this.onLoverFailure = null;
     /** @type {Map<string, {description:string, run:Function}>} owner-only commands from other modules */
     this.ownerCommands = new Map();
     this.channel = channel;
@@ -390,7 +402,10 @@ export class TelegramInbox extends EventEmitter {
       }
       if (this.isOwner(chatId) && this.responder) help += '\n\nPesan biasa dijawab oleh AI.';
       else if (this.isLover(chatId) && this.loverResponder) {
+        const consent = this.loverConsent?.(chatId);
         help += '\n\nPesan biasa dijawab AI (mode pasangan — komunikasi saja, tanpa akses data pemilik).';
+        if (consent?.direct) help += '\nBalasan AI aktif dengan persetujuanmu. /tariksetuju untuk berhenti.';
+        else if (consent?.disclosed) help += '\nBalasan AI masih draf sampai kamu membalas /setuju. /tariksetuju untuk menolak.';
       } else if (this.isGuest(chatId) && this.guestResponder) {
         help += '\n\nPesan biasa dijawab AI (mode tamu — komunikasi saja, tanpa akses data pemilik).';
       }
@@ -429,6 +444,16 @@ export class TelegramInbox extends EventEmitter {
       return { action: 'unsubscribed', chatId };
     }
 
+    // Recipient-side consent for the partner persona. Deterministic, never
+    // model-generated, and only from a configured partner chat. Owner chats
+    // and strangers cannot use this to enable anything.
+    if ((command === 'setuju' || command === 'tariksetuju') && this.isLover(chatId) && msg.chat.type === 'private') {
+      if (typeof this.onLoverConsent !== 'function') return { action: 'lover_consent_ignored', chatId };
+      const res = await this.onLoverConsent({ chatId, agree: command === 'setuju' });
+      if (res?.text) await this._reply(chatId, escapeHtml(res.text));
+      return { action: 'lover_consent', chatId, ok: Boolean(res?.ok), agree: command === 'setuju' };
+    }
+
 
     const plugin = this.ownerCommands.get(command);
     if (plugin && this.isOwner(chatId) && msg.chat.type === 'private') {
@@ -459,9 +484,10 @@ export class TelegramInbox extends EventEmitter {
   _historyFor(chatId) {
     const h = this.history.get(chatId);
     if (h && Date.now() - h.at <= HISTORY_TTL_MS) return h.turns;
-    // After a restart the in-memory history is gone: continue from the saved
-    // transcript so the bot still remembers what was just said.
-    if (!h && typeof this.loadHistory === 'function') {
+    // After a restart OR after the in-memory TTL expires, continue from the
+    // saved transcript instead of forgetting the conversation. The transcript
+    // keeps only today's session, which is the intended retention policy.
+    if (typeof this.loadHistory === 'function') {
       try {
         const turns = (this.loadHistory(chatId) || []).slice(-HISTORY_TURNS);
         if (turns.length) {
@@ -470,6 +496,7 @@ export class TelegramInbox extends EventEmitter {
         }
       } catch { /* history is best-effort */ }
     }
+    if (h) this.history.delete(chatId);
     return [];
   }
 
@@ -483,6 +510,22 @@ export class TelegramInbox extends EventEmitter {
     traceStep('deliver', { channel: 'telegram', kind: 'outgoing', chars: t.length, ok: true });
     this._remember(String(chatId), 'assistant', t);
     try { this.onOutgoing?.({ chatId: String(chatId), assistant: t }); } catch { /* best effort */ }
+  }
+
+  /**
+   * Records a complete exchange that was delivered outside the normal reply
+   * path (for example an owner-approved partner draft). Avoids double-recording
+   * the assistant turn: callers send with { record: false }.
+   */
+  rememberExchange(chatId, user, assistant) {
+    const u = String(user || '').slice(0, 4000);
+    const a = String(assistant || '').slice(0, 4000);
+    if (!a) return;
+    this._remember(String(chatId), 'user', u);
+    this._remember(String(chatId), 'assistant', a);
+    try {
+      this.onExchange?.({ chatId: String(chatId), user: u, assistant: a, guest: true, lover: true });
+    } catch { /* transcript is best-effort */ }
   }
 
   _remember(chatId, role, content) {
@@ -537,47 +580,90 @@ export class TelegramInbox extends EventEmitter {
   }
 
   async _answerTraced(chatId, text, { responder = this.responder, mode = 'owner' } = {}) {
+    const lover = mode === 'lover';
+    // Fail closed: partner replies are only delivered directly after recipient
+    // consent. A missing hook is treated as no consent.
+    const direct = !lover || this.loverDirect?.(chatId) === true;
     try {
       await this.channel.sendAction?.(chatId, 'typing').catch(() => {});
       const history = this._historyFor(chatId).slice();
       const guest = mode !== 'owner';
       const kind = mode === 'lover' ? 'lover-chat' : mode === 'guest' ? 'guest-chat' : 'chat';
       traceStep('receive', { channel: 'telegram', kind, chars: text.length, history: history.length });
-      // Non-owner chats never see (or get) owner commands: /id is the only extra.
-      const commands = guest
-        ? ['/id — tampilkan Chat ID']
-        : [
+      // Partner chats never receive operational command instructions. Owner
+      // commands stay owner-only; guests only get /id.
+      const commands = mode === 'owner'
+        ? [
           ...[...this.ownerCommands].map(([k, d]) => `/${k} — ${d.description || ''}`),
           '/help — daftar perintah', '/id — tampilkan Chat ID',
-        ];
-      // Slow model? Say so once, instead of leaving the owner staring at silence.
-      let waited = false;
-      const ackTimer = setTimeout(() => {
-        waited = true;
-        this.channel.sendAction?.(chatId, 'typing').catch(() => {});
-        this._reply(chatId, escapeHtml(process.env.AI_SLOW_NOTICE || 'Sebentar ya, saya masih menyiapkan jawabannya…')).catch(() => {});
-      }, Math.max(5000, parseInt(process.env.AI_SLOW_NOTICE_MS || '15000', 10) || 15000));
-      let answer;
-      try {
-        answer = String(await responder({ chatId, text: text.slice(0, 4000), history, commands }) || '').trim();
-      } finally {
-        clearTimeout(ackTimer);
+        ]
+        : mode === 'lover' ? [] : ['/id — tampilkan Chat ID'];
+
+      // Slow model? Say so once. In draft-only partner mode, never send a
+      // partner-facing notice: the owner sees the draft/error instead.
+      let ackTimer = null;
+      if (direct) {
+        const slowText = lover
+          ? (process.env.LOVER_SLOW_NOTICE || 'sebentar ya, balasannya lagi disiapin.')
+          : (process.env.AI_SLOW_NOTICE || 'Sebentar ya, saya masih menyiapkan jawabannya…');
+        ackTimer = setTimeout(() => {
+          this.channel.sendAction?.(chatId, 'typing').catch(() => {});
+          this._reply(chatId, escapeHtml(slowText)).catch(() => {});
+        }, Math.max(5000, parseInt(process.env.AI_SLOW_NOTICE_MS || '15000', 10) || 15000));
       }
-      void waited;
+      let result;
+      try {
+        result = await responder({ chatId, text: text.slice(0, 4000), history, commands });
+      } finally {
+        if (ackTimer) clearTimeout(ackTimer);
+      }
+
+      const isDraft = Boolean(result && typeof result === 'object' && result.deliver === false);
+      if (isDraft) {
+        traceStep('deliver', {
+          channel: 'telegram', kind: 'lover-draft', draftId: result.draftId || null,
+          reason: result.reason || null, skipped: true,
+        });
+        this.emit('lover_draft', {
+          chatId, draftId: result.draftId || null, reason: result.reason || null,
+        });
+        return result;
+      }
+
+      const answer = String(
+        result && typeof result === 'object' && typeof result.text === 'string' ? result.text : result ?? '',
+      ).trim();
       if (!answer) throw new Error('empty');
+
+      // Defense in depth: even if a responder accidentally returns a string
+      // without consent, the inbox refuses to deliver it to the partner.
+      if (lover && !direct) {
+        try {
+          await this.onLoverFailure?.({ chatId, error: 'blocked_unconsented_reply', text: answer });
+        } catch { /* owner notice is best-effort */ }
+        traceStep('deliver', { channel: 'telegram', kind: 'lover-blocked', consent: false, skipped: true });
+        return { deliver: false, reason: 'consent_required' };
+      }
+
       this._remember(chatId, 'user', text.slice(0, 4000));
       this._remember(chatId, 'assistant', answer.slice(0, 4000));
-      try { this.onExchange?.({ chatId, user: text.slice(0, 4000), assistant: answer, guest, lover: mode === 'lover' }); } catch { /* never block the reply */ }
+      try { this.onExchange?.({ chatId, user: text.slice(0, 4000), assistant: answer, guest, lover }); } catch { /* never block the reply */ }
       const parts = chunkText(answer, 3500);
       for (const part of parts) await this._reply(chatId, escapeHtml(part));
       traceStep('deliver', { channel: 'telegram', parts: parts.length, chars: answer.length, ok: true, preview: answer.slice(0, 160) });
-      this.emit('ai_reply', { chatId, guest, lover: mode === 'lover' });
+      this.emit('ai_reply', { chatId, guest, lover });
       return answer;
     } catch (e) {
       console.warn('[TELEGRAM-INBOX] jawaban AI gagal:', e.message);
-      traceStep('error', { error: e.message });
-      const sorry = 'Maaf, AI sedang tidak tersedia. Coba lagi sebentar ya.';
-      await this._reply(chatId, sorry);
+      traceStep('error', { error: e.message, consent: direct });
+      if (lover && !direct) {
+        try { await this.onLoverFailure?.({ chatId, error: e.message }); } catch { /* best effort */ }
+        return { deliver: false, error: e.message };
+      }
+      const sorry = lover
+        ? (process.env.LOVER_ERROR_NOTICE || 'maaf, balasannya lagi ada kendala. coba lagi sebentar ya.')
+        : 'Maaf, AI sedang tidak tersedia. Coba lagi sebentar ya.';
+      await this._reply(chatId, escapeHtml(sorry));
       traceStep('deliver', { channel: 'telegram', parts: 1, chars: sorry.length, ok: true, fallback: true, preview: sorry });
       return sorry;
     }

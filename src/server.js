@@ -1,4 +1,4 @@
-﻿import express from 'express';
+import express from 'express';
 import path from 'path';
 import fs from 'fs';
 import helmet from 'helmet';
@@ -62,6 +62,7 @@ import { initEmergency } from './emergency/index.js';
 import { createEmergencyRouter } from './emergency/routes.js';
 import { initVehicle } from './vehicle/index.js';
 import { createVehicleRouter } from './vehicle/routes.js';
+import { vehicleTelegramCommands } from './vehicle/telegram.js';
 import { initMemory } from './memory/index.js';
 import { createMemoryRouter } from './memory/routes.js';
 import { initEmailDesk } from './email-desk/index.js';
@@ -279,6 +280,7 @@ const emailDesk = initEmailDesk({ db: sqliteDb, aiManager, automation, worklog: 
 const briefing = createBriefing({
   worklog: worklog.service,
   desk: emailDesk.desk,
+  vehicle: vehicle.service,
   defaultChatId: () => String(process.env.TELEGRAM_AI_CHAT_IDS || '').split(',')[0]?.trim() || null,
   notify: automation.channels.has('telegram')
     ? async (chatId, text) => {
@@ -289,6 +291,7 @@ const briefing = createBriefing({
     : null,
 });
 automation.inbox.registerCommands(briefing.commands());
+automation.inbox.registerCommands(vehicleTelegramCommands(vehicle.service));
 // Live FX / economy / tech intel + nightly 00:00 self-learning for the Pusat Kendali.
 const intel = createIntelService();
 const learning = createNightlyLearning({
@@ -436,12 +439,15 @@ const lover = createLoverPersona({
     try { automation.inbox.noteOutgoing(chatId, text); } catch { /* best effort */ }
     return true;
   },
-  sendToPartner: async (chatId, text) => {
+  sendToPartner: async (chatId, text, opts = {}) => {
     const tg = automation.channels.get('telegram');
     if (tg?.mode !== 'live') throw new Error('Telegram belum live');
     await tg.send({ to: chatId, text });
-    try { automation.inbox.noteOutgoing(chatId, text); } catch { /* best effort */ }
+    if (opts.record !== false) {
+      try { automation.inbox.noteOutgoing(chatId, text); } catch { /* best effort */ }
+    }
   },
+  recordExchange: ({ chatId, user, assistant }) => automation.inbox.rememberExchange(chatId, user, assistant),
   loadHistory: (chatId) => telegramTranscript.history(chatId),
 });
 
@@ -475,6 +481,10 @@ automation.inbox.responder = async (args) => {
   return ownerAssistant(args);
 };
 automation.inbox.loverResponder = lover.responder;
+automation.inbox.loverDirect = (chatId) => lover.isDirect(chatId);
+automation.inbox.loverConsent = (chatId) => lover.consentStatus(chatId);
+automation.inbox.onLoverConsent = ({ chatId, agree }) => lover.handleConsentCommand({ chatId, agree });
+automation.inbox.onLoverFailure = ({ chatId, error, text }) => lover.reportFailure({ chatId, error, text });
 automation.inbox.registerCommands(lover.commands());
 // Guest chats (mis. keluarga/kerabat yang diizinkan mengobrol): komunikasi
 // saja. Responder ini TIDAK diberi konteks pemilik, perintah owner, atau hook

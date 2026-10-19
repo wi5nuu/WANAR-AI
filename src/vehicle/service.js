@@ -33,6 +33,50 @@ export class VehicleError extends Error {
 const round = (n, d = 2) => (n == null ? null : Number(Number(n).toFixed(d)));
 const NUM = (v) => (v === null || v === undefined || v === '' ? null : Number(v));
 
+export function formatVehicleNotice({ kind, item = null, reason = '', vehicle = {}, note = null, raw = null }) {
+  const plate = vehicle?.plate ? ` (${vehicle.plate})` : '';
+  const vname = (vehicle?.name || 'Honda Vario 160').toUpperCase();
+  if (kind === 'maintenance_overdue') {
+    return [
+      `🛵 <b>PENGINGAT PERAWATAN MOTOR — ${vname}${plate}</b>`,
+      '━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
+      `⚠️ <b>STATUS: JATUH TEMPO</b>`,
+      `Komponen: <b>${item?.name || 'Komponen'}</b>`,
+      `Keterangan: ${item?.name || 'Komponen'} sudah jatuh tempo: ${reason}.${note ? ` ${note}` : ''}`,
+      item?.safetyCritical ? 'PENTING: Komponen ini berkaitan langsung dengan keselamatan berkendara — prioritaskan pemeriksaan di bengkel resmi AHASS.' : 'Disarankan segera melakukan servis berkala.',
+      '━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
+    ].join('\n');
+  }
+  if (kind === 'maintenance_soon') {
+    return [
+      `🛵 <b>PENGINGAT PERAWATAN MOTOR — ${vname}${plate}</b>`,
+      '━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
+      `⏳ <b>STATUS: MENDEKATI JADWAL SERVIS</b>`,
+      `Komponen: <b>${item?.name || 'Komponen'}</b>`,
+      `Keterangan: ${item?.name || 'Komponen'} mendekati jadwal: ${reason}.${note ? ` ${note}` : ''}`,
+      '━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
+    ].join('\n');
+  }
+  if (kind === 'odometer_stale') {
+    return [
+      `🛵 <b>PENGINGAT ODOMETER — ${vname}${plate}</b>`,
+      '━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
+      `ℹ️ ${reason}`,
+      'Kirim /odometer <angka> di Telegram untuk memperbarui angka aktual.',
+      '━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
+    ].join('\n');
+  }
+  if (kind === 'fuel_warning') {
+    return [
+      `⛽ <b>PENGINGAT BAHAN BAKAR — ${vname}${plate}</b>`,
+      '━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
+      `⚠️ ${reason}`,
+      '━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
+    ].join('\n');
+  }
+  return raw || reason;
+}
+
 export class VehicleService extends EventEmitter {
   constructor({ store, location = null, now = () => Date.now(), env = process.env, deliver = null, memory = null }) {
     super();
@@ -491,11 +535,13 @@ export class VehicleService extends EventEmitter {
     for (const it of st.items) {
       if (it.status === 'overdue') {
         const key = `maint:${v.id}:${it.key}:overdue:${weekKey}`;
-        const text = `${it.name} sudah jatuh tempo: ${it.reason}.${it.intervalNote ? ` ${it.intervalNote}` : ''}${it.safetyCritical ? ' Komponen ini berkaitan dengan keselamatan — prioritaskan pemeriksaan.' : ''}`;
+        const raw = `${it.name} sudah jatuh tempo: ${it.reason}.${it.intervalNote ? ` ${it.intervalNote}` : ''}${it.safetyCritical ? ' Komponen ini berkaitan dengan keselamatan — prioritaskan pemeriksaan.' : ''}`;
+        const text = formatVehicleNotice({ kind: 'maintenance_overdue', item: it, reason: it.reason, vehicle: v, note: it.intervalNote, raw });
         if (this.store.notices.claim({ kind: 'maintenance_overdue', dedupKey: key, text })) out.push({ kind: 'maintenance_overdue', text, key });
       } else if (it.status === 'due_soon') {
         const key = `maint:${v.id}:${it.key}:soon:${weekKey}`;
-        const text = `${it.name} mendekati jadwal: ${it.reason}.${it.intervalNote ? ` ${it.intervalNote}` : ''}`;
+        const raw = `${it.name} mendekati jadwal: ${it.reason}.${it.intervalNote ? ` ${it.intervalNote}` : ''}`;
+        const text = formatVehicleNotice({ kind: 'maintenance_soon', item: it, reason: it.reason, vehicle: v, note: it.intervalNote, raw });
         if (this.store.notices.claim({ kind: 'maintenance_soon', dedupKey: key, text })) out.push({ kind: 'maintenance_soon', text, key });
       }
     }
@@ -503,15 +549,17 @@ export class VehicleService extends EventEmitter {
     const odo = this.odometerStatus();
     if (odo.needsUpdate) {
       const key = `odo:${v.id}:stale:${weekKey}`;
-      if (this.store.notices.claim({ kind: 'odometer_stale', dedupKey: key, text: odo.suggestion })) {
-        out.push({ kind: 'odometer_stale', text: odo.suggestion, key });
+      const text = formatVehicleNotice({ kind: 'odometer_stale', vehicle: v, reason: odo.suggestion, raw: odo.suggestion });
+      if (this.store.notices.claim({ kind: 'odometer_stale', dedupKey: key, text })) {
+        out.push({ kind: 'odometer_stale', text, key });
       }
     }
     // Fuel warned repeatedly? The owner asked not to spam: maximum once per day per level.
     const fuel = this.fuelStatus();
     for (const w of fuel.warnings.filter((x) => x.level === 'warn')) {
       const key = `fuel:${v.id}:warn:${dayKey}`;
-      if (this.store.notices.claim({ kind: 'fuel_warning', dedupKey: key, text: w.text })) out.push({ kind: 'fuel_warning', text: w.text, key });
+      const text = formatVehicleNotice({ kind: 'fuel_warning', vehicle: v, reason: w.text, raw: w.text });
+      if (this.store.notices.claim({ kind: 'fuel_warning', dedupKey: key, text })) out.push({ kind: 'fuel_warning', text, key });
     }
     for (const notice of out) this._deliver(notice);
     return out;

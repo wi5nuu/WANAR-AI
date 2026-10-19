@@ -73,6 +73,7 @@ export function quickVehicle(vehicle, text) {
 
   if (SERVICE_ASK.test(t) && !/\b(catat|sudah|baru)\b.{0,15}\b(servis|ganti|oli)\b/i.test(t)) {
     const st = vehicle.status();
+    const v = vehicle.vehicle();
     const overdue = st.items.filter((i) => i.status === 'overdue' || i.status === 'due');
     const soon = st.items.filter((i) => i.status === 'due_soon');
     const lines = [];
@@ -81,9 +82,39 @@ export function quickVehicle(vehicle, text) {
     }
     if (soon.length) lines.push(...soon.slice(0, 5).map((i) => `• ${i.name}: mendekati jadwal (${i.reason}).`));
     if (!overdue.length && !soon.length) lines.push('Tidak ada komponen yang jatuh tempo menurut catatan.');
+    const berkala = st.items.find((i) => i.key === 'servis_berkala');
+    if (berkala?.daysRemaining != null) {
+      lines.push(`Jadwal servis berkala: sisa ${berkala.daysRemaining} hari lagi (interval ${berkala.intervalMonths} bulan / ${berkala.intervalKm || 2000} km).`);
+    }
+    const lastSvc = vehicle.store?.services?.recent?.(v.id, 1)?.[0];
+    if (lastSvc) {
+      const d = new Date(lastSvc.ts).toLocaleDateString('id-ID', { timeZone: 'Asia/Jakarta', day: 'numeric', month: 'short', year: 'numeric' });
+      lines.push(`Servis terakhir: ${d} di ${lastSvc.workshop || 'bengkel'}${lastSvc.notes ? ` (${lastSvc.notes})` : ''}.`);
+    }
     const unverified = st.items.filter((i) => !i.verified).length;
     if (unverified) lines.push(`${unverified} interval masih berstatus usulan (belum diverifikasi dari manual resmi) — periksa dan simpan angka yang benar di halaman Kendaraan.`);
     lines.push('Catatan digital ini pengingat, bukan pemeriksaan fisik.');
+    return lines.join('\n');
+  }
+
+  // "status motor saya", "info motor", "kondisi motor"
+  if (/\b(motor|kendaraan|vario)\b/i.test(t) && /\b(status|info|kondisi|kabar|ringkasan|cek)\b/i.test(t)) {
+    const st = vehicle.status();
+    const v = vehicle.vehicle();
+    const fuel = vehicle.fuelStatus();
+    const plate = v.plate ? ` (${v.plate})` : '';
+    const lines = [`Motor ${v.name || 'Honda Vario 160'}${plate}:`];
+    if (st.odometer.km != null) lines.push(`• Odometer: ${Math.round(st.odometer.km)} km${st.odometer.estimated ? ' (estimasi)' : ''}`);
+    if (fuel.estimate.remainingL != null) lines.push(`• Bahan bakar: ±${fuel.estimate.remainingL} L (±${fuel.estimate.remainingKm} km jangkauan)`);
+    const berkala = st.items.find((i) => i.key === 'servis_berkala');
+    if (berkala?.daysRemaining != null) {
+      lines.push(`• Servis berkala: sisa ${berkala.daysRemaining} hari lagi (interval ${berkala.intervalMonths} bulan)`);
+    }
+    const lastSvc = vehicle.store?.services?.recent?.(v.id, 1)?.[0];
+    if (lastSvc) {
+      const d = new Date(lastSvc.ts).toLocaleDateString('id-ID', { timeZone: 'Asia/Jakarta', day: 'numeric', month: 'short', year: 'numeric' });
+      lines.push(`• Servis terakhir: ${d} di ${lastSvc.workshop || 'bengkel'}`);
+    }
     return lines.join('\n');
   }
 

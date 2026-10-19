@@ -29,7 +29,7 @@ function minus(hhmm, min) {
   return `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`;
 }
 
-export function createBriefing({ worklog, desk = null, notify = null, defaultChatId = () => null, env = process.env, now = () => Date.now() }) {
+export function createBriefing({ worklog, desk = null, vehicle = null, notify = null, defaultChatId = () => null, env = process.env, now = () => Date.now() }) {
   const enabled = String(env.BRIEFING_ENABLED ?? 'true').toLowerCase() !== 'false';
   let timer = null;
 
@@ -84,10 +84,41 @@ export function createBriefing({ worklog, desk = null, notify = null, defaultCha
     const seenTitles = new Set();
     const open = [...(worklog.day(today).taskList || []), ...(worklog.day(addDays(today, -1)).taskList || [])]
       .filter((t) => !t.done)
-      .filter((t) => { const k = String(t.title).toLowerCase().replace(/s+/g, ' ').trim(); if (seenTitles.has(k)) return false; seenTitles.add(k); return true; });
+      .filter((t) => { const k = String(t.title).toLowerCase().replace(/\s+/g, ' ').trim(); if (seenTitles.has(k)) return false; seenTitles.add(k); return true; });
     if (open.length) {
       lines.push('', `Tugas terbuka (${open.length}):`);
       for (const t of open.slice(0, 8)) lines.push(`  • ${clip(t.title, 90)}`);
+    }
+
+    // vehicle maintenance status
+    if (vehicle) {
+      try {
+        const v = vehicle.vehicle ? vehicle.vehicle() : vehicle;
+        const st = vehicle.status();
+        const overdue = st.items.filter((i) => i.status === 'overdue' || i.status === 'due');
+        const soon = st.items.filter((i) => i.status === 'due_soon');
+        const plate = v.plate ? ` (${v.plate})` : '';
+        const vname = v.name || 'Honda Vario 160';
+
+        const linesVeh = [];
+        if (overdue.length) {
+          linesVeh.push(`  ⚠️ Jatuh tempo: ${overdue.map((i) => `${i.name} (${i.reason})`).join(', ')}`);
+        }
+        if (soon.length) {
+          linesVeh.push(`  ⏳ Mendekati jadwal: ${soon.map((i) => `${i.name} (${i.reason})`).join(', ')}`);
+        }
+        if (!overdue.length && !soon.length) {
+          const berkala = st.items.find((i) => i.key === 'servis_berkala');
+          if (berkala?.daysRemaining != null && berkala.daysRemaining <= 45) {
+            linesVeh.push(`  • Servis berkala: sisa ${berkala.daysRemaining} hari lagi (interval ${berkala.intervalMonths} bulan / ${berkala.intervalKm || 2000} km)`);
+          }
+        }
+        if (linesVeh.length) {
+          lines.push('', `Motor ${vname}${plate}:`, ...linesVeh);
+        }
+      } catch {
+        /* vehicle briefing is best-effort */
+      }
     }
 
     lines.push('', 'Balas di sini untuk mencatat, mengingatkan, atau mengirim email.');
