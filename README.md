@@ -267,6 +267,30 @@ mendaftarkan `telegram_chat_id` di kontak darurat hanya membuat sistem bisa *men
 kepadanya — ia tidak otomatis bisa mengobrol dengan AI. Sebaliknya, tamu tidak bisa memicu atau
 membatalkan eskalasi darurat siapa pun.
 
+**Persona pasangan (khusus chat yang kamu izinkan).** Isi `TELEGRAM_LOVER_CHAT_IDS` dengan chat id
+pasangan (nama panggilan diatur lewat `LOVER_NAME`, default `Zahra`). AI akan membalas sebagai
+**kamu** — hangat, perhatian, romantis — tetapi tetap tanpa akses apa pun: tanpa data pribadi,
+tanpa perintah owner, tanpa konteks pemilik, dan tanpa hak darurat.
+
+Status harian diatur dari chat pemilik (berlaku sampai tengah malam WIB):
+
+| Perintah | Arti |
+| --- | --- |
+| `/sibuk [catatan]` | hari ini sibuk; AI menjawab dengan lembut bahwa kamu sibuk (catatan dipakai, kegiatan tidak dikarang) |
+| `/luang` | hari ini luang; AI boleh mengobrol hangat |
+| `/status` | lihat status + pertanyaan yang menunggu jawabanmu |
+| `/jawab <jawaban>` | jawab pertanyaan AI; AI lalu menyusun balasan untuk pasangan |
+
+Kamu juga bisa menulis biasa di chatmu sendiri: **"aku sibuk sampai jam 3"** atau **"lagi luang"** —
+status langsung berubah tanpa perintah.
+
+**"Tanya dulu" ke pemilik.** Kalau AI butuh informasi yang hanya kamu tahu (jadwal, janji, alamat,
+kejadian, rencana) dan tidak ada di riwayat/status, ia **tidak mengarang**. Ia mengirim pertanyaan
+ke chat pemilik dan menahan balasan ke pasangan dengan pesan singkat. Setelah kamu membalas
+`/jawab ...`, AI menyusun jawaban final yang hangat dan mengirimkannya. Pertanyaan yang tidak
+dijawab dalam 2 jam kedaluwarsa. Kalau pasangan bertanya terus terang apakah ia sedang mengobrol
+dengan AI, persona menjawab jujur bahwa itu AI milikmu yang membalas atas namamu.
+
 **Memori kontak.** Setiap orang yang pernah mengirim pesan ke kanal Anda (WhatsApp/Telegram) dicatat
 otomatis di tabel `people`: nama profil, jumlah pesan, terakhir kapan, plus cuplikan pesan terakhir.
 AI pemilik bisa menjawab pertanyaan seperti "siapa yang chat tadi?" dari data itu; nomor/chat pemilik

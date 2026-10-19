@@ -84,6 +84,7 @@ import { createCommandCenterRouter } from './command-center/routes.js';
 import { createOwnerContext, createTelegramTranscript, createWhatsAppTranscript } from './memory/owner-context.js';
 import { makeAssistantResponder } from './worklog/assistant.js';
 import { makeGuestResponder } from './automation/telegram-inbox.js';
+import { createLoverPersona } from './automation/lover-persona.js';
 import { createWhatsAppWebhookRouter } from './automation/whatsapp-webhook.js';
 import { traceHub, traceStep } from './observability/trace-hub.js';
 import { installHeaderCapture } from './observability/quota.js';
@@ -419,10 +420,35 @@ const ops = new OpsManager({
 // A setting lost silently (e-mail keys, bot token) is called out in the daily report instead of staying silent.
 career.sections.push(() => [...channelWarnings(automation.channels), ...inboxWarnings(automation.inbox), ...providerWarnings(aiManager, process.env)]);
 automation.whatsappInbox.sales = sales;
+// Persona pasangan: chat tertentu (TELEGRAM_LOVER_CHAT_IDS) dijawab AI sebagai
+// Wisnu — hangat, romantis, dan sadar status sibuk/luang. Tetap tanpa akses
+// data, perintah owner, konteks pemilik, atau mesin darurat. Pemilik mengatur
+// lewat /sibuk, /luang, /status, dan menjawab pertanyaan AI lewat /jawab.
+const lover = createLoverPersona({
+  db: sqliteDb,
+  aiManager,
+  partnerName: process.env.LOVER_NAME || 'Zahra',
+  notifyOwner: async (text) => {
+    const chatId = ownerChatId();
+    const tg = automation.channels.get('telegram');
+    if (!chatId || tg?.mode !== 'live') return false;
+    await tg.send({ to: chatId, text });
+    try { automation.inbox.noteOutgoing(chatId, text); } catch { /* best effort */ }
+    return true;
+  },
+  sendToPartner: async (chatId, text) => {
+    const tg = automation.channels.get('telegram');
+    if (tg?.mode !== 'live') throw new Error('Telegram belum live');
+    await tg.send({ to: chatId, text });
+    try { automation.inbox.noteOutgoing(chatId, text); } catch { /* best effort */ }
+  },
+  loadHistory: (chatId) => telegramTranscript.history(chatId),
+});
+
 // "YA" flow: risky chat requests (kirim kampanye) are proposed first; they run
 // through the tools registry + action gate only after the owner replies YA.
 const chatActions = createChatActions({ automation, executeTool, mintApproval: actionGate.mintApproval });
-automation.inbox.responder = makeAssistantResponder({
+const ownerAssistant = makeAssistantResponder({
   aiManager,
   worklog: worklog.service,
   emailDesk: emailDesk.desk,
@@ -441,6 +467,15 @@ automation.inbox.responder = makeAssistantResponder({
   memory: personalMemory,
   context: ({ text, chatId }) => ownerContext({ text, excludeSessionId: chatId ? telegramTranscript.sessionId(chatId) : null }),
 });
+// Pemilik mengetik "aku sibuk sampai jam 3" / "lagi luang" di chatnya sendiri:
+// status persona ikut berubah tanpa perlu perintah, lalu asisten menjawab biasa.
+automation.inbox.responder = async (args) => {
+  const said = lover.ownerIntent(args?.text);
+  if (said) return said;
+  return ownerAssistant(args);
+};
+automation.inbox.loverResponder = lover.responder;
+automation.inbox.registerCommands(lover.commands());
 // Guest chats (mis. keluarga/kerabat yang diizinkan mengobrol): komunikasi
 // saja. Responder ini TIDAK diberi konteks pemilik, perintah owner, atau hook
 // darurat — jadi tamu tidak bisa melihat atau mengubah apa pun milik pemilik.

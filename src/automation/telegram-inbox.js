@@ -20,6 +20,8 @@
  *   TELEGRAM_GUEST_CHAT_IDS=3,4      guests: AI chat allowed, communication
  *                                    only — no owner commands, data, context,
  *                                    or emergency powers
+ *   TELEGRAM_LOVER_CHAT_IDS=5        partner chats: answered by the lover persona
+ *                                    (as the owner) — also without owner powers
  *   TELEGRAM_WELCOME="..."           welcome text; {nama} is substituted
  *
  * @author Wisnu Alfian Nur Ashar
@@ -147,12 +149,13 @@ const CHAT_RATE_MAX = 20;           // AI replies per chat per window
 
 export class TelegramInbox extends EventEmitter {
   /**
-   * @param {{channel: object, store: object, env?: object, pollSeconds?: number, responder?: Function|null, guestResponder?: Function|null}} deps
+   * @param {{channel: object, store: object, env?: object, pollSeconds?: number, responder?: Function|null, guestResponder?: Function|null, loverResponder?: Function|null}} deps
    */
-  constructor({ channel, store, env = process.env, pollSeconds = 25, responder = null, guestResponder = null }) {
+  constructor({ channel, store, env = process.env, pollSeconds = 25, responder = null, guestResponder = null, loverResponder = null }) {
     super();
     this.responder = responder;
     this.guestResponder = guestResponder;
+    this.loverResponder = loverResponder;
     // Who may talk to the AI. Empty = AI chat is OFF (safe default).
     this.aiChats = new Set(
       String(env.TELEGRAM_AI_CHAT_IDS || '').split(',').map((s) => s.trim()).filter(Boolean)
@@ -161,6 +164,11 @@ export class TelegramInbox extends EventEmitter {
     // no emergency hooks, no transcript of the owner's data. Empty = off.
     this.guestChats = new Set(
       String(env.TELEGRAM_GUEST_CHAT_IDS || '').split(',').map((s) => s.trim()).filter(Boolean)
+    );
+    // Partner chats get a dedicated persona responder (as the owner), but
+    // still no owner commands, owner context, or emergency hooks. Empty = off.
+    this.loverChats = new Set(
+      String(env.TELEGRAM_LOVER_CHAT_IDS || '').split(',').map((s) => s.trim()).filter(Boolean)
     );
     this.history = new Map();   // chatId -> { at, turns: [{role, content}] }
     this.rate = new Map();      // chatId -> [timestamps]
@@ -216,9 +224,14 @@ export class TelegramInbox extends EventEmitter {
     return this.aiChats.has(String(chatId));
   }
 
+  /** Partner chats use the lover persona; owner powers still do not apply. */
+  isLover(chatId) {
+    return this.loverChats.has(String(chatId)) && !this.isOwner(chatId);
+  }
+
   /** A guest may chat with the AI, but never wields owner powers. */
   isGuest(chatId) {
-    return this.guestChats.has(String(chatId)) && !this.isOwner(chatId);
+    return this.guestChats.has(String(chatId)) && !this.isOwner(chatId) && !this.isLover(chatId);
   }
 
   get enabled() {
@@ -235,6 +248,7 @@ export class TelegramInbox extends EventEmitter {
       restricted: this.allowed.size > 0,
       aiChat: { enabled: Boolean(this.responder) && this.aiChats.size > 0, chats: this.aiChats.size },
       guestChat: { enabled: Boolean(this.guestResponder) && this.guestChats.size > 0, chats: this.guestChats.size },
+      loverChat: { enabled: Boolean(this.loverResponder) && this.loverChats.size > 0, chats: this.loverChats.size },
       ...this.store.subscribers.counts('telegram'),
     };
   }
@@ -375,7 +389,9 @@ export class TelegramInbox extends EventEmitter {
           .map(([k, d]) => `/${k} — ${escapeHtml(d.description || '')}`).join('\n');
       }
       if (this.isOwner(chatId) && this.responder) help += '\n\nPesan biasa dijawab oleh AI.';
-      else if (this.isGuest(chatId) && this.guestResponder) {
+      else if (this.isLover(chatId) && this.loverResponder) {
+        help += '\n\nPesan biasa dijawab AI (mode pasangan — komunikasi saja, tanpa akses data pemilik).';
+      } else if (this.isGuest(chatId) && this.guestResponder) {
         help += '\n\nPesan biasa dijawab AI (mode tamu — komunikasi saja, tanpa akses data pemilik).';
       }
       await this._reply(chatId, help);
@@ -385,11 +401,13 @@ export class TelegramInbox extends EventEmitter {
     if (command === 'start') {
       if (this.allowed.size && !this.allowed.has(chatId)) {
         const guest = this.isGuest(chatId);
-        await this._reply(chatId, guest
+        const lover = this.isLover(chatId);
+        await this._reply(chatId, (guest || lover)
           ? 'Chat ini bukan akun pemilik, jadi tidak menerima siaran/broadcast. Anda tetap bisa mengobrol dengan AI di sini.'
           : 'Maaf, chat ini tidak diizinkan untuk berlangganan.');
-        this.emit('rejected', { chatId, reason: guest ? 'guest_no_subscribe' : 'not_allowed' });
-        return { action: 'rejected', reason: guest ? 'guest_no_subscribe' : 'not_allowed', chatId };
+        const reason = lover ? 'lover_no_subscribe' : guest ? 'guest_no_subscribe' : 'not_allowed';
+        this.emit('rejected', { chatId, reason });
+        return { action: 'rejected', reason, chatId };
       }
       if (this.joinCode && arg !== this.joinCode) {
         await this._reply(chatId, 'Kode undangan diperlukan. Kirim: /start KODE');
@@ -474,14 +492,18 @@ export class TelegramInbox extends EventEmitter {
   }
 
   /**
-   * Plain (non-command) text. Answered by the owner responder for owner chats,
-   * by the guest responder for guest chats — silently ignored for everyone else.
-   * Only PRIVATE chats are answered.
+   * Plain (non-command) text. Owner chats use the owner responder, partner
+   * chats the lover persona, guest chats the guest responder — everyone else
+   * is ignored silently. Only PRIVATE chats are answered.
    */
   _maybeChat(msg, chatId, text) {
     if (msg.chat.type !== 'private') return null;
-    const guest = this.isGuest(chatId);
-    const responder = this.isOwner(chatId) ? this.responder : guest ? this.guestResponder : null;
+    const mode = this.isOwner(chatId) ? 'owner'
+      : this.isLover(chatId) ? 'lover'
+        : this.isGuest(chatId) ? 'guest' : null;
+    const responder = mode === 'owner' ? this.responder
+      : mode === 'lover' ? this.loverResponder
+        : mode === 'guest' ? this.guestResponder : null;
     if (!responder) return null;
 
     const now = Date.now();
@@ -496,27 +518,32 @@ export class TelegramInbox extends EventEmitter {
     // Serialise per chat so answers stay in order, but never block polling:
     // a slow model must not freeze the whole inbox.
     const previous = this._chains.get(chatId) || Promise.resolve();
-    const done = previous.then(() => this._answer(chatId, text, { responder, guest })).catch(() => {});
+    const done = previous.then(() => this._answer(chatId, text, { responder, mode })).catch(() => {});
     this._chains.set(chatId, done);
     done.finally(() => { if (this._chains.get(chatId) === done) this._chains.delete(chatId); });
-    return { action: 'ai_reply', chatId, guest, done };
+    return { action: 'ai_reply', chatId, guest: mode !== 'owner', lover: mode === 'lover', done };
   }
 
-  async _answer(chatId, text, { responder = this.responder, guest = false } = {}) {
+  async _answer(chatId, text, { responder = this.responder, mode = 'owner' } = {}) {
+    const title = mode === 'lover' ? 'Pesan Telegram (pasangan)'
+      : mode === 'guest' ? 'Pesan Telegram (tamu)' : 'Pesan Telegram';
+    const kind = mode === 'lover' ? 'lover-chat' : mode === 'guest' ? 'guest-chat' : 'chat';
     return withTrace({
       channel: 'telegram',
-      title: guest ? 'Pesan Telegram (tamu)' : 'Pesan Telegram',
+      title,
       input: text,
-      meta: { chat: maskChat(chatId), kind: guest ? 'guest-chat' : 'chat' },
-    }, () => this._answerTraced(chatId, text, { responder, guest }));
+      meta: { chat: maskChat(chatId), kind },
+    }, () => this._answerTraced(chatId, text, { responder, mode }));
   }
 
-  async _answerTraced(chatId, text, { responder = this.responder, guest = false } = {}) {
+  async _answerTraced(chatId, text, { responder = this.responder, mode = 'owner' } = {}) {
     try {
       await this.channel.sendAction?.(chatId, 'typing').catch(() => {});
       const history = this._historyFor(chatId).slice();
-      traceStep('receive', { channel: 'telegram', kind: guest ? 'guest-chat' : 'chat', chars: text.length, history: history.length });
-      // Guests never see (or get) owner commands: /id is the only extra.
+      const guest = mode !== 'owner';
+      const kind = mode === 'lover' ? 'lover-chat' : mode === 'guest' ? 'guest-chat' : 'chat';
+      traceStep('receive', { channel: 'telegram', kind, chars: text.length, history: history.length });
+      // Non-owner chats never see (or get) owner commands: /id is the only extra.
       const commands = guest
         ? ['/id — tampilkan Chat ID']
         : [
@@ -540,11 +567,11 @@ export class TelegramInbox extends EventEmitter {
       if (!answer) throw new Error('empty');
       this._remember(chatId, 'user', text.slice(0, 4000));
       this._remember(chatId, 'assistant', answer.slice(0, 4000));
-      try { this.onExchange?.({ chatId, user: text.slice(0, 4000), assistant: answer, guest }); } catch { /* never block the reply */ }
+      try { this.onExchange?.({ chatId, user: text.slice(0, 4000), assistant: answer, guest, lover: mode === 'lover' }); } catch { /* never block the reply */ }
       const parts = chunkText(answer, 3500);
       for (const part of parts) await this._reply(chatId, escapeHtml(part));
       traceStep('deliver', { channel: 'telegram', parts: parts.length, chars: answer.length, ok: true, preview: answer.slice(0, 160) });
-      this.emit('ai_reply', { chatId, guest });
+      this.emit('ai_reply', { chatId, guest, lover: mode === 'lover' });
       return answer;
     } catch (e) {
       console.warn('[TELEGRAM-INBOX] jawaban AI gagal:', e.message);

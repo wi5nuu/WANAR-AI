@@ -1559,3 +1559,68 @@ describe('Telegram guest mode: communication only, never owner powers', async ()
     expect(seen).not.toMatch(/ADALAH Wisnu Alfian Nur Ashar sendiri/);
   });
 });
+
+describe('Telegram lover persona routing: partner chat has no owner powers', async () => {
+  const OWNER = '1811580954';
+  const LOVER = '888000222';
+
+  const build = ({ replies = [], env = {} } = {}) => new TelegramInbox({
+    channel: { mode: 'live', reply: async (to, html) => replies.push({ to, html }), sendAction: async () => {} },
+    store: { subscribers: { upsert() {}, setActive() {}, counts: () => ({}) }, suppressions: { add() {}, remove() {} } },
+    env: { TELEGRAM_AI_CHAT_IDS: OWNER, TELEGRAM_LOVER_CHAT_IDS: LOVER, ...env },
+    responder: async () => 'jawaban pemilik',
+    guestResponder: async () => 'jawaban tamu',
+    loverResponder: async () => 'Sayang, aku kangen kamu.',
+  });
+
+  const message = (text, id = LOVER, update_id = 1) => ({
+    update_id,
+    message: { text, chat: { id: Number(id), type: 'private' }, from: { first_name: 'Zahra' } },
+  });
+
+  it('routes a partner chat to the lover responder', async () => {
+    const replies = [];
+    const inbox = build({ replies });
+
+    const r = await inbox.handleUpdate(message('halo sayang'));
+    await r.done;
+
+    expect(r.lover).toBe(true);
+    expect(replies.map((x) => x.html)).toContain('Sayang, aku kangen kamu.');
+  });
+
+  it('never runs owner commands for a partner chat', async () => {
+    const replies = [];
+    let ran = 0;
+    const inbox = build({ replies });
+    inbox.registerCommands({ sibuk: { description: 'owner only', run: async () => { ran += 1; return 'ok'; } } });
+
+    const r = await inbox.handleUpdate(message('/sibuk'));
+
+    expect(r).toBeNull();
+    expect(ran).toBe(0);
+    expect(replies).toHaveLength(0);
+  });
+
+  it('lover persona wins when the chat is also on the guest list', async () => {
+    const replies = [];
+    const inbox = build({ replies, env: { TELEGRAM_GUEST_CHAT_IDS: LOVER } });
+
+    const r = await inbox.handleUpdate(message('halo'));
+    await r.done;
+
+    expect(r.lover).toBe(true);
+    expect(replies[0].html).toBe('Sayang, aku kangen kamu.');
+  });
+
+  it('owner list wins when the chat is both owner and lover', async () => {
+    const replies = [];
+    const inbox = build({ replies, env: { TELEGRAM_AI_CHAT_IDS: LOVER } });
+
+    const r = await inbox.handleUpdate(message('halo'));
+    await r.done;
+
+    expect(r.lover).toBe(false);
+    expect(replies[0].html).toBe('jawaban pemilik');
+  });
+});
