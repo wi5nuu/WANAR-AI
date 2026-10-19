@@ -196,6 +196,20 @@ describe('emergency workflow (simulate by default, never a fake delivery)', () =
     expect(failed.error).toMatch(/provider mati/);
   });
 
+  it('a manual SOS escalates immediately, without a second tap', async () => {
+    const sends = [];
+    const t = build({ channels: { whatsapp: (phone, text) => { sends.push({ phone, text }); return { ok: true, id: 'wamid.sos' }; } } });
+    addContact(t.store);
+    t.svc.updateSettings({ mode: 'live' });
+    const ev = t.svc.sos({ note: 'tombol panik' });
+    await settle();
+    const attempts = t.store.attempts.forEvent(ev.id);
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0].status).toBe('sent');
+    expect(sends).toHaveLength(1);
+    expect(sends[0].text).toMatch(/darurat/i);
+  });
+
   it('says honestly when no verified contact can be reached', async () => {
     const t = build();
     t.store.contacts.create({ name: 'Belum diverifikasi', phone: '08123456789' }); // verified=false
@@ -276,6 +290,18 @@ describe('emergency workflow (simulate by default, never a fake delivery)', () =
     const forcedLive = build({ env: { EMERGENCY_MODE: 'live' } });
     expect(forcedLive.svc.effectiveMode()).toBe('live');
     expect(forcedLive.svc.status().notice).toMatch(/LIVE/);
+  });
+
+  it('reports a dry-run channel as not ready and explains what is missing', () => {
+    const wa = async () => ({ ok: true });
+    wa.ready = false;
+    wa.reason = 'WhatsApp belum siap (mode dry-run; kurang: WHATSAPP_PHONE_NUMBER_ID).';
+    const t = build({ channels: { whatsapp: wa, email: async () => ({ ok: true }) } });
+    const s = t.svc.status();
+    expect(s.channels.whatsapp).toBe(false);
+    expect(s.channelReasons.whatsapp).toMatch(/WHATSAPP_PHONE_NUMBER_ID/);
+    expect(s.channels.email).toBe(true);
+    expect(s.voiceCall.available).toBe(false);
   });
 });
 
@@ -366,7 +392,13 @@ describe('emergency routes', () => {
     expect(created.status).toBe(201);
     expect(created.body.contact.verified).toBe(false);
     expect(created.body.contact.phone).toBe('08123456789'); // cleaned, not trusted raw
+    expect(created.body.contact.whatsapp).toBe(true); // the form's WA switch survives creation
     const id = created.body.contact.id;
+
+    const waOff = await request(app).post('/api/emergency/contacts').send({ name: 'Email saja', email: 'email@example.com', whatsapp: false });
+    expect(waOff.status).toBe(201);
+    expect(waOff.body.contact.whatsapp).toBe(false);
+    expect(waOff.body.contact.email_ok).toBe(true);
 
     const gate = await request(app).post(`/api/emergency/contacts/${id}/verify`).send({});
     expect(gate.status).toBe(400);

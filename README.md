@@ -292,13 +292,16 @@ Dasbor: **http://localhost:3000/tracking** — halaman pelacak untuk HP: **http:
 ### Alur darurat & eskalasi
 
 1. Pemicu: tombol SOS dasbor, tombol di `/track`, deteksi anomali berkendara, atau balasan "butuh bantuan".
-2. Hitung mundur (`countdownMs`, bawaan 25 dtk) dengan bunyi/notifikasi: "Saya aman" membatalkan, "Butuh bantuan" langsung eskalasi, tidak ada jawaban → eskalasi otomatis.
-3. Pemilik diberi tahu lebih dulu (kanal owner yang hidup), lalu kontak darurat **terverifikasi** dihubungi berurutan sesuai prioritas; tiap percobaan dicatat (kanal, ke-berapa, hasil).
-4. Kanal yang benar-benar hidup saja yang dipakai: Telegram (bot), WhatsApp (Cloud API, jika diatur), email (SMTP), webhook (`EMERGENCY_WEBHOOK_URL`). Kanal yang belum diatur muncul **`unavailable`** dan dilaporkan apa adanya; tanpa kontak terverifikasi statusnya **`escalated_no_contacts`** — bukan klaim palsu "sudah menghubungi".
+2. **Tombol SOS manual langsung eskalasi** (tidak menunggu hitung mundur dan tidak perlu tekan kedua kali). Deteksi otomatis memakai hitung mundur (`countdownMs`, bawaan 25 dtk): "Saya aman" membatalkan, "Butuh bantuan" langsung eskalasi, tidak ada jawaban → eskalasi otomatis.
+3. Pemilik diberi tahu lebih dulu (kanal owner yang hidup), lalu kontak darurat **terverifikasi** dihubungi berurutan sesuai prioritas; tiap percobaan dicatat (kanal, ke-berapa, hasil). Setelah satu kontak benar-benar menerima pesan, sistem berhenti agar tidak membanjiri semua orang; kontak berikutnya baru dipakai bila pengiriman ke kontak sebelumnya gagal.
+4. Kanal yang benar-benar hidup saja yang dipakai: Telegram (bot), WhatsApp (Cloud API), email (SMTP), webhook (`EMERGENCY_WEBHOOK_URL`). Kanal yang belum diatur muncul **`unavailable`** dan dilaporkan apa adanya; tanpa kontak terverifikasi statusnya **`escalated_no_contacts`** — bukan klaim palsu "sudah menghubungi".
+   - **WhatsApp** butuh `WHATSAPP_TOKEN` **dan** `WHATSAPP_PHONE_NUMBER_ID` (bukan hanya token). Untuk menghubungi orang yang belum pernah mengirim pesan ke nomor bisnis dalam 24 jam terakhir, Meta mewajibkan template yang disetujui: isi `WHATSAPP_TEMPLATE_NAME` + `WHATSAPP_TEMPLATE_LANG`; sistem mencoba teks bebas dulu, lalu otomatis beralih ke template bila perlu.
+   - **Email** hanya butuh SMTP yang sudah dikonfigurasi; ini kanal yang paling sederhana untuk langsung aktif.
+   - **Panggilan telepon otomatis belum didukung.** Tidak ada integrasi Twilio/Vonage/voice gateway. Untuk panggilan suara, perlu menambahkan provider dan kredensialnya.
 5. **Bawaan `EMERGENCY_MODE=simulate`:** seluruh alur berjalan (hitung mundur, eskalasi, catatan percobaan) tetapi **tidak ada pesan yang benar-benar terkirim**. Ganti ke `live` hanya setelah kontak diverifikasi dan kanal diuji.
 6. Balasan chat pemilik ("aman"/"selesai") bisa menutup kejadian; lokasi terakhir ikut dilampirkan bila ada.
 
-**Kontak darurat** dibuat berstatus *belum terverifikasi*; tombol **verifikasi** (uji kanal) harus dijalankan sebelum kontak dipakai eskalasi mode live. Uji kontak di mode simulasi hanya mencatat percobaan `simulated`.
+**Kontak darurat** dibuat berstatus *belum terverifikasi*; tombol **verifikasi** harus dijalankan sebelum kontak dipakai eskalasi mode live. Switch **WhatsApp/Telegram/Email** pada form benar-benar tersimpan; tombol **Ubah** dipakai untuk mengaktifkan kanal pada kontak lama. Uji kontak di mode simulasi hanya mencatat percobaan `simulated`; di mode live, tombol **Uji kanal** mengirim satu pesan bertanda "UJI, BUKAN DARURAT".
 
 ### Halaman pelacak HP (`/track`)
 

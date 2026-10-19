@@ -141,12 +141,19 @@ export function createEmergencyStore(db) {
   const mapContact = (r) => (r ? { ...r, channels: parse(r.channels, []) , active: Boolean(r.active), verified: Boolean(r.verified), consent: Boolean(r.consent), whatsapp: Boolean(r.whatsapp), email_ok: Boolean(r.email_ok), telegram_ok: Boolean(r.telegram_ok) } : null);
 
   const contacts = {
-    create({ name, phone = null, email = null, telegramChatId = null, relation = null, priority = 10, channels = null, verified = false, consent = false, consentNote = null, active = true, notes = null }) {
+    create({
+      name, phone = null, email = null, telegramChatId = null, relation = null, priority = 10,
+      channels = null, verified = false, consent = false, consentNote = null, active = true, notes = null,
+      // The UI's channel switches must survive creation. WhatsApp is opt-in:
+      // a phone number alone is not permission to message it.
+      whatsapp = false, emailOk = true, telegramOk = true,
+    }) {
       const cid = id('ec');
-      db.prepare(`INSERT INTO emg_contacts (id, name, phone, email, telegram_chat_id, relation, priority, channels, verified, consent, consent_note, active, notes, created_at, updated_at)
-                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      db.prepare(`INSERT INTO emg_contacts (id, name, phone, email, telegram_chat_id, relation, priority, channels, verified, consent, consent_note, active, notes, whatsapp, email_ok, telegram_ok, created_at, updated_at)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         .run(cid, name, phone, email, telegramChatId, relation, Math.round(priority), channels ? JSON.stringify(channels) : null,
-          verified ? 1 : 0, consent ? 1 : 0, consentNote, active ? 1 : 0, notes, now(), now());
+          verified ? 1 : 0, consent ? 1 : 0, consentNote, active ? 1 : 0, notes,
+          whatsapp ? 1 : 0, emailOk ? 1 : 0, telegramOk ? 1 : 0, now(), now());
       return contacts.get(cid);
     },
     get: (cid) => mapContact(db.prepare('SELECT * FROM emg_contacts WHERE id = ?').get(cid)),

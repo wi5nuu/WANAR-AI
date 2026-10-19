@@ -13,6 +13,57 @@
 @media (max-width: 1000px) { .trk-cols-3 { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 700px) { .trk-cols-2, .trk-cols-3 { grid-template-columns: 1fr; } }
 
+/* Compact settings: one card, three tight groups, no long single-column form. */
+.trk-settings-card { overflow: hidden; }
+.trk-settings-master {
+  margin-top: 0.65rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--border-primary);
+  border-radius: 10px;
+  background: var(--bg-secondary, rgba(255,255,255,0.02));
+}
+.trk-settings-sections {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.7rem;
+  align-items: start;
+  margin-top: 0.7rem;
+}
+.trk-settings-block {
+  min-width: 0;
+  padding: 0.7rem 0.75rem 0.8rem;
+  border: 1px solid var(--border-primary);
+  border-radius: 12px;
+  background: var(--bg-secondary, rgba(255,255,255,0.02));
+}
+.trk-settings-block h4 {
+  margin: 0 0 0.55rem;
+  font-size: 0.72rem;
+  line-height: 1.2;
+  font-weight: 700;
+  letter-spacing: 0.045em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+.trk-field-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.55rem 0.6rem;
+}
+.trk-field-grid .au-field { margin-bottom: 0; gap: 0.25rem; }
+.trk-field-grid .au-field > label { font-size: 0.74rem; line-height: 1.25; }
+.trk-check-grid { display: grid; grid-template-columns: 1fr; gap: 0.5rem; }
+.trk-check-grid .au-check { font-size: 0.82rem; }
+@media (max-width: 1250px) {
+  .trk-settings-sections { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 760px) {
+  .trk-settings-sections { grid-template-columns: 1fr; }
+}
+@media (max-width: 480px) {
+  .trk-field-grid { grid-template-columns: 1fr; }
+}
+
 .trk-map {
   width: 100%;
   border-radius: 12px;

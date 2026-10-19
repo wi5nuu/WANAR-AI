@@ -105,6 +105,11 @@ export function createEmergencyRouter({ emergency, rateLimiters = {}, env = proc
       // A new contact starts UNVERIFIED: the owner must confirm the number himself.
       verified: false,
       consent: false,
+      // Honour the channel switches the owner saw in the form; default to the
+      // channel implied by each address when the API caller omitted them.
+      whatsapp: b.whatsapp !== undefined ? BOOL(b.whatsapp) : Boolean(phone),
+      emailOk: b.emailOk !== undefined ? BOOL(b.emailOk) : Boolean(email),
+      telegramOk: b.telegramOk !== undefined ? BOOL(b.telegramOk) : Boolean(telegram),
       notes: b.notes ? String(b.notes).slice(0, 400) : null,
     });
     res.status(201).json({ success: true, contact, next: 'Kontak belum terverifikasi. Tekan "Verifikasi" setelah Anda memastikan nomornya benar dan orangnya bersedia dihubungi saat darurat.' });

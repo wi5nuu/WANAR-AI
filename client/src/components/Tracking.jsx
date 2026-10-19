@@ -109,7 +109,7 @@ const EMG_STATUS = {
 const ATTEMPT_STATUS = { sent: ['ok', 'terkirim'], simulated: ['sim', 'simulasi'], failed: ['err', 'gagal'], pending: ['warn', 'menunggu'], unavailable: ['muted', 'kanal mati'], skipped: ['muted', 'dilewati'] };
 const DUE_STATUS = { overdue: ['err', 'terlambat'], due: ['err', 'waktunya'], due_soon: ['warn', 'segera'], ok: ['ok', 'aman'], no_data: ['muted', 'tanpa data'] };
 
-const Chip = ({ kind = 'muted', children }) => <span className={`trk-chip ${kind}`}>{children}</span>;
+const Chip = ({ kind = 'muted', title, children }) => <span className={`trk-chip ${kind}`} title={title || undefined}>{children}</span>;
 
 /** Place categories in the language the owner actually says: Rumah, Kantor, Toko… */
 const KIND_LABELS_ID = {
@@ -674,35 +674,57 @@ function LiveTab({ loc, refresh, notify, tick }) {
       </div>
 
       {/* ------------------------------------------------ settings */}
-      <div className="au-card">
-        <div className="trk-row between"><h3 style={{ margin: 0 }}>Pengaturan pelacakan</h3>
+      <div className="au-card trk-settings-card">
+        <div className="trk-row between">
+          <div>
+            <h3 style={{ margin: 0 }}>Pengaturan pelacakan</h3>
+            <div className="trk-muted" style={{ marginTop: 2 }}>Tiga kelompok rapat — interval, perjalanan, notifikasi — dalam satu kotak.</div>
+          </div>
           <button className="au-btn primary" disabled={busy} onClick={saveSettings}><IconCheck size={15} /> Simpan</button>
         </div>
-        <label className="au-check" style={{ marginTop: 8 }}>
+        <label className="au-check trk-settings-master">
           <input type="checkbox" checked={form.enabled} onChange={(e) => setForm({ ...form, enabled: e.target.checked })} />
           <span><b>Pelacakan menyala</b> <span className="au-muted">saklar utama penyimpanan lokasi</span></span>
         </label>
-        <div className="au-grid" style={{ marginTop: 6 }}>
-          <Field label="Interval saat bergerak (detik)"><input className="au-input" type="number" min="3" max="600" value={form.adaptiveIntervalMs / 1000} onChange={(e) => setForm({ ...form, adaptiveIntervalMs: Number(e.target.value) * 1000 })} /></Field>
-          <Field label="Interval saat diam (detik)"><input className="au-input" type="number" min="5" max="3600" value={form.idleIntervalMs / 1000} onChange={(e) => setForm({ ...form, idleIntervalMs: Number(e.target.value) * 1000 })} /></Field>
-          <Field label="Jitter minimal (m)" hint="Gerakan lebih kecil dari ini diabaikan (noise GPS)."><input className="au-input" type="number" min="0" max="500" value={form.minMoveM} onChange={(e) => setForm({ ...form, minMoveM: e.target.value })} /></Field>
-          <Field label="Akurasi dianggap kasar di atas (m)"><input className="au-input" type="number" min="5" max="2000" value={form.accuracyWarnM} onChange={(e) => setForm({ ...form, accuracyWarnM: e.target.value })} /></Field>
-          <Field label="Data dianggap basi setelah (detik)"><input className="au-input" type="number" min="30" max="86400" value={form.staleAfterMs} onChange={(e) => setForm({ ...form, staleAfterMs: e.target.value })} /></Field>
-          <Field label="Perjalanan dimulai setelah (m)"><input className="au-input" type="number" min="50" max="10000" value={form.tripStartMoveM} onChange={(e) => setForm({ ...form, tripStartMoveM: e.target.value })} /></Field>
-          <Field label="Perhentian minimal (menit)" hint="Berhenti lebih singkat dari ini dianggap lampu merah, bukan kunjungan."><input className="au-input" type="number" min="1" max="360" value={form.stopMinMs} onChange={(e) => setForm({ ...form, stopMinMs: e.target.value })} /></Field>
-          <Field label="Perjalanan selesai setelah diam (menit)"><input className="au-input" type="number" min="1" max="360" value={form.tripEndStopMs} onChange={(e) => setForm({ ...form, tripEndStopMs: e.target.value })} /></Field>
-          <Field label="Simpan titik mentah (hari)"><input className="au-input" type="number" min="0" max="3650" value={form.sampleRetentionDays} onChange={(e) => setForm({ ...form, sampleRetentionDays: e.target.value })} /></Field>
-          <Field label="Simpan perjalanan (hari)"><input className="au-input" type="number" min="0" max="3650" value={form.tripRetentionDays} onChange={(e) => setForm({ ...form, tripRetentionDays: e.target.value })} /></Field>
-          <Field label="Maks notifikasi per jam"><input className="au-input" type="number" min="0" max="60" value={form.maxPerHour} onChange={(e) => setForm({ ...form, maxPerHour: e.target.value })} /></Field>
+
+        <div className="trk-settings-sections">
+          <section className="trk-settings-block">
+            <h4>Interval &amp; akurasi</h4>
+            <div className="trk-field-grid">
+              <Field label="Bergerak (dtk)"><input className="au-input" type="number" min="3" max="600" value={form.adaptiveIntervalMs / 1000} onChange={(e) => setForm({ ...form, adaptiveIntervalMs: Number(e.target.value) * 1000 })} /></Field>
+              <Field label="Diam (dtk)"><input className="au-input" type="number" min="5" max="3600" value={form.idleIntervalMs / 1000} onChange={(e) => setForm({ ...form, idleIntervalMs: Number(e.target.value) * 1000 })} /></Field>
+              <Field label="Jitter minimal (m)"><input className="au-input" type="number" min="0" max="500" value={form.minMoveM} onChange={(e) => setForm({ ...form, minMoveM: e.target.value })} /></Field>
+              <Field label="Akurasi kasar &gt; (m)"><input className="au-input" type="number" min="5" max="2000" value={form.accuracyWarnM} onChange={(e) => setForm({ ...form, accuracyWarnM: e.target.value })} /></Field>
+              <Field label="Data basi (dtk)"><input className="au-input" type="number" min="30" max="86400" value={form.staleAfterMs} onChange={(e) => setForm({ ...form, staleAfterMs: e.target.value })} /></Field>
+            </div>
+          </section>
+
+          <section className="trk-settings-block">
+            <h4>Perjalanan &amp; penyimpanan</h4>
+            <div className="trk-field-grid">
+              <Field label="Mulai perjalanan (m)"><input className="au-input" type="number" min="50" max="10000" value={form.tripStartMoveM} onChange={(e) => setForm({ ...form, tripStartMoveM: e.target.value })} /></Field>
+              <Field label="Perhentian min. (mnt)"><input className="au-input" type="number" min="1" max="360" value={form.stopMinMs} onChange={(e) => setForm({ ...form, stopMinMs: e.target.value })} /></Field>
+              <Field label="Selesai diam (mnt)"><input className="au-input" type="number" min="1" max="360" value={form.tripEndStopMs} onChange={(e) => setForm({ ...form, tripEndStopMs: e.target.value })} /></Field>
+              <Field label="Simpan titik (hari)"><input className="au-input" type="number" min="0" max="3650" value={form.sampleRetentionDays} onChange={(e) => setForm({ ...form, sampleRetentionDays: e.target.value })} /></Field>
+              <Field label="Simpan perjalanan (hari)"><input className="au-input" type="number" min="0" max="3650" value={form.tripRetentionDays} onChange={(e) => setForm({ ...form, tripRetentionDays: e.target.value })} /></Field>
+              <Field label="Maks notif/jam"><input className="au-input" type="number" min="0" max="60" value={form.maxPerHour} onChange={(e) => setForm({ ...form, maxPerHour: e.target.value })} /></Field>
+            </div>
+          </section>
+
+          <section className="trk-settings-block">
+            <h4>Notifikasi &amp; geocoding</h4>
+            <div className="trk-check-grid">
+              <label className="au-check"><input type="checkbox" checked={form.quietHours} onChange={(e) => setForm({ ...form, quietHours: e.target.checked })} /><span>Jam tenang 22:00–06:00 WIB</span></label>
+              <label className="au-check"><input type="checkbox" checked={form.geocodeEnabled} onChange={(e) => setForm({ ...form, geocodeEnabled: e.target.checked })} /><span>Geocoding OpenStreetMap</span></label>
+              <label className="au-check"><input type="checkbox" checked={form.poiSearch} onChange={(e) => setForm({ ...form, poiSearch: e.target.checked })} /><span>Cari POI sekitar (Overpass)</span></label>
+              <label className="au-check"><input type="checkbox" checked={form.notifyTripStart} onChange={(e) => setForm({ ...form, notifyTripStart: e.target.checked })} /><span>Mulai perjalanan</span></label>
+              <label className="au-check"><input type="checkbox" checked={form.notifyTripEnd} onChange={(e) => setForm({ ...form, notifyTripEnd: e.target.checked })} /><span>Perjalanan selesai</span></label>
+              <label className="au-check"><input type="checkbox" checked={form.notifyArrival} onChange={(e) => setForm({ ...form, notifyArrival: e.target.checked })} /><span>Tiba di tempat dikenal</span></label>
+              <label className="au-check"><input type="checkbox" checked={form.notifyDeparture} onChange={(e) => setForm({ ...form, notifyDeparture: e.target.checked })} /><span>Meninggalkan tempat dikenal</span></label>
+              <label className="au-check"><input type="checkbox" checked={form.notifyUnknownStop} onChange={(e) => setForm({ ...form, notifyUnknownStop: e.target.checked })} /><span>Berhenti di tempat tak dikenal</span></label>
+            </div>
+          </section>
         </div>
-        <label className="au-check"><input type="checkbox" checked={form.quietHours} onChange={(e) => setForm({ ...form, quietHours: e.target.checked })} /><span>Jam tenang 22:00–06:00 WIB untuk notifikasi rutin</span></label>
-        <label className="au-check"><input type="checkbox" checked={form.geocodeEnabled} onChange={(e) => setForm({ ...form, geocodeEnabled: e.target.checked })} /><span><b>Geocoding</b> <span className="au-muted">nama jalan/daerah dari OpenStreetMap (Nominatim), gratis</span></span></label>
-        <label className="au-check"><input type="checkbox" checked={form.poiSearch} onChange={(e) => setForm({ ...form, poiSearch: e.target.checked })} /><span><b>Cari POI sekitar</b> <span className="au-muted">Overpass API untuk menebak tempat berhenti</span></span></label>
-        <label className="au-check"><input type="checkbox" checked={form.notifyTripStart} onChange={(e) => setForm({ ...form, notifyTripStart: e.target.checked })} /><span>Notifikasi mulai perjalanan</span></label>
-        <label className="au-check"><input type="checkbox" checked={form.notifyTripEnd} onChange={(e) => setForm({ ...form, notifyTripEnd: e.target.checked })} /><span>Notifikasi perjalanan selesai</span></label>
-        <label className="au-check"><input type="checkbox" checked={form.notifyArrival} onChange={(e) => setForm({ ...form, notifyArrival: e.target.checked })} /><span>Notifikasi tiba di tempat dikenal (mis. "Tiba di Kantor")</span></label>
-        <label className="au-check"><input type="checkbox" checked={form.notifyDeparture} onChange={(e) => setForm({ ...form, notifyDeparture: e.target.checked })} /><span>Notifikasi meninggalkan tempat dikenal (mis. "Meninggalkan Rumah")</span></label>
-        <label className="au-check"><input type="checkbox" checked={form.notifyUnknownStop} onChange={(e) => setForm({ ...form, notifyUnknownStop: e.target.checked })} /><span>Notifikasi berhenti di tempat tak dikenal</span></label>
       </div>
 
       {/* ------------------------------------------------ privacy */}
@@ -1146,11 +1168,13 @@ const PRESETS = [['sudden_stop', 'Tiba-tiba berhenti (GPS)'], ['impact_sensors',
 
 function EmergencyTab({ emg, loc, notify, refresh, refreshKey }) {
   const status = emg.status;
+  const emptyContact = { name: '', phone: '', email: '', telegramChatId: '', relation: '', priority: 10, whatsapp: true, emailOk: true, telegramOk: true };
   const [busy, setBusy] = useState('');
   const [events, setEvents] = useState([]);
   const [selected, setSelected] = useState(null);
   const [test, setTest] = useState({ preset: 'sudden_stop', answer: '', auto: true, result: null });
-  const [contact, setContact] = useState({ name: '', phone: '', email: '', telegramChatId: '', relation: '', priority: 10, whatsapp: true, emailOk: true, telegramOk: true });
+  const [contact, setContact] = useState(emptyContact);
+  const [editingId, setEditingId] = useState(null);
   const [settings, setSettings] = useState(null);
   const [tick, setTick] = useState(Date.now());
 
@@ -1184,6 +1208,32 @@ function EmergencyTab({ emg, loc, notify, refresh, refreshKey }) {
     catch (e) { notify('err', e.message); return null; }
     finally { setBusy(''); }
   };
+
+  const resetContact = () => { setEditingId(null); setContact(emptyContact); };
+
+  const editContact = (c) => {
+    setEditingId(c.id);
+    setContact({
+      name: c.name || '',
+      phone: c.phone || '',
+      email: c.email || '',
+      telegramChatId: c.telegram_chat_id || '',
+      relation: c.relation || '',
+      priority: c.priority ?? 10,
+      whatsapp: Boolean(c.whatsapp),
+      emailOk: Boolean(c.email_ok),
+      telegramOk: Boolean(c.telegram_ok),
+    });
+    // Bring the form into view without yanking the page if it is already close.
+    requestAnimationFrame(() => document.getElementById('emg-contact-form')?.scrollIntoView({ behavior: 'smooth', block: 'center' }));
+  };
+
+  const saveContact = () => run(editingId ? 'cedit' : 'cadd', async () => {
+    const body = { ...contact, priority: Number(contact.priority) || 10 };
+    if (editingId) await api(`/emergency/contacts/${editingId}`, { method: 'PATCH', body });
+    else await api('/emergency/contacts', { method: 'POST', body });
+    resetContact();
+  }, editingId ? 'Kontak diperbarui.' : 'Kontak ditambahkan. Langkah berikutnya: verifikasi.');
 
   const open = status.openEvent;
   const remainMs = open?.confirm_deadline ? open.confirm_deadline - tick : null;
@@ -1222,14 +1272,21 @@ function EmergencyTab({ emg, loc, notify, refresh, refreshKey }) {
             <b>{status.notice}</b>
           </div>
           <div className="trk-row">
-            <Chip kind={status.channels.telegram ? 'ok' : 'muted'}>Telegram {status.channels.telegram ? 'siap' : 'belum'}</Chip>
-            <Chip kind={status.channels.whatsapp ? 'ok' : 'muted'}>WhatsApp {status.channels.whatsapp ? 'siap' : 'belum'}</Chip>
-            <Chip kind={status.channels.email ? 'ok' : 'muted'}>Email {status.channels.email ? 'siap' : 'belum'}</Chip>
-            <Chip kind={status.channels.webhook ? 'ok' : 'muted'}>Webhook {status.channels.webhook ? 'siap' : 'belum'}</Chip>
+            <Chip kind={status.channels.telegram ? 'ok' : 'muted'} title={status.channelReasons?.telegram || ''}>Telegram {status.channels.telegram ? 'siap' : 'belum'}</Chip>
+            <Chip kind={status.channels.whatsapp ? 'ok' : 'muted'} title={status.channelReasons?.whatsapp || ''}>WhatsApp {status.channels.whatsapp ? 'siap' : 'belum'}</Chip>
+            <Chip kind={status.channels.email ? 'ok' : 'muted'} title={status.channelReasons?.email || ''}>Email {status.channels.email ? 'siap' : 'belum'}</Chip>
+            <Chip kind={status.channels.webhook ? 'ok' : 'muted'} title={status.channelReasons?.webhook || ''}>Webhook {status.channels.webhook ? 'siap' : 'belum'}</Chip>
+            <Chip kind={status.voiceCall?.available ? 'ok' : 'muted'} title={status.voiceCall?.reason || ''}>Telepon otomatis {status.voiceCall?.available ? 'siap' : 'belum'}</Chip>
           </div>
         </div>
         <div className="trk-muted" style={{ marginTop: 6 }}>
-          Kontak: {status.contacts.total} total, {status.contacts.reachable} siap dihubungi. Kanal bertanda "belum" tidak dikonfigurasi — pesan darurat lewat kanal itu tidak mungkin terkirim, dan itu dilaporkan apa adanya.
+          Kontak: {status.contacts.total} total, {status.contacts.reachable} siap dihubungi. Kanal bertanda "belum" tidak bisa mengirim — pesan darurat lewat kanal itu tidak mungkin terkirim, dan itu dilaporkan apa adanya.
+        </div>
+        {[status.channelReasons?.whatsapp, status.channelReasons?.email, status.channelReasons?.telegram]
+          .filter(Boolean)
+          .map((reason) => <div key={reason} className="trk-honesty" style={{ marginTop: 6 }}>{reason}</div>)}
+        <div className="trk-honesty" style={{ marginTop: 6 }}>
+          <b>Telepon otomatis belum tersedia.</b> {status.voiceCall?.reason || 'Sistem mengirim WhatsApp, email, Telegram, atau webhook.'}
         </div>
       </div>
 
@@ -1267,7 +1324,13 @@ function EmergencyTab({ emg, loc, notify, refresh, refreshKey }) {
               <div className="grow">
                 <div className="name">{c.name} {c.verified ? <Chip kind="ok">terverifikasi</Chip> : <Chip kind="warn">belum diverifikasi</Chip>} {!c.active ? <Chip kind="muted">nonaktif</Chip> : null}</div>
                 <div className="meta">
-                  prioritas {c.priority} · {c.relation || 'relasi belum diisi'} · {[c.phone && 'WA/telepon', c.telegram_chat_id && 'Telegram', c.email && 'email'].filter(Boolean).join(', ') || 'belum ada kanal'}
+                  prioritas {c.priority} · {c.relation || 'relasi belum diisi'} · {[
+                    c.phone && c.whatsapp ? 'WhatsApp' : null,
+                    c.phone && !c.whatsapp ? 'nomor tersimpan, WA nonaktif' : null,
+                    c.telegram_chat_id && c.telegram_ok ? 'Telegram' : null,
+                    c.email && c.email_ok ? 'Email' : null,
+                    c.email && !c.email_ok ? 'email nonaktif' : null,
+                  ].filter(Boolean).join(' · ') || 'belum ada kanal aktif'}
                   {c.last_attempt_at ? ` · upaya terakhir ${fmtDateTime(c.last_attempt_at)} (${c.last_status || '-'})` : ''}
                 </div>
               </div>
@@ -1283,6 +1346,7 @@ function EmergencyTab({ emg, loc, notify, refresh, refreshKey }) {
                   return rows.length ? `Hasil uji: ${rows.join(', ')}` : 'Tidak ada kanal aktif untuk kontak ini.';
                 });
               }}>Uji kanal</button>
+              <button className="au-btn trk-small" disabled={busy} onClick={() => editContact(c)}>Ubah</button>
               <button className="au-btn trk-small" disabled={busy} onClick={() => run('cact', () => api(`/emergency/contacts/${c.id}`, { method: 'PATCH', body: { active: !c.active } }), c.active ? 'Kontak dinonaktifkan.' : 'Kontak diaktifkan.')}>{c.active ? 'Nonaktifkan' : 'Aktifkan'}</button>
               <button className="au-btn trk-small" disabled={busy} onClick={() => { if (window.confirm(`Hapus kontak ${c.name}?`)) run('cdel', () => api(`/emergency/contacts/${c.id}`, { method: 'DELETE' }), 'Kontak dihapus.'); }}><IconTrash size={13} /></button>
             </div>
@@ -1290,26 +1354,27 @@ function EmergencyTab({ emg, loc, notify, refresh, refreshKey }) {
           {!(emg.contacts || []).length && <div className="trk-muted">Belum ada kontak darurat. Tambahkan satu di bawah, lalu verifikasi setelah memastikan orangnya bersedia.</div>}
         </div>
 
-        <h4 style={{ marginBottom: 4 }}>Tambah kontak</h4>
+        <h4 id="emg-contact-form" style={{ marginBottom: 4 }}>{editingId ? 'Ubah kontak' : 'Tambah kontak'}</h4>
+        {editingId && <div className="trk-muted" style={{ marginBottom: 6 }}>Mengubah kanal tidak menghapus status verifikasi. Setelah menyimpan, tekan <b>Uji kanal</b> untuk memastikan pesan benar-benar sampai.</div>}
         <div className="au-grid trk-cols-2">
           <Field label="Nama"><input className="au-input" value={contact.name} onChange={(e) => setContact({ ...contact, name: e.target.value })} /></Field>
           <Field label="Hubungan (opsional)"><input className="au-input" value={contact.relation} onChange={(e) => setContact({ ...contact, relation: e.target.value })} placeholder="mis. kakak" /></Field>
-          <Field label="Nomor WA/telepon"><input className="au-input" value={contact.phone} onChange={(e) => setContact({ ...contact, phone: e.target.value })} placeholder="08xx…" /></Field>
+          <Field label="Nomor telepon (WhatsApp)"><input className="au-input" value={contact.phone} onChange={(e) => setContact({ ...contact, phone: e.target.value })} placeholder="08xx…" /></Field>
           <Field label="Telegram chat id"><input className="au-input" value={contact.telegramChatId} onChange={(e) => setContact({ ...contact, telegramChatId: e.target.value })} /></Field>
           <Field label="Email"><input className="au-input" value={contact.email} onChange={(e) => setContact({ ...contact, email: e.target.value })} /></Field>
           <Field label="Prioritas (kecil = didahulukan)"><input className="au-input" type="number" min="1" value={contact.priority} onChange={(e) => setContact({ ...contact, priority: e.target.value })} /></Field>
         </div>
         <div className="trk-row" style={{ marginTop: 6 }}>
-          <label className="au-check"><input type="checkbox" checked={contact.whatsapp} onChange={(e) => setContact({ ...contact, whatsapp: e.target.checked })} /><span>WA aktif</span></label>
+          <label className="au-check"><input type="checkbox" checked={contact.whatsapp} onChange={(e) => setContact({ ...contact, whatsapp: e.target.checked })} /><span>WhatsApp aktif</span></label>
           <label className="au-check"><input type="checkbox" checked={contact.telegramOk} onChange={(e) => setContact({ ...contact, telegramOk: e.target.checked })} /><span>Telegram aktif</span></label>
           <label className="au-check"><input type="checkbox" checked={contact.emailOk} onChange={(e) => setContact({ ...contact, emailOk: e.target.checked })} /><span>Email aktif</span></label>
-          <button className="au-btn primary" disabled={busy || !contact.name.trim()} onClick={() => run('cadd', async () => {
-            await api('/emergency/contacts', { method: 'POST', body: contact });
-            setContact({ name: '', phone: '', email: '', telegramChatId: '', relation: '', priority: 10, whatsapp: true, emailOk: true, telegramOk: true });
-          }, 'Kontak ditambahkan. Langkah berikutnya: verifikasi.')}><IconPlus size={15} /> Tambah</button>
+          <button className="au-btn primary" disabled={busy || !contact.name.trim()} onClick={saveContact}>
+            {editingId ? <><IconCheck size={15} /> Simpan perubahan</> : <><IconPlus size={15} /> Tambah</>}
+          </button>
+          {editingId && <button className="au-btn" disabled={busy} onClick={resetContact}>Batal</button>}
         </div>
         <div className="trk-honesty" style={{ marginTop: 8 }}>
-          Pastikan orangnya tahu dan setuju dihubungi. Sistem tidak memverifikasi nomor secara diam-diam; verifikasi adalah pernyataan Anda.
+          Nomor telepon dipakai untuk WhatsApp; <b>panggilan suara otomatis belum tersedia</b>. Pastikan orangnya tahu dan setuju dihubungi. Sistem tidak memverifikasi nomor secara diam-diam; verifikasi adalah pernyataan Anda.
         </div>
       </div>
 

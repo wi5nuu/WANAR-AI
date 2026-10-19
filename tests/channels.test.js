@@ -262,6 +262,20 @@ describe('WhatsApp channel (Cloud API)', () => {
     expect(f.calls[0].json.text.preview_url).toBe(false);
   });
 
+  it('reads the id from a Kirimdev-style { data: { id } } envelope', async () => {
+    const f = fakeFetch(() => ({ body: { data: { id: 'msg_KIRIM1', object: 'message', to: '+6281234567890' }, request_id: 'req_1' } }));
+    const ch = createWhatsAppChannel({
+      WHATSAPP_TOKEN: 'kdv_live_testkey',
+      WHATSAPP_PHONE_NUMBER_ID: '106540352242922',
+      WHATSAPP_API_BASE: 'https://api.kirimdev.com',
+      WHATSAPP_API_VERSION: 'v1',
+    }, { fetchImpl: f });
+    expect(ch.mode).toBe('live');
+    const r = await ch.send({ to: '6281234567890', text: 'Darurat!' });
+    expect(f.calls[0].url).toBe('https://api.kirimdev.com/v1/106540352242922/messages');
+    expect(r).toMatchObject({ dryRun: false, mode: 'text', messageId: 'msg_KIRIM1' });
+  });
+
   it('refuses attachments in template mode and advertises it', async () => {
     const ch = createWhatsAppChannel({ ...WA, WHATSAPP_TEMPLATE_NAME: 't' }, { fetchImpl: fakeFetch() });
     expect(ch.capabilities.attachments).toBe(false);

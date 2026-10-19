@@ -62,6 +62,7 @@ export class EmergencyService extends EventEmitter {
     this._timer = null;
     this._ticking = false;
     this._lastFeedAt = 0;
+    this._escalating = new Set();
   }
 
   settings() { return this.store.settings.get(); }
@@ -133,6 +134,13 @@ export class EmergencyService extends EventEmitter {
       location: this._lastKnown(),
       sessionId,
     });
+    // With confirmation disabled, raise() opens the event directly in
+    // "escalating". Nobody else will press a button in that configuration, so
+    // start delivery now instead of waiting for a tick that only retries.
+    if (event.status === 'escalating') {
+      this.escalate(event, { reason: 'deteksi otomatis tanpa konfirmasi' })
+        .catch((e) => this.logger(`[EMERGENCY] eskalasi otomatis gagal: ${e.message}`));
+    }
     return { level: result.level, score: result.score, eventId: event.id };
   }
 
@@ -148,6 +156,13 @@ export class EmergencyService extends EventEmitter {
       notes: note,
       skipCountdown: true,
     });
+    // A panic button must never require a second tap. Escalate immediately;
+    // the dashboard receives the event and the attempts appear as providers
+    // answer. Delivery runs in the background so the SOS request stays fast.
+    if (event.status === 'escalating') {
+      this.escalate(event, { reason: 'tombol darurat manual' })
+        .catch((e) => this.logger(`[EMERGENCY] eskalasi SOS gagal: ${e.message}`));
+    }
     return event;
   }
 
@@ -244,6 +259,10 @@ export class EmergencyService extends EventEmitter {
     const updated = this.store.events.update(eventId, { status: 'escalating', response: 'help', responded_at: this.now() });
     this.store.events.update(eventId, {});
     this.emit('change', { kind: 'event', eventId, status: 'escalating' });
+    // The panic button already escalates by itself. A second "bantuan" tap must
+    // not duplicate the same alert once a provider has accepted it.
+    const delivered = this.store.attempts.forEvent(eventId).some((a) => a.status === 'sent' || a.status === 'simulated');
+    if (delivered) return updated;
     return this.escalate(updated, { reason: 'pemilik meminta bantuan' });
   }
 
@@ -261,8 +280,19 @@ export class EmergencyService extends EventEmitter {
 
   // -------------------------------------------------------------- escalation
 
+  /** Serialises escalation per event: SOS + a second "bantuan" tap can race. */
+  async escalate(event, opts = {}) {
+    if (this._escalating.has(event.id)) return this.store.events.get(event.id);
+    this._escalating.add(event.id);
+    try {
+      return await this._escalate(event, opts);
+    } finally {
+      this._escalating.delete(event.id);
+    }
+  }
+
   /** Builds the message and walks the contact list, recording each attempt. */
-  async escalate(event, { reason = 'timeout' } = {}) {
+  async _escalate(event, { reason = 'timeout' } = {}) {
     const s = this.settings();
     const mode = event.mode || this.effectiveMode();
     const message = buildEmergencyMessage({
@@ -457,6 +487,10 @@ export class EmergencyService extends EventEmitter {
     const open = this.store.events.openOne();
     const reachable = this.store.contacts.reachable();
     const last = this.store.events.last();
+    // A channel object can exist while still being dry-run/unconfigured. Status
+    // must reflect deliverability, never mere presence.
+    const ready = (fn) => Boolean(fn && fn.ready !== false);
+    const why = (fn) => (fn && fn.ready === false ? (fn.reason || 'kanal belum siap') : null);
     return {
       enabled: s.enabled,
       mode: this.effectiveMode(),
@@ -469,11 +503,23 @@ export class EmergencyService extends EventEmitter {
       retryDelayMs: s.retryDelayMs,
       contacts: { total: this.store.contacts.count(), reachable: reachable.length },
       channels: {
-        telegram: Boolean(this.channels.telegram),
-        whatsapp: Boolean(this.channels.whatsapp),
-        email: Boolean(this.channels.email),
+        telegram: ready(this.channels.telegram),
+        whatsapp: ready(this.channels.whatsapp),
+        email: ready(this.channels.email),
         webhook: Boolean(this.env.EMERGENCY_WEBHOOK_URL),
         ownerNotify: Boolean(this.ownerNotify),
+      },
+      // Shown in the UI next to a "belum" chip so the owner knows exactly what
+      // to fix (e.g. WHATSAPP_PHONE_NUMBER_ID) instead of guessing.
+      channelReasons: {
+        telegram: why(this.channels.telegram),
+        whatsapp: why(this.channels.whatsapp),
+        email: why(this.channels.email),
+        webhook: this.env.EMERGENCY_WEBHOOK_URL ? null : 'EMERGENCY_WEBHOOK_URL belum diisi.',
+      },
+      voiceCall: {
+        available: false,
+        reason: 'Panggilan telepon otomatis belum didukung. Sistem mengirim WhatsApp, email, Telegram, atau webhook.',
       },
       openEvent: open || null,
       lastEvent: last || null,

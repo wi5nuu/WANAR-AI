@@ -176,30 +176,66 @@ automation.inbox.registerCommands({
 // simulate (see EMERGENCY_MODE / settings).
 const waChannel = automation.channels.has('whatsapp') ? automation.channels.get('whatsapp') : null;
 const emailChannel = automation.channels.has('email') ? automation.channels.get('email') : null;
+
+/**
+ * The emergency status must describe whether a channel can really deliver,
+ * not merely whether an adapter object exists. A dry-run WhatsApp adapter is
+ * present in every installation but cannot send until Meta credentials and a
+ * phone number id are configured; labelling it "siap" would be a false promise.
+ */
+function emergencyChannel(fn, channel, label) {
+  if (!channel) return null;
+  let info = {};
+  try { info = channel.describe?.() || {}; } catch { /* description is best effort */ }
+  fn.ready = channel.mode === 'live';
+  const missing = Array.isArray(info.missing) && info.missing.length ? `; kurang: ${info.missing.join(', ')}` : '';
+  const fix = typeof info.fix === 'string' && info.fix ? ` ${info.fix}` : '';
+  fn.reason = fn.ready ? null : `${label} belum siap (mode ${channel.mode || 'dry-run'}${missing}).${fix}`;
+  return fn;
+}
+
 const emergency = initEmergency({
   db: sqliteDb,
   location,
   channels: {
     telegram: ownerTelegram
-      ? async (chatId, text) => {
+      ? emergencyChannel(async (chatId, text) => {
         if (ownerTelegram.mode !== 'live') return { ok: false, error: 'Telegram belum dikonfigurasi' };
         const r = await ownerTelegram.send({ to: chatId, text });
         return { ok: !r?.dryRun, id: r?.messageId || null, error: r?.dryRun ? 'mode simulasi kanal' : null };
-      }
+      }, ownerTelegram, 'Telegram')
       : null,
     whatsapp: waChannel
-      ? async (phone, text) => {
+      ? emergencyChannel(async (phone, text) => {
         if (waChannel.mode !== 'live') return { ok: false, error: 'WhatsApp belum dikonfigurasi' };
-        const r = await waChannel.send({ to: phone, text, freeform: true });
-        return { ok: !r?.dryRun, id: r?.messageId || null, error: r?.dryRun ? 'mode simulasi kanal' : null };
-      }
+        try {
+          // Prefer free-form text: it carries the full map link. It only works
+          // inside Meta's 24-hour customer-service window.
+          const r = await waChannel.send({ to: phone, text, freeform: true });
+          return { ok: !r?.dryRun, id: r?.messageId || null, error: r?.dryRun ? 'mode simulasi kanal' : null };
+        } catch (e) {
+          // Outside that window Meta requires an approved template. If one is
+          // configured, retry through it so a first-contact emergency is not
+          // silently lost.
+          const templateReady = Boolean(String(process.env.WHATSAPP_TEMPLATE_NAME || '').trim());
+          const outsideWindow = e?.code === '131047' || /24 jam|template/i.test(String(e?.message || ''));
+          if (!templateReady || !outsideWindow) throw e;
+          const r = await waChannel.send({ to: phone, text });
+          return {
+            ok: !r?.dryRun,
+            id: r?.messageId || null,
+            error: r?.dryRun ? 'mode simulasi kanal' : null,
+            mode: 'template',
+          };
+        }
+      }, waChannel, 'WhatsApp')
       : null,
     email: emailChannel
-      ? async ({ to, subject, text }) => {
+      ? emergencyChannel(async ({ to, subject, text }) => {
         if (emailChannel.mode !== 'live') return { ok: false, error: 'SMTP belum dikonfigurasi' };
         const r = await emailChannel.send({ to, subject, text });
         return { ok: !r?.dryRun, id: r?.messageId || null, error: r?.dryRun ? 'mode simulasi kanal' : null };
-      }
+      }, emailChannel, 'Email')
       : null,
     webhook: process.env.EMERGENCY_WEBHOOK_URL
       ? async (payload) => {

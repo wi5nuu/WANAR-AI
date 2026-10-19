@@ -110,6 +110,9 @@ export function createWhatsAppChannel(env = process.env, { fetchImpl = globalThi
 
   const url = (path) => `${base}/${version}/${phoneId}/${path}`;
   const authHeaders = { Authorization: `Bearer ${token}` };
+  // Meta answers { messages: [{ id }] }; Kirimdev wraps the same data as
+  // { data: { id } }. Accept both so a real send is never recorded without id.
+  const providerMessageId = (res) => res?.messages?.[0]?.id || res?.data?.id || res?.id || null;
   // Media ids stay valid for ~30 days: upload each file once per process, not
   // once per recipient.
   const mediaCache = new Map();
@@ -159,8 +162,10 @@ export function createWhatsAppChannel(env = process.env, { fetchImpl = globalThi
     get mode() { return configured && !forceDry ? 'live' : 'dry-run'; },
 
     describe() {
+      const isKirim = /kirimdev\.com/i.test(base);
       return {
         id: 'whatsapp', label: adapter.label, mode: adapter.mode, configured,
+        provider: isKirim ? 'kirimdev' : 'meta',
         forceDryRun: forceDry, limits, capabilities: adapter.capabilities, recipientKind: 'phone',
         hasSecret: Boolean(token),
         sendMode: templateName ? `template: ${templateName} (${templateLang})` : 'teks bebas (hanya dalam 24 jam setelah pelanggan membalas)',
@@ -171,7 +176,12 @@ export function createWhatsAppChannel(env = process.env, { fetchImpl = globalThi
           missing: kirimSecret ? [] : missingList([['WHATSAPP_VERIFY_TOKEN', Boolean(verifyToken)], ['WHATSAPP_APP_SECRET', Boolean(appSecret)]]),
         },
         missing: missingList([['WHATSAPP_TOKEN', Boolean(token)], ['WHATSAPP_PHONE_NUMBER_ID', /^\d{5,}$/.test(phoneId)]]),
-        hint: 'Memakai WhatsApp Business Cloud API resmi (Meta). Untuk mengirim ke pelanggan baru wajib template yang disetujui dan persetujuan (opt-in) pelanggan. Untuk pesan MASUK, daftarkan https://domain-anda/webhook/whatsapp di dashboard Meta (isi WHATSAPP_VERIFY_TOKEN & WHATSAPP_APP_SECRET).',
+        fix: isKirim
+          ? 'Hubungkan nomor WhatsApp di app.kirimdev.com, lalu isi WHATSAPP_PHONE_NUMBER_ID dari GET /v1/accounts. Teks bebas hanya berlaku 24 jam setelah kontak membalas; di luar itu wajib template disetujui.'
+          : 'Isi WHATSAPP_PHONE_NUMBER_ID dari dashboard Meta (WhatsApp → API Setup). Teks bebas hanya berlaku 24 jam setelah kontak membalas; di luar itu wajib template disetujui.',
+        hint: isKirim
+          ? 'Penyedia: Kirimdev (kompatibel Cloud API). Untuk pesan MASUK, isi KIRIMDEV_WEBHOOK_SECRET.'
+          : 'Memakai WhatsApp Business Cloud API resmi (Meta). Untuk mengirim ke pelanggan baru wajib template yang disetujui dan persetujuan (opt-in) pelanggan. Untuk pesan MASUK, daftarkan https://domain-anda/webhook/whatsapp di dashboard Meta (isi WHATSAPP_VERIFY_TOKEN & WHATSAPP_APP_SECRET).',
       };
     },
 
@@ -223,7 +233,7 @@ export function createWhatsAppChannel(env = process.env, { fetchImpl = globalThi
             components: [{ type: 'body', parameters: [{ type: 'text', text: param }] }],
           },
         });
-        return { messageId: res.messages?.[0]?.id || null, accepted: [phone], dryRun: false, mode: 'template' };
+        return { messageId: providerMessageId(res), accepted: [phone], dryRun: false, mode: 'template' };
       }
 
       const composed = subj ? `*${subj}*\n\n${body}` : body;
@@ -236,7 +246,7 @@ export function createWhatsAppChannel(env = process.env, { fetchImpl = globalThi
           messaging_product: 'whatsapp', recipient_type: 'individual', to: phone,
           type: 'text', text: { preview_url: false, body: part },
         });
-        if (firstId == null) firstId = res.messages?.[0]?.id || null;
+        if (firstId == null) firstId = providerMessageId(res);
       }
       for (const att of attachments || []) {
         const mediaId = await uploadMedia(att);
