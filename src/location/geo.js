@@ -145,7 +145,7 @@ export function validateSample(raw, opts = {}) {
     heading: Number.isFinite(Number(raw.heading)) && Number(raw.heading) >= 0 ? Number(raw.heading) % 360 : null,
     altitude: Number.isFinite(Number(raw.altitude)) ? Number(raw.altitude) : null,
     battery: Number.isFinite(Number(raw.battery)) ? Number(raw.battery) : null,
-    source: ['gps', 'network', 'manual', 'device', 'sim'].includes(raw.source) ? raw.source : 'gps',
+    source: ['gps', 'network', 'manual', 'device', 'sim', 'browser'].includes(raw.source) ? raw.source : 'gps',
     motion: raw.motion && typeof raw.motion === 'object' ? raw.motion : null,
   };
   return { ok: true, sample: out };

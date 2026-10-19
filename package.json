@@ -36,6 +36,7 @@
     "scope": "node scripts/authorize.mjs list",
     "loadtest": "node scripts/load-test.mjs",
     "inventory": "node scripts/inventory.mjs",
+    "seed:places": "node scripts/seed-places.mjs",
     "deploy": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/deploy/deploy.ps1",
     "postinstall": "node scripts/postinstall.js",
     "service:install": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/service/wanar-service.ps1 install",

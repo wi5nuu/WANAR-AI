@@ -19,7 +19,7 @@
  * does not exist the UI says so.
  */
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, Fragment } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { openStream } from '../lib/stream.js';
@@ -111,6 +111,61 @@ const DUE_STATUS = { overdue: ['err', 'terlambat'], due: ['err', 'waktunya'], du
 
 const Chip = ({ kind = 'muted', children }) => <span className={`trk-chip ${kind}`}>{children}</span>;
 
+/** Place categories in the language the owner actually says: Rumah, Kantor, Toko… */
+const KIND_LABELS_ID = {
+  home: 'Rumah', office: 'Kantor', shop: 'Toko', mall: 'Mal', fuel: 'SPBU', food: 'Tempat makan',
+  minimarket: 'Minimarket', workshop: 'Bengkel', campus: 'Kampus', parking: 'Parkiran', road: 'Jalan raya',
+  pharmacy: 'Apotek', bank: 'Bank/ATM', clinic: 'Klinik', worship: 'Tempat ibadah', laundry: 'Laundry',
+  public: 'Area publik', vacant: 'Lahan kosong', unknown: 'Belum teridentifikasi',
+};
+const kindLabel = (k) => KIND_LABELS_ID[k] || k || '—';
+/** Coordinates are optional text in the UI; empty or non-numeric must never become 0,0. */
+const coordsOk = (lat, lon) => String(lat ?? '').trim() !== '' && String(lon ?? '').trim() !== ''
+  && Number.isFinite(Number(lat)) && Number.isFinite(Number(lon))
+  && Math.abs(Number(lat)) <= 90 && Math.abs(Number(lon)) <= 180;
+
+/** Google Maps links: the point itself and a route to it. */
+const gmapsUrl = (lat, lon) => `https://www.google.com/maps?q=${Number(lat).toFixed(7)},${Number(lon).toFixed(7)}`;
+const gmapsDirUrl = (lat, lon) => `https://www.google.com/maps/dir/?api=1&destination=${Number(lat).toFixed(7)},${Number(lon).toFixed(7)}`;
+
+/** Indonesian explanation for a browser geolocation failure. */
+function geoMessage(err) {
+  const code = err?.code;
+  if (code === 1) return 'Izin lokasi ditolak. Buka pengaturan situs di browser (ikon gembok di address bar) → Lokasi → Izinkan, lalu coba lagi.';
+  if (code === 2) return 'Posisi tidak tersedia dari perangkat ini. Aktifkan GPS/Location Services (HP: GPS; Windows: Settings → Privacy → Location), lalu coba lagi.';
+  if (code === 3) return 'GPS belum memberi titik dalam batas waktu. Coba lagi di area terbuka.';
+  return err?.message || 'Gagal membaca GPS browser.';
+}
+
+/**
+ * One high-accuracy browser fix. Calling this is what makes the browser show
+ * its "izinkan lokasi" prompt — the dashboard previously only read the last
+ * position the phone had uploaded, so no prompt ever appeared.
+ */
+function browserFixOnce() {
+  return new Promise((resolve, reject) => {
+    if (!navigator.geolocation) {
+      reject(new Error('Browser ini tidak menyediakan GPS (navigator.geolocation).'));
+      return;
+    }
+    // Browsers silently refuse geolocation on plain-HTTP LAN pages (no prompt at all).
+    if (window.isSecureContext === false) {
+      reject(new Error('Halaman ini bukan https:// atau localhost, jadi browser memblokir lokasi tanpa bertanya. Buka dasbor lewat https:// / localhost, atau pakai halaman /track di HP.'));
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => resolve({
+        lat: pos.coords.latitude,
+        lon: pos.coords.longitude,
+        accuracy: Number.isFinite(pos.coords.accuracy) ? pos.coords.accuracy : null,
+        ts: pos.timestamp || Date.now(),
+      }),
+      (err) => reject(Object.assign(new Error(geoMessage(err)), { code: err.code })),
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 25_000 },
+    );
+  });
+}
+
 function Field({ label, hint, children }) {
   return (
     <div className="au-field">
@@ -149,6 +204,9 @@ function drawLayers(map, group, { center, zoom, trail, stops, markers, fit }) {
     if (!Number.isFinite(m.lat) || !Number.isFinite(m.lon)) continue;
     const ll = [m.lat, m.lon];
     pts.push(ll);
+    if (Number.isFinite(m.radiusM) && m.radiusM >= 25 && m.radiusM < 5000) {
+      L.circle(ll, { radius: m.radiusM, color: m.color || '#a78bfa', weight: 1, opacity: 0.45, fillOpacity: 0.08 }).addTo(group);
+    }
     if (Number.isFinite(m.accuracy) && m.accuracy > 25 && m.accuracy < 3000) {
       L.circle(ll, { radius: m.accuracy, color: m.color || '#38bdf8', weight: 1, opacity: 0.35, fillOpacity: 0.08 }).addTo(group);
     }
@@ -156,10 +214,12 @@ function drawLayers(map, group, { center, zoom, trail, stops, markers, fit }) {
       .addTo(group)
       .bindTooltip(m.label || 'posisi', { direction: 'top' });
   }
-  if (pts.length && (fit || pts.length > 1)) {
+  if (pts.length && fit) {
     try { map.fitBounds(L.latLngBounds(pts), { padding: [34, 34], maxZoom: 16 }); } catch { /* fine */ }
   } else if (center) {
     map.setView(center, zoom);
+  } else if (pts.length > 1) {
+    try { map.fitBounds(L.latLngBounds(pts), { padding: [34, 34], maxZoom: 16 }); } catch { /* fine */ }
   }
 }
 
@@ -203,8 +263,8 @@ function MapView({ height = 320, center = null, zoom = 15, trail = null, stops =
 // ------------------------------------------------------------------- chips
 
 const PlaceKindChip = ({ kind }) => {
-  const label = String(kind || 'unknown');
-  const tone = label === 'unknown' ? 'muted' : label === 'road' || label === 'vacant' ? 'info' : 'ok';
+  const label = kindLabel(kind);
+  const tone = kind === 'unknown' || !kind ? 'muted' : kind === 'road' || kind === 'vacant' ? 'info' : 'ok';
   return <Chip kind={tone}>{label}</Chip>;
 };
 
@@ -236,6 +296,9 @@ function LiveTab({ loc, refresh, notify, tick }) {
   const [simPoints, setSimPoints] = useState(40);
   const [form, setForm] = useState(null);
   const [purgeDays, setPurgeDays] = useState(90);
+  const [browserGps, setBrowserGps] = useState({ active: false, fix: null, sentAt: null, sent: 0, error: null });
+  const geoWatchRef = useRef(null);
+  const lastGeoPostRef = useRef(0);
 
   const openTrip = status.openTrip;
   useEffect(() => {
@@ -268,6 +331,7 @@ function LiveTab({ loc, refresh, notify, tick }) {
         notifyTripStart: settings.notify.tripStart,
         notifyTripEnd: settings.notify.tripEnd,
         notifyArrival: settings.notify.arrival,
+        notifyDeparture: settings.notify.departure,
         notifyUnknownStop: settings.notify.unknownStop,
         maxPerHour: settings.notify.maxPerHour,
       });
@@ -292,6 +356,70 @@ function LiveTab({ loc, refresh, notify, tick }) {
   const session = (action, msg) => run(action, () => api(`/location/session/${action}`, { method: 'POST', body: {} }), msg);
   const pos = status.position;
 
+  // ------------------------------------------------------- browser GPS (live)
+  // watchPosition is what shows the browser permission prompt. Fixes go through
+  // /location/here, so the map, geofences and distances update exactly like
+  // data from the phone tracker.
+  const stopBrowserGps = useCallback((announce = true) => {
+    if (geoWatchRef.current != null) {
+      try { navigator.geolocation?.clearWatch(geoWatchRef.current); } catch { /* fine */ }
+    }
+    geoWatchRef.current = null;
+    setBrowserGps((s) => ({ ...s, active: false }));
+    if (announce) notify('ok', 'GPS browser dihentikan. Tidak ada titik baru yang dikirim dari browser.');
+  }, [notify]);
+
+  const startBrowserGps = useCallback(() => {
+    if (!navigator.geolocation) { notify('err', 'Browser ini tidak menyediakan GPS (navigator.geolocation).'); return; }
+    if (window.isSecureContext === false) {
+      notify('err', 'GPS browser hanya bisa di https:// atau localhost — browser memblokir lokasi di halaman HTTP biasa tanpa bertanya. Untuk HP, pakai halaman /track.');
+      return;
+    }
+    if (geoWatchRef.current != null) return;
+    lastGeoPostRef.current = 0;
+    setBrowserGps({ active: true, fix: null, sentAt: null, sent: 0, error: null });
+    geoWatchRef.current = navigator.geolocation.watchPosition(
+      async (p) => {
+        const fix = {
+          lat: p.coords.latitude,
+          lon: p.coords.longitude,
+          accuracy: Number.isFinite(p.coords.accuracy) ? Math.round(p.coords.accuracy) : null,
+          ts: p.timestamp || Date.now(),
+        };
+        setBrowserGps((s) => ({ ...s, fix, error: null }));
+        // Browsers may fire every second; 5 s is realtime enough and kind to the DB.
+        if (Date.now() - lastGeoPostRef.current < 5000) return;
+        lastGeoPostRef.current = Date.now();
+        try {
+          const r = await api('/location/here', { method: 'POST', body: fix });
+          setBrowserGps((s) => ({
+            ...s,
+            sentAt: Date.now(),
+            sent: s.sent + (r.inserted ? 1 : 0),
+            error: r.inserted
+              ? null
+              : r.dropped?.poor_accuracy
+                ? `Titik tidak disimpan: akurasi ±${fix.accuracy ?? '?'} m terlalu kasar (batas 500 m). Gunakan HP dengan GPS, bukan lokasi perkiraan jaringan.`
+                : null,
+          }));
+        } catch (e) {
+          setBrowserGps((s) => ({ ...s, error: e.message }));
+        }
+      },
+      (err) => {
+        setBrowserGps((s) => ({ ...s, error: geoMessage(err) }));
+        if (err.code === 1) stopBrowserGps(false);
+      },
+      { enableHighAccuracy: true, maximumAge: 3000, timeout: 30_000 },
+    );
+  }, [notify, stopBrowserGps]);
+
+  useEffect(() => () => {
+    if (geoWatchRef.current != null) {
+      try { navigator.geolocation?.clearWatch(geoWatchRef.current); } catch { /* fine */ }
+    }
+  }, []);
+
   const saveSettings = () => run('save-settings', () => api('/location/settings', {
     method: 'PUT',
     body: {
@@ -313,6 +441,7 @@ function LiveTab({ loc, refresh, notify, tick }) {
         tripStart: form.notifyTripStart,
         tripEnd: form.notifyTripEnd,
         arrival: form.notifyArrival,
+        departure: form.notifyDeparture,
         unknownStop: form.notifyUnknownStop,
         maxPerHour: Number(form.maxPerHour),
       },
@@ -345,8 +474,11 @@ function LiveTab({ loc, refresh, notify, tick }) {
               zoom={15}
               trail={trail}
               stops={openTripStops}
-              markers={[{ lat: pos.lat, lon: pos.lon, accuracy: pos.accuracy, label: pos.label }]}
-              rev={`${pos.ts}|${openTrip?.id || ''}|${trail ? trail.length : 0}|${Math.floor(tick / 5000)}`}
+              markers={[
+                ...(loc.places || []).filter((p) => p.active).map((p) => ({ lat: p.lat, lon: p.lon, label: `${p.name} (${kindLabel(p.kind)})`, color: '#a78bfa', radiusM: p.radius_m })),
+                { lat: pos.lat, lon: pos.lon, accuracy: pos.accuracy, label: pos.label, color: '#38bdf8' },
+              ]}
+              rev={`${pos.ts}|${openTrip?.id || ''}|${trail ? trail.length : 0}|${(loc.places || []).length}|${Math.floor(tick / 5000)}`}
             />
             <div className="trk-grid trk-cols-3" style={{ marginTop: '0.8rem' }}>
               <Stat v={`${pos.lat.toFixed(5)}, ${pos.lon.toFixed(5)}`} l="koordinat" />
@@ -357,17 +489,96 @@ function LiveTab({ loc, refresh, notify, tick }) {
               {status.quality.message} · sumber data: {pos.source || 'gps'} · baterai pelapor: {pos.battery == null ? 'tidak dilaporkan' : `${Math.round(pos.battery)}%`}
               {pos.fresh ? '' : ' · data ini sudah lewat batas kesegaran, jadi hanya posisi terakhir yang diketahui.'}
             </div>
+            <div className="trk-row" style={{ marginTop: 6 }}>
+              <a className="au-btn trk-small" href={gmapsUrl(pos.lat, pos.lon)} target="_blank" rel="noreferrer">Buka di Google Maps ↗</a>
+              <a className="au-btn trk-small" href={gmapsDirUrl(pos.lat, pos.lon)} target="_blank" rel="noreferrer">Rute di Google Maps ↗</a>
+            </div>
           </>
         ) : (
           <>
             <MapView height={200} center={null} zoom={13} rev="empty" />
             <div className="trk-muted" style={{ marginTop: 8 }}>
-              Belum ada titik lokasi tersimpan. Yang merekam GPS adalah HP (buka halaman <b>/track</b> di HP dengan token perangkat di bawah).
+              Belum ada titik lokasi tersimpan. Nyalakan <b>GPS browser</b> di kartu bawah (browser akan meminta izin lokasi), atau buka halaman <b>/track</b> di HP dengan token perangkat.
               Server hanya menyimpan kiriman itu — server tidak punya GPS sendiri.
             </div>
           </>
         )}
-        {pos && <div className="trk-honesty" style={{ marginTop: 8 }}>{status.place ? <>Tempat terdeteksi: <b>{status.place.label || 'belum teridentifikasi'}</b> ({status.place.kind})</> : 'Tempat belum bisa diidentifikasi dari titik ini.'}</div>}
+        {pos && <div className="trk-honesty" style={{ marginTop: 8 }}>{status.place ? <>Tempat terdeteksi: <b>{status.place.label || 'belum teridentifikasi'}</b> ({kindLabel(status.place.kind)}{Number.isFinite(status.place.distanceM) ? `, ±${Math.round(status.place.distanceM)} m dari pusat` : ''})</> : 'Tempat belum bisa diidentifikasi dari titik ini.'}</div>}
+      </div>
+
+      {/* ------------------------------------------------ browser GPS (realtime) */}
+      <div className="au-card">
+        <div className="trk-row between">
+          <h3 style={{ margin: 0 }}>GPS browser (realtime)</h3>
+          <Chip kind={browserGps.active ? 'ok' : 'muted'}>{browserGps.active ? 'aktif' : 'mati'}</Chip>
+        </div>
+        <div className="trk-muted" style={{ marginTop: 6 }}>
+          Membaca lokasi langsung dari perangkat ini lewat browser. Saat tombol diklik, browser menampilkan
+          <b> permintaan izin lokasi</b>; setelah diizinkan titik dikirim tiap ±5 detik selama tab Live ini terbuka,
+          sehingga peta dan jarak ikut bergerak. Hanya berjalan di <b>https:// atau localhost</b> — browser memblokir
+          GPS di alamat HTTP biasa tanpa bertanya. Jika HP juga sedang mengirim lewat <b>/track</b>, pilih salah satu
+          saja agar titik tidak melompat antarperangkat.
+        </div>
+        <div className="trk-row" style={{ marginTop: 8 }}>
+          {browserGps.active
+            ? <button className="au-btn" onClick={() => stopBrowserGps()}><IconStop size={15} /> Hentikan GPS browser</button>
+            : <button className="au-btn primary" onClick={startBrowserGps}><IconMap size={15} /> Aktifkan GPS browser</button>}
+          <span className="trk-muted">
+            {browserGps.fix
+              ? <>terakhir: {browserGps.fix.lat.toFixed(5)}, {browserGps.fix.lon.toFixed(5)} · akurasi {browserGps.fix.accuracy == null ? 'tidak dilaporkan' : `±${browserGps.fix.accuracy} m`}{browserGps.sentAt ? ` · terkirim ${fmtAge(tick - browserGps.sentAt)} lalu` : ''}</>
+              : 'belum ada titik dari browser'}
+          </span>
+        </div>
+        {browserGps.fix && (
+          <div className="trk-row" style={{ marginTop: 6 }}>
+            <a className="au-btn trk-small" href={gmapsUrl(browserGps.fix.lat, browserGps.fix.lon)} target="_blank" rel="noreferrer">Buka di Google Maps ↗</a>
+            <span className="trk-muted trk-small">{browserGps.sent} titik tersimpan dari browser.</span>
+          </div>
+        )}
+        {browserGps.active && !browserGps.fix && !browserGps.error && (
+          <div className="trk-muted" style={{ marginTop: 6 }}>Menunggu izin lokasi / titik pertama dari browser…</div>
+        )}
+        {browserGps.fix && browserGps.fix.accuracy != null && browserGps.fix.accuracy > 100 && (
+          <div className="au-alert err" style={{ marginTop: 8 }}>
+            Akurasi ±{browserGps.fix.accuracy} m — ini kemungkinan perkiraan jaringan, bukan GPS HP. Di komputer tanpa GPS hasilnya bisa meleset ratusan meter. Untuk titik presisi, buka halaman <b>/track</b> di HP.
+          </div>
+        )}
+        {browserGps.error && <div className="au-alert err" style={{ marginTop: 8 }}>{browserGps.error}</div>}
+      </div>
+
+      {/* ------------------------------------------------ distance from places */}
+      <div className="au-card">
+        <div className="trk-row between">
+          <h3 style={{ margin: 0 }}>Jarak dari tempat dikenal</h3>
+          <span className="trk-muted">garis lurus, bukan jarak tempuh jalan</span>
+        </div>
+        {!(status.places || []).length ? (
+          <div className="trk-muted" style={{ marginTop: 6 }}>
+            Belum ada tempat tersimpan. Buka tab <b>Tempat</b> → "Simpan posisi sekarang" untuk menyimpan posisi ini sebagai Rumah/Kantor/Toko.
+            Setelah itu di sini akan tampil jarak meter dari tiap tempat, realtime.
+          </div>
+        ) : (
+          <table className="trk-table" style={{ marginTop: 6 }}>
+            <thead><tr><th>Tempat</th><th>Kategori</th><th>Jarak</th><th>Status</th><th>Kunjungan</th></tr></thead>
+            <tbody>
+              {status.places.map((p) => (
+                <tr key={p.id}>
+                  <td>{p.name}</td>
+                  <td className="trk-muted">{kindLabel(p.kind)} <span className="trk-small">· radius {p.radiusM} m</span></td>
+                  <td><b>{fmtDist(p.distanceM)}</b></td>
+                  <td>{p.inside ? <Chip kind="ok">di dalam area</Chip> : <Chip kind="muted">di luar</Chip>}</td>
+                  <td className="trk-muted">{p.lastVisitAt ? `${p.visits}× · terakhir ${fmtDateTime(p.lastVisitAt)}` : `${p.visits}×`}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        {pos && (
+          <div className="trk-muted" style={{ marginTop: 6 }}>
+            Dihitung dari {pos.fresh ? 'posisi terkini' : `lokasi terakhir (${fmtAge(tick - pos.ts)} lalu, bukan live)`}.
+            Keluar/masuk area dikenal memicu notifikasi (lihat Pengaturan pelacakan di bawah).
+          </div>
+        )}
       </div>
 
       {/* ------------------------------------------------ session control */}
@@ -375,9 +586,9 @@ function LiveTab({ loc, refresh, notify, tick }) {
         <h3 style={{ marginTop: 0 }}>Sesi pelacakan</h3>
         <div className="trk-row">
           <button className="au-btn primary" disabled={busy} onClick={() => session('start', 'Pelacakan dimulai.')}><IconPlay size={15} /> Mulai</button>
-          <button className="au-btn" disabled={busy} onClick={() => session('pause', 'Pelacakan dijeda.')}><IconPause size={15} /> Jeda</button>
+          <button className="au-btn" disabled={busy} onClick={() => { if (browserGps.active) stopBrowserGps(false); session('pause', 'Pelacakan dijeda.'); }}><IconPause size={15} /> Jeda</button>
           <button className="au-btn" disabled={busy} onClick={() => session('resume', 'Pelacakan dilanjutkan.')}><IconPlay size={15} /> Lanjut</button>
-          <button className="au-btn" disabled={busy} onClick={() => session('stop', 'Sesi pelacakan dihentikan.')}><IconStop size={15} /> Stop</button>
+          <button className="au-btn" disabled={busy} onClick={() => { if (browserGps.active) stopBrowserGps(false); session('stop', 'Sesi pelacakan dihentikan.'); }}><IconStop size={15} /> Stop</button>
           <span className="trk-spacer" />
           <button className="au-btn" disabled={busy} title="Membuat perjalanan sintetis untuk menguji alur" onClick={() => run('sim', () => api('/location/simulate/ride', { method: 'POST', body: { points: Number(simPoints) } }), 'Simulasi perjalanan dimasukkan (data sintetis).')}>
             <IconRefresh size={15} /> Uji simulasi
@@ -481,7 +692,8 @@ function LiveTab({ loc, refresh, notify, tick }) {
         <label className="au-check"><input type="checkbox" checked={form.poiSearch} onChange={(e) => setForm({ ...form, poiSearch: e.target.checked })} /><span><b>Cari POI sekitar</b> <span className="au-muted">Overpass API untuk menebak tempat berhenti</span></span></label>
         <label className="au-check"><input type="checkbox" checked={form.notifyTripStart} onChange={(e) => setForm({ ...form, notifyTripStart: e.target.checked })} /><span>Notifikasi mulai perjalanan</span></label>
         <label className="au-check"><input type="checkbox" checked={form.notifyTripEnd} onChange={(e) => setForm({ ...form, notifyTripEnd: e.target.checked })} /><span>Notifikasi perjalanan selesai</span></label>
-        <label className="au-check"><input type="checkbox" checked={form.notifyArrival} onChange={(e) => setForm({ ...form, notifyArrival: e.target.checked })} /><span>Notifikasi tiba di tempat dikenal</span></label>
+        <label className="au-check"><input type="checkbox" checked={form.notifyArrival} onChange={(e) => setForm({ ...form, notifyArrival: e.target.checked })} /><span>Notifikasi tiba di tempat dikenal (mis. "Tiba di Kantor")</span></label>
+        <label className="au-check"><input type="checkbox" checked={form.notifyDeparture} onChange={(e) => setForm({ ...form, notifyDeparture: e.target.checked })} /><span>Notifikasi meninggalkan tempat dikenal (mis. "Meninggalkan Rumah")</span></label>
         <label className="au-check"><input type="checkbox" checked={form.notifyUnknownStop} onChange={(e) => setForm({ ...form, notifyUnknownStop: e.target.checked })} /><span>Notifikasi berhenti di tempat tak dikenal</span></label>
       </div>
 
@@ -663,15 +875,19 @@ function HistoryTab({ loc, notify, refreshKey }) {
 
 // ================================================================ PLACES TAB
 
-const KINDS = ['home', 'office', 'mall', 'fuel', 'food', 'minimarket', 'workshop', 'campus', 'parking', 'road', 'pharmacy', 'bank', 'clinic', 'worship', 'laundry', 'public', 'vacant', 'unknown'];
+const KINDS = ['home', 'office', 'shop', 'mall', 'fuel', 'food', 'minimarket', 'workshop', 'campus', 'parking', 'road', 'pharmacy', 'bank', 'clinic', 'worship', 'laundry', 'public', 'vacant', 'unknown'];
 
-function PlacesTab({ loc, notify, refresh }) {
+function PlacesTab({ loc, notify, refresh, tick }) {
   const status = loc.status;
   const [busy, setBusy] = useState('');
   const [form, setForm] = useState({ name: '', kind: 'public', lat: '', lon: '', radiusM: 120 });
   const [stops, setStops] = useState([]);
   const [corr, setCorr] = useState({});
   const [focus, setFocus] = useState(null);
+  const [quick, setQuick] = useState({ kind: 'home', name: '', radiusM: 120 });
+  const [edit, setEdit] = useState(null);
+  const [browserFix, setBrowserFix] = useState(null);
+  const [geoBusy, setGeoBusy] = useState(false);
 
   const loadStops = useCallback(() => {
     api(`/location/stops?date=${loc.day.date}`)
@@ -687,13 +903,98 @@ function PlacesTab({ loc, notify, refresh }) {
     finally { setBusy(''); }
   };
 
-  const useCurrent = () => {
-    if (!status.position) return notify('err', 'Belum ada posisi terkini untuk dipakai.');
-    setForm((f) => ({ ...f, lat: status.position.lat.toFixed(6), lon: status.position.lon.toFixed(6) }));
+  /** Trigger the browser's own permission prompt and take one fresh fix. */
+  const takeBrowserFix = async ({ remember = true } = {}) => {
+    setGeoBusy(true);
+    try {
+      const fix = await browserFixOnce();
+      if (remember) setBrowserFix(fix);
+      notify('ok', `GPS browser: ${fix.lat.toFixed(5)}, ${fix.lon.toFixed(5)} · akurasi ${fix.accuracy == null ? 'tidak dilaporkan' : `±${Math.round(fix.accuracy)} m`}.`);
+      return fix;
+    } catch (e) {
+      notify('err', e.message);
+      return null;
+    } finally {
+      setGeoBusy(false);
+    }
   };
+
+  const useCurrentInForm = async () => {
+    const fix = await takeBrowserFix();
+    if (fix) setForm((f) => ({ ...f, lat: fix.lat.toFixed(6), lon: fix.lon.toFixed(6) }));
+  };
+
+  const savePos = browserFix || status.position;
 
   return (
     <div className="trk-grid">
+      <div className="au-card">
+        <div className="trk-row between">
+          <h3 style={{ margin: 0 }}>Simpan posisi sekarang</h3>
+          <span className="trk-muted">"disimpan sebagai apa" — nama + kategori inilah yang dipakai mengenali kunjungan dan menjawab "jarak dari rumah"</span>
+        </div>
+        <div className="trk-grid trk-cols-2" style={{ marginTop: 8 }}>
+          <Field label="Simpan sebagai">
+            <select className="au-input" value={quick.kind} onChange={(e) => setQuick({ ...quick, kind: e.target.value })}>
+              {KINDS.map((k) => <option key={k} value={k}>{kindLabel(k)}</option>)}
+            </select>
+          </Field>
+          <Field label="Nama tempat" hint='Kosongkan untuk memakai nama kategori. Nama ini juga yang dipakai chat: "berapa jauh dari rumah?"'>
+            <input className="au-input" value={quick.name} onChange={(e) => setQuick({ ...quick, name: e.target.value })} placeholder={kindLabel(quick.kind)} />
+          </Field>
+          <Field label="Radius area (m)" hint="Seberapa luas satu area dianggap 'di dalam' tempat ini.">
+            <input className="au-input" type="number" min="25" max="2000" value={quick.radiusM} onChange={(e) => setQuick({ ...quick, radiusM: e.target.value })} />
+          </Field>
+          <Field label="Posisi yang akan disimpan">
+            <div className="trk-muted">
+              {savePos ? (
+                <>
+                  <div>
+                    <b>{savePos.lat.toFixed(5)}, {savePos.lon.toFixed(5)}</b>
+                    {' · '}akurasi {savePos.accuracy == null ? 'tidak dilaporkan' : `±${Math.round(savePos.accuracy)} m`}
+                    {' · '}{browserFix ? `GPS browser · diambil ${fmtAge(tick - browserFix.ts)} lalu` : `${fmtAge(tick - savePos.ts)} lalu (posisi terakhir server)`}
+                  </div>
+                  {browserFix && Number.isFinite(Number(browserFix.accuracy)) && Number(browserFix.accuracy) > Number(quick.radiusM) && (
+                    <div className="au-alert err" style={{ marginTop: 4 }}>Akurasi GPS (±{Math.round(browserFix.accuracy)} m) lebih besar dari radius area ({Number(quick.radiusM) || 120} m). Titik simpan bisa meleset — coba di area terbuka atau perbesar radius.</div>
+                  )}
+                  {!browserFix && !status.position?.fresh && (
+                    <div className="au-alert err" style={{ marginTop: 4 }}>Ini posisi terakhir di server, bukan lokasi Anda sekarang. Klik <b>Gunakan lokasi saat ini</b> agar browser meminta izin lokasi dan mengambil GPS baru.</div>
+                  )}
+                  <div className="trk-row" style={{ marginTop: 4 }}>
+                    <a className="trk-small" href={gmapsUrl(savePos.lat, savePos.lon)} target="_blank" rel="noreferrer">Buka di Google Maps ↗</a>
+                  </div>
+                </>
+              ) : (
+                <div>Belum ada titik. Klik <b>Gunakan lokasi saat ini</b> — browser akan menampilkan permintaan izin lokasi, bukan memakai posisi lama dari server.</div>
+              )}
+              {!browserFix && (status.place
+                ? <div>Saat ini terdeteksi di dalam area <b>{status.place.label}</b>.</div>
+                : savePos ? <div>Saat ini di luar semua area tersimpan.</div> : null)}
+            </div>
+          </Field>
+        </div>
+        <div className="trk-row" style={{ marginTop: 8 }}>
+          <button className="au-btn" disabled={geoBusy || busy} onClick={() => takeBrowserFix()}><IconMap size={15} /> {geoBusy ? 'Meminta GPS…' : 'Gunakan lokasi saat ini'}</button>
+          {status.position && browserFix && <button className="au-btn" disabled={busy} onClick={() => setBrowserFix(null)}>Pakai posisi server</button>}
+          <button className="au-btn primary" disabled={busy || !savePos} onClick={async () => {
+            const label = quick.name.trim() || kindLabel(quick.kind);
+            setBusy('quicksave');
+            try {
+              const r = await api('/location/places', { method: 'POST', body: { name: label, kind: quick.kind, lat: savePos.lat, lon: savePos.lon, radiusM: Number(quick.radiusM) || 120 } });
+              notify('ok', `"${r.place.name}" disimpan sebagai ${kindLabel(r.place.kind)} (±${r.place.radius_m} m) dari ${browserFix ? 'GPS browser' : 'posisi server terakhir'}. Kunjungan ke area ini akan dikenali.`);
+              setQuick({ kind: quick.kind, name: '', radiusM: 120 });
+              setBrowserFix(null);
+              await refresh();
+            } catch (e) {
+              notify('err', e.message);
+            } finally {
+              setBusy('');
+            }
+          }}><IconPin size={15} /> Simpan posisi ini</button>
+          <span className="trk-muted">Nama sudah dipakai? Ubah/hapus di daftar bawah, atau pakai nama lain.</span>
+        </div>
+      </div>
+
       <div className="au-card">
         <div className="trk-row between">
           <h3 style={{ margin: 0 }}>Tempat yang dikenal (geofence)</h3>
@@ -702,46 +1003,83 @@ function PlacesTab({ loc, notify, refresh }) {
         <div style={{ marginTop: 8 }}>
           <MapView
             height={260}
-            center={focus ? [focus.lat, focus.lon] : (status.position ? [status.position.lat, status.position.lon] : null)}
+            center={focus ? [focus.lat, focus.lon] : (browserFix ? [browserFix.lat, browserFix.lon] : (status.position ? [status.position.lat, status.position.lon] : null))}
             zoom={14}
-            markers={(loc.places || []).filter((p) => p.active).map((p) => ({ lat: p.lat, lon: p.lon, label: `${p.name} (${p.kind})`, color: '#a78bfa' }))}
-            rev={`${(loc.places || []).length}|${focus ? focus.id : ''}`}
+            fit={!focus}
+            markers={[
+              ...(loc.places || []).filter((p) => p.active).map((p) => ({ lat: p.lat, lon: p.lon, label: `${p.name} (${kindLabel(p.kind)})`, color: '#a78bfa', radiusM: p.radius_m })),
+              ...(browserFix ? [{ lat: browserFix.lat, lon: browserFix.lon, label: `GPS browser — akan disimpan sebagai ${quick.name.trim() || kindLabel(quick.kind)}`, color: '#22c55e', radiusM: Number(quick.radiusM) || 120 }] : []),
+              ...(!browserFix && status.position ? [{ lat: status.position.lat, lon: status.position.lon, label: 'posisi terkini', color: '#38bdf8' }] : []),
+            ]}
+            rev={`${(loc.places || []).length}|${focus ? focus.id : ''}|${browserFix ? browserFix.ts : (status.position ? status.position.ts : '')}|${quick.kind}|${quick.radiusM}`}
           />
         </div>
         <table className="trk-table" style={{ marginTop: 10 }}>
           <thead><tr><th>Nama</th><th>Kategori</th><th>Radius</th><th>Kunjungan</th><th>Terakhir</th><th>Sumber</th><th /></tr></thead>
           <tbody>
             {(loc.places || []).map((p) => (
-              <tr key={p.id}>
-                <td>{p.name}{!p.active ? ' (nonaktif)' : ''}{p.confirm_state !== 'confirmed' ? ` ${p.confirm_state}` : ''}</td>
-                <td>
-                  <select className="au-input" value={p.kind} onChange={(e) => run('', () => api(`/location/places/${p.id}`, { method: 'PATCH', body: { kind: e.target.value } }), 'Kategori tempat disimpan.')}>
-                    {KINDS.map((k) => <option key={k} value={k}>{k}</option>)}
-                  </select>
-                </td>
-                <td>{p.radius_m} m</td>
-                <td>{p.visits}</td>
-                <td>{p.last_visit_at ? fmtDateTime(p.last_visit_at) : '—'}</td>
-                <td className="trk-muted">{p.source}</td>
-                <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
-                  <button className="au-btn trk-small" onClick={() => setFocus(p)}>Peta</button>{' '}
-                  <button className="au-btn trk-small" disabled={busy} onClick={() => run('', () => api(`/location/places/${p.id}`, { method: 'PATCH', body: { active: !p.active } }), p.active ? 'Tempat dinonaktifkan.' : 'Tempat diaktifkan.')}>{p.active ? 'Matikan' : 'Aktifkan'}</button>{' '}
-                  <button className="au-btn trk-small" disabled={busy} onClick={() => { if (window.confirm(`Hapus tempat "${p.name}"?`)) run('', () => api(`/location/places/${p.id}`, { method: 'DELETE' }), 'Tempat dihapus.'); }}><IconTrash size={13} /></button>
-                </td>
-              </tr>
+              <Fragment key={p.id}>
+                <tr>
+                  <td>{p.name}{!p.active ? ' (nonaktif)' : ''}{p.confirm_state !== 'confirmed' ? ` ${p.confirm_state}` : ''}</td>
+                  <td>
+                    <select className="au-input" value={p.kind} onChange={(e) => run('', () => api(`/location/places/${p.id}`, { method: 'PATCH', body: { kind: e.target.value } }), 'Kategori tempat disimpan.')}>
+                      {KINDS.map((k) => <option key={k} value={k}>{kindLabel(k)}</option>)}
+                    </select>
+                  </td>
+                  <td>{p.radius_m} m</td>
+                  <td>{p.visits}</td>
+                  <td>{p.last_visit_at ? fmtDateTime(p.last_visit_at) : '—'}</td>
+                  <td className="trk-muted">{p.source}</td>
+                  <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                    <a className="au-btn trk-small" href={gmapsUrl(p.lat, p.lon)} target="_blank" rel="noreferrer" title="Buka titik ini di Google Maps">Maps ↗</a>{' '}
+                    <button className="au-btn trk-small" onClick={() => setEdit(edit?.id === p.id ? null : { id: p.id, name: p.name, kind: p.kind, radiusM: p.radius_m, lat: Number(p.lat).toFixed(6), lon: Number(p.lon).toFixed(6) })}>{edit?.id === p.id ? 'Batal' : 'Ubah'}</button>{' '}
+                    <button className="au-btn trk-small" onClick={() => setFocus(focus?.id === p.id ? null : p)}>{focus?.id === p.id ? 'Semua' : 'Peta'}</button>{' '}
+                    <button className="au-btn trk-small" disabled={busy} onClick={() => run('', () => api(`/location/places/${p.id}`, { method: 'PATCH', body: { active: !p.active } }), p.active ? 'Tempat dinonaktifkan.' : 'Tempat diaktifkan.')}>{p.active ? 'Matikan' : 'Aktifkan'}</button>{' '}
+                    <button className="au-btn trk-small" disabled={busy} onClick={() => { if (window.confirm(`Hapus tempat "${p.name}"?`)) run('', () => api(`/location/places/${p.id}`, { method: 'DELETE' }), 'Tempat dihapus.'); }}><IconTrash size={13} /></button>
+                  </td>
+                </tr>
+                {edit?.id === p.id && (
+                  <tr>
+                    <td colSpan={7}>
+                      <div className="trk-row" style={{ flexWrap: 'wrap' }}>
+                        <input className="au-input" style={{ maxWidth: 170 }} value={edit.name} onChange={(e) => setEdit({ ...edit, name: e.target.value })} placeholder="Nama" />
+                        <select className="au-input" style={{ maxWidth: 150 }} value={edit.kind} onChange={(e) => setEdit({ ...edit, kind: e.target.value })}>
+                          {KINDS.map((k) => <option key={k} value={k}>{kindLabel(k)}</option>)}
+                        </select>
+                        <input className="au-input" style={{ width: 110 }} type="number" min="25" max="2000" value={edit.radiusM} onChange={(e) => setEdit({ ...edit, radiusM: e.target.value })} placeholder="radius m" />
+                        <input className="au-input" style={{ width: 130 }} value={edit.lat} onChange={(e) => setEdit({ ...edit, lat: e.target.value })} placeholder="lintang" />
+                        <input className="au-input" style={{ width: 130 }} value={edit.lon} onChange={(e) => setEdit({ ...edit, lon: e.target.value })} placeholder="bujur" />
+                        <button className="au-btn trk-small" disabled={geoBusy || busy} title="Ambil GPS browser untuk mengisi lintang/bujur tempat ini" onClick={async () => {
+                          const fix = await takeBrowserFix({ remember: false });
+                          if (fix) setEdit((cur) => (cur ? { ...cur, lat: fix.lat.toFixed(6), lon: fix.lon.toFixed(6) } : cur));
+                        }}>{geoBusy ? 'GPS…' : 'GPS HP'}</button>
+                        <button className="au-btn primary trk-small" disabled={busy || !edit.name.trim() || !coordsOk(edit.lat, edit.lon)} onClick={() => run('edit', async () => {
+                          await api(`/location/places/${p.id}`, { method: 'PATCH', body: { name: edit.name.trim(), kind: edit.kind, radiusM: Number(edit.radiusM) || 120, lat: Number(edit.lat), lon: Number(edit.lon) } });
+                          setEdit(null);
+                        }, 'Tempat diperbarui.')}>Simpan perubahan</button>
+                      </div>
+                      <div className="trk-muted trk-small">
+                        Lokasi meleset? Berdiri di tempat yang benar lalu klik <b>GPS HP</b> (browser meminta izin lokasi),
+                        atau <a href={gmapsUrl(p.lat, p.lon)} target="_blank" rel="noreferrer">buka titik ini di Google Maps ↗</a>,
+                        tekan lama titik yang benar, salin angka lintang/bujur, lalu tempel di kolomnya.
+                      </div>
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
             ))}
-            {!(loc.places || []).length && <tr><td colSpan={7} className="trk-muted">Belum ada tempat. Tambahkan rumah/kantor lewat formulir di bawah, atau beri nama perhentian terakhir.</td></tr>}
+            {!(loc.places || []).length && <tr><td colSpan={7} className="trk-muted">Belum ada tempat. Simpan posisi sekarang di kartu atas, atau tambahkan manual lewat formulir di bawah.</td></tr>}
           </tbody>
         </table>
       </div>
 
       <div className="au-card">
-        <h3 style={{ marginTop: 0 }}>Tambah tempat</h3>
+        <h3 style={{ marginTop: 0 }}>Tambah tempat manual (koordinat sendiri)</h3>
         <div className="au-grid trk-cols-2">
           <Field label="Nama"><input className="au-input" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder='mis. "Rumah"' /></Field>
           <Field label="Kategori">
             <select className="au-input" value={form.kind} onChange={(e) => setForm({ ...form, kind: e.target.value })}>
-              {KINDS.map((k) => <option key={k} value={k}>{k}</option>)}
+              {KINDS.map((k) => <option key={k} value={k}>{kindLabel(k)}</option>)}
             </select>
           </Field>
           <Field label="Latitude"><input className="au-input" value={form.lat} onChange={(e) => setForm({ ...form, lat: e.target.value })} placeholder="-6.2383" /></Field>
@@ -749,8 +1087,12 @@ function PlacesTab({ loc, notify, refresh }) {
           <Field label="Radius (m)"><input className="au-input" type="number" min="25" max="2000" value={form.radiusM} onChange={(e) => setForm({ ...form, radiusM: e.target.value })} /></Field>
         </div>
         <div className="trk-row" style={{ marginTop: 8 }}>
-          <button className="au-btn" onClick={useCurrent} disabled={!status.position}>Pakai posisi terkini</button>
-          <button className="au-btn primary" disabled={busy || !form.name.trim() || !form.lat || !form.lon} onClick={() => run('place', async () => {
+          <button className="au-btn" onClick={useCurrentInForm} disabled={geoBusy || busy}><IconMap size={15} /> {geoBusy ? 'Meminta GPS…' : 'Gunakan lokasi saat ini'}</button>
+          <button className="au-btn" onClick={() => {
+            if (!status.position) return notify('err', 'Belum ada posisi server untuk dipakai.');
+            setForm((f) => ({ ...f, lat: status.position.lat.toFixed(6), lon: status.position.lon.toFixed(6) }));
+          }} disabled={!status.position || busy}>Pakai posisi server</button>
+          <button className="au-btn primary" disabled={busy || !form.name.trim() || !coordsOk(form.lat, form.lon)} onClick={() => run('place', async () => {
             await api('/location/places', { method: 'POST', body: { name: form.name.trim(), kind: form.kind, lat: Number(form.lat), lon: Number(form.lon), radiusM: Number(form.radiusM) } });
             setForm({ name: '', kind: 'public', lat: '', lon: '', radiusM: 120 });
           }, 'Tempat disimpan.')}><IconPlus size={15} /> Simpan tempat</button>
@@ -772,7 +1114,7 @@ function PlacesTab({ loc, notify, refresh }) {
                   <div className="trk-tl-body">
                     <div className="trk-row">
                       <select className="au-input" style={{ maxWidth: 170 }} value={c.kind} onChange={(e) => setCorr({ ...corr, [st.id]: { ...c, kind: e.target.value } })}>
-                        {KINDS.map((k) => <option key={k} value={k}>{k}</option>)}
+                        {KINDS.map((k) => <option key={k} value={k}>{kindLabel(k)}</option>)}
                       </select>
                       <input className="au-input" style={{ flex: 1, minWidth: 140 }} placeholder="Nama tempat (opsional)" value={c.label} onChange={(e) => setCorr({ ...corr, [st.id]: { ...c, label: e.target.value } })} />
                       <label className="au-check trk-small"><input type="checkbox" checked={c.savePlace} onChange={(e) => setCorr({ ...corr, [st.id]: { ...c, savePlace: e.target.checked } })} /><span>jadikan tempat</span></label>
@@ -1602,6 +1944,14 @@ export default function Tracking() {
         </div>
 
         {error && <div className="au-alert err">{error} — periksa apakah server web berjalan dan token otomasi sudah diisi.</div>}
+        {window.isSecureContext === false && (
+          <div className="au-alert err">
+            Halaman ini dibuka lewat <b>HTTP</b> ({window.location.host}). Browser memblokir GPS tanpa menampilkan
+            izin lokasi, jadi tombol "Gunakan lokasi saat ini" dan GPS browser tidak akan bekerja. Buka lewat
+            <b> https://</b> (domain) atau <b>localhost</b> di komputer server. Untuk HP, gunakan alamat https://
+            dari domain, bukan http://192.168…
+          </div>
+        )}
 
         <div className="au-tabs" role="tablist">
           {TABS.map(([k, l, Ico]) => (
@@ -1615,7 +1965,7 @@ export default function Tracking() {
           <>
             {tab === 'live' && <LiveTab loc={data.loc} refresh={refresh} notify={notify} tick={tick} />}
             {tab === 'history' && <HistoryTab loc={data.loc} notify={notify} refreshKey={rev} />}
-            {tab === 'places' && <PlacesTab loc={data.loc} notify={notify} refresh={refresh} />}
+            {tab === 'places' && <PlacesTab loc={data.loc} notify={notify} refresh={refresh} tick={tick} />}
             {tab === 'emergency' && <EmergencyTab emg={data.emg} loc={data.loc} notify={notify} refresh={refresh} refreshKey={rev} />}
             {tab === 'vehicle' && <VehicleTab veh={data.veh} loc={data.loc} notify={notify} refresh={refresh} />}
             {tab === 'memory' && <MemoryTab mem={data.mem} notify={notify} refresh={refresh} refreshKey={rev} />}

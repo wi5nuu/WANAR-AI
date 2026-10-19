@@ -25,14 +25,15 @@
 import { distanceToFenceM } from './geo.js';
 
 export const PLACE_KINDS = [
-  'home', 'office', 'mall', 'fuel', 'food', 'minimarket', 'workshop', 'campus',
-  'parking', 'road', 'pharmacy', 'bank', 'clinic', 'worship', 'laundry',
+  'home', 'office', 'shop', 'mall', 'fuel', 'food', 'minimarket', 'workshop',
+  'campus', 'parking', 'road', 'pharmacy', 'bank', 'clinic', 'worship', 'laundry',
   'public', 'vacant', 'unknown',
 ];
 
 export const KIND_LABELS = {
   home: 'Rumah',
   office: 'Kantor',
+  shop: 'Toko',
   mall: 'Mal / pusat perbelanjaan',
   fuel: 'SPBU',
   food: 'Tempat makan',

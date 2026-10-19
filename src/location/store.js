@@ -45,7 +45,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
   notify: {
     tripStart: true,
     tripEnd: true,
-    arrival: true,
+    arrival: true,                  // "Tiba di Rumah/Kantor/…" (geofence masuk)
+    departure: true,                // "Meninggalkan Rumah/…" (geofence keluar)
     unknownStop: true,
     longStop: true,
     quietHours: true,               // hold routine notices 22:00–06:00 WIB
@@ -459,9 +460,9 @@ export function createLocationStore(db) {
       const cur = places.get(pid);
       if (!cur) return null;
       const f = { ...cur, ...patch };
-      db.prepare(`UPDATE loc_places SET name = ?, kind = ?, radius_m = ?, confirm_state = ?, aliases = ?, active = ?, updated_at = ? WHERE id = ?`)
-        .run(f.name, f.kind, Math.max(25, Math.round(f.radius_m)), f.confirm_state,
-          f.aliases ? JSON.stringify(f.aliases) : null, f.active ? 1 : 0, now(), pid);
+      db.prepare(`UPDATE loc_places SET name = ?, kind = ?, lat = ?, lon = ?, radius_m = ?, confirm_state = ?, aliases = ?, active = ?, geohash = ?, updated_at = ? WHERE id = ?`)
+        .run(f.name, f.kind, Number(f.lat), Number(f.lon), Math.max(25, Math.round(f.radius_m)), f.confirm_state,
+          f.aliases ? JSON.stringify(f.aliases) : null, f.active ? 1 : 0, f.geohash ?? null, now(), pid);
       return places.get(pid);
     },
     visit(pid, at = now()) {

@@ -22,7 +22,7 @@
  * @author Wisnu Alfian Nur Ashar
  */
 
-import { formatDistance, formatSpeed } from './geo.js';
+import { formatDistance, formatSpeed, haversineM } from './geo.js';
 import { KIND_LABELS } from './classify.js';
 import { formatMinutes } from '../worklog/time.js';
 
@@ -175,6 +175,44 @@ export function quickLocation(location, text, { chatId = null } = {}) {
     }
   }
 
+  // "berapa jauh dari rumah?" / "jarak rumah ke kantor?" — a straight-line
+  // distance read from stored data: from the last known fix, or between two
+  // saved places. Never estimated, never invented.
+  if (DISTANCE_ASK.test(t) && !TODAY_ASK.test(t)) {
+    const named = findSavedPlaces(location, t);
+    if (named.length >= 2) {
+      // Present them in the order the owner wrote them: "jarak rumah ke kantor"
+      // reads "Rumah → Kantor", not whatever the name-length sort produced.
+      const lt = t.toLowerCase();
+      const posOf = (p) => {
+        const direct = lt.indexOf(String(p.name).toLowerCase());
+        if (direct >= 0) return direct;
+        return (p.aliases || []).reduce((best, a) => {
+          const i = lt.indexOf(String(a).toLowerCase());
+          return i >= 0 && i < best ? i : best;
+        }, Infinity);
+      };
+      const [a, b] = named.slice(0, 2).sort((x, y) => posOf(x) - posOf(y));
+      const d = haversineM(a.lat, a.lon, b.lat, b.lon);
+      return `📏 Jarak "${a.name}" → "${b.name}": ${formatDistance(d)} (garis lurus, bukan jarak tempuh jalan).`;
+    }
+    if (named.length === 1) {
+      const place = named[0];
+      const st = location.currentStatus();
+      if (!st.position) {
+        return `Belum ada posisi tersimpan, jadi jarak ke "${place.name}" belum bisa dihitung. Nyalakan pelacakan di HP (halaman /track) lebih dulu.`;
+      }
+      const d = haversineM(st.position.lat, st.position.lon, place.lat, place.lon);
+      const ageStr = st.position.ageMs < 60_000 ? 'kurang dari semenit lalu' : `${Math.round(st.position.ageMs / 60000)} menit lalu`;
+      return [
+        `📏 Jarak ke "${place.name}" (${kindLabel(place.kind)}): ${formatDistance(d)} — ${st.position.fresh ? 'dari posisi terkini' : `dari lokasi terakhir yang diketahui (${ageStr}, bukan live)`}.`,
+        d <= place.radius_m
+          ? `Anda berada DI DALAM area "${place.name}" (radius ${place.radius_m} m).`
+          : `Anda di luar area "${place.name}" (±${Math.round(d - place.radius_m)} m dari batas area, radius ${place.radius_m} m).`,
+      ].join('\n');
+    }
+  }
+
   // "di mana rumah?" — answered from the saved place's own record. A name that
   // is not saved is said so, with the exact way to save it. Never guessed.
   if (PLACE_ASK.test(t) && !SELF_ASK.test(t)) {
@@ -208,6 +246,8 @@ export function quickLocation(location, text, { chatId = null } = {}) {
         : `Lokasi terakhir yang diketahui (bukan live): ${st.position.lat.toFixed(5)}, ${st.position.lon.toFixed(5)}, terakhir terlihat ${ageStr}.`,
     ];
     if (st.place) lines.push(`Di dalam area yang Anda beri nama "${st.place.label}".`);
+    const near = Array.isArray(st.places) ? st.places.slice(0, 3) : [];
+    if (near.length) lines.push(`Jarak: ${near.map((p) => `${p.name} ${formatDistance(p.distanceM)}${p.inside ? ' (di dalam area)' : ''}`).join(' · ')}.`);
     if (st.movement?.state === 'moving') lines.push(`Sedang bergerak${Number.isFinite(st.position.speedMps) && st.position.speedMps > 0.5 ? ` sekitar ${formatSpeed(st.position.speedMps)}` : ''}.`);
     else if (st.movement?.state === 'stopped') lines.push('Perangkat tampak sedang berhenti.');
     if (st.position.battery != null) lines.push(`Baterai HP pelacak: ${Math.round(st.position.battery)}%.`);
@@ -319,16 +359,25 @@ export function quickLocationPin(location, { chatId, lat, lon, title = null } = 
 
 /** The saved place whose name (or alias) appears in the message; null otherwise. */
 function findSavedPlace(location, text) {
+  return findSavedPlaces(location, text)[0] || null;
+}
+
+/** Every saved place whose name (or alias) appears in the message, longest name first, unique. */
+function findSavedPlaces(location, text) {
   try {
     const t = String(text || '').toLowerCase();
-    const places = location?.store?.places?.list?.() || [];
-    return places
+    const places = (location?.store?.places?.list?.() || [])
       .slice()
-      .sort((a, b) => String(b.name).length - String(a.name).length)
-      .find((p) => (p.name.length >= 3 && t.includes(p.name.toLowerCase()))
-        || (p.aliases || []).some((a) => String(a).length >= 3 && t.includes(String(a).toLowerCase()))) || null;
+      .sort((a, b) => String(b.name).length - String(a.name).length);
+    const out = [];
+    for (const p of places) {
+      const hit = (p.name.length >= 3 && t.includes(p.name.toLowerCase()))
+        || (p.aliases || []).some((a) => String(a).length >= 3 && t.includes(String(a).toLowerCase()));
+      if (hit && !out.some((x) => x.id === p.id)) out.push(p);
+    }
+    return out;
   } catch {
-    return null;
+    return [];
   }
 }
 
@@ -363,6 +412,7 @@ function cleanPlaceName(s) {
 const KIND_HINTS = [
   [/\b(rumah|home)\b/i, 'home'],
   [/\b(kantor|kost|kosan|kos|kerja)\b/i, 'office'],
+  [/\b(toko|grosir|swalayan|ritel)\b/i, 'shop'],
   [/\b(bengkel|workshop|servis)\b/i, 'workshop'],
   [/\b(spbu|pom bensin|pertamina|shell|bensin)\b/i, 'fuel'],
   [/\b(warung|makan|resto|kafe|kopi|warkop|bakso|mie|sate|nasi|ayam)\b/i, 'food'],

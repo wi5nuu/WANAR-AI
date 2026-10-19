@@ -140,7 +140,10 @@ export default function Tracker() {
   }, [sendBatch]);
 
   useEffect(() => {
-    const i = setInterval(flush, 20000);
+    // Samples are produced at the server's adaptive cadence (often ~8 s), so a
+    // short flush keeps the dashboard near-realtime instead of batching for
+    // 20 s. When no sample was produced this is a no-op (buffer is empty).
+    const i = setInterval(flush, 5000);
     const onOnline = () => { say('Jaringan kembali — mengirim antrean.'); flush(); };
     window.addEventListener('online', onOnline);
     return () => { clearInterval(i); window.removeEventListener('online', onOnline); };
@@ -236,6 +239,12 @@ export default function Tracker() {
 
   const start = useCallback(async () => {
     if (!navigator.geolocation) { say('Browser ini tidak menyediakan GPS (navigator.geolocation).'); return; }
+    // Browsers silently block geolocation on plain-HTTP LAN pages: no permission
+    // prompt ever appears, which looks like "GPS rusak". Say it plainly.
+    if (window.isSecureContext === false) {
+      say('Halaman ini bukan https:// atau localhost, jadi browser memblokir GPS tanpa menampilkan izin. Buka halaman ini lewat https:// (domain) atau localhost. Untuk akses dari HP, gunakan alamat https://, bukan http://192.168...');
+      return;
+    }
     const ok = await checkAuth();
     if (!ok) return;
     runningRef.current = true;
@@ -244,7 +253,16 @@ export default function Tracker() {
     requestWake();
     watchRef.current = navigator.geolocation.watchPosition(
       onPosition,
-      (err) => say(`GPS error: ${err.message}`),
+      (err) => {
+        const msg = err.code === 1
+          ? 'izin lokasi ditolak — buka pengaturan situs di browser, izinkan Lokasi, lalu mulai lagi'
+          : err.code === 2
+            ? 'posisi tidak tersedia — aktifkan GPS/Location Services di perangkat'
+            : err.code === 3
+              ? 'GPS tidak menjawab (timeout) — coba di area terbuka'
+              : err.message;
+        say(`GPS error: ${msg}`);
+      },
       { enableHighAccuracy: true, maximumAge: 5000, timeout: 30000 },
     );
   }, [checkAuth, onPosition, requestWake, say]);

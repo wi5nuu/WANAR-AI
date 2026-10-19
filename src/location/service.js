@@ -175,6 +175,11 @@ export class LocationService extends EventEmitter {
 
     const machine = this._advance(session, { accepted });
     const last = this.store.samples.last(session.id);
+    // Geofence transitions ("tiba di Kantor", "meninggalkan Rumah") are
+    // recomputed from the stored history plus this batch, so a server restart
+    // changes nothing and a phone retry (dropped as duplicates earlier) cannot
+    // double-fire.
+    try { this._detectPlaceTransitions(prev, accepted); } catch { /* notices are best effort */ }
 
     this._changed('samples', {
       sessionId: session.id,
@@ -496,11 +501,109 @@ export class LocationService extends EventEmitter {
 
   /** Converts a known place into a candidate label without any network call (live UI). */
   _placeLabelAt(lat, lon, accuracy) {
+    let best = null;
     for (const p of this._nearbyPlaces(lat, lon)) {
       const d = haversineM(lat, lon, p.lat, p.lon);
-      if (d <= p.radius_m) return { label: p.name, kind: p.kind, confidence: 0.9, source: 'geofence', accuracy };
+      if (d <= p.radius_m && (best == null || d - p.radius_m < best.slack)) best = { place: p, d, slack: d - p.radius_m };
+    }
+    if (!best) return null;
+    return {
+      label: best.place.name,
+      kind: best.place.kind,
+      confidence: 0.9,
+      source: 'geofence',
+      accuracy,
+      placeId: best.place.id,
+      distanceM: Math.round(best.d),
+      radiusM: best.place.radius_m,
+    };
+  }
+
+  /**
+   * Which known place a fix is inside — with hysteresis so a single noisy GPS
+   * point can never report "left home": while the previous fix was inside a
+   * place, leaving requires being clearly outside it (radius + accuracy slack).
+   * Entering a place whose fence is narrower than the GPS error is refused:
+   * a ±200 m fix proves nothing about a 120 m area.
+   */
+  _fenceState(lat, lon, accuracy = null, prevPlaceId = null) {
+    let best = null;
+    for (const p of this._nearbyPlaces(lat, lon)) {
+      const d = haversineM(lat, lon, p.lat, p.lon);
+      if (d <= p.radius_m && (best == null || d - p.radius_m < best.slack)) best = { place: p, d, slack: d - p.radius_m };
+    }
+    if (best) {
+      const acc = Number.isFinite(accuracy) ? accuracy : null;
+      if (prevPlaceId !== best.place.id && acc != null && acc > best.place.radius_m * 2) return null;
+      return { place: best.place, distanceM: Math.round(best.d), inside: true };
+    }
+    if (prevPlaceId) {
+      const prev = this.store.places.get(prevPlaceId);
+      if (prev) {
+        const d = haversineM(lat, lon, prev.lat, prev.lon);
+        const margin = Math.max(30, Number.isFinite(accuracy) ? accuracy : 0);
+        if (d <= prev.radius_m + margin) return { place: prev, distanceM: Math.round(d), inside: true, hysteresis: true };
+      }
     }
     return null;
+  }
+
+  /**
+   * Emits "arrived at / left <place>" notices and events for one batch. The
+   * starting fence state is rebuilt by replaying the previous 30 minutes of
+   * stored fixes with the same hysteresis, so a restart — or an edge-of-fence
+   * fix — can never flip the state. Pure function of the data: the same batch
+   * always yields the same transitions (retried samples were already dropped
+   * as duplicates, so nothing fires twice), and notices are deduplicated in
+   * the ledger by place + timestamp anyway.
+   */
+  _detectPlaceTransitions(prevSample, accepted) {
+    const s = this.settings();
+    if (!s.notify.arrival && !s.notify.departure) return null;
+    // A single "was the previous fix inside?" test would misread an
+    // edge-of-fence fix (kept inside by hysteresis) as "outside" and silently
+    // lose the next real departure — replay the stored fixes instead.
+    let current = null;
+    if (prevSample) {
+      const history = this.store.samples.range(prevSample.session_id, prevSample.ts - 30 * 60_000, prevSample.ts, 400);
+      for (const smp of history) current = this._fenceState(smp.lat, smp.lon, smp.accuracy, current?.place?.id || null);
+    }
+    let lastChange = null;
+    for (const smp of accepted) {
+      const next = this._fenceState(smp.lat, smp.lon, smp.accuracy, current?.place?.id || null);
+      const from = current?.place || null;
+      const to = next?.place || null;
+      if ((from?.id || null) === (to?.id || null)) { current = next; continue; }
+      const at = smp.ts;
+      if (from && s.notify.departure) {
+        const d = next?.distanceM ?? Math.round(haversineM(smp.lat, smp.lon, from.lat, from.lon));
+        this._notice(
+          'departure',
+          `Meninggalkan ${from.name} pukul ${localTime(at)} — sekarang ±${formatDistance(d)} dari pusat area (radius ${from.radius_m} m).`,
+          `place-exit:${from.id}:${at}`
+        );
+      }
+      if (to && s.notify.arrival) {
+        this._notice(
+          'arrival',
+          `Tiba di ${to.name} pukul ${localTime(at)} (±${formatDistance(next.distanceM)} dari pusat, radius ${to.radius_m} m).`,
+          `place-enter:${to.id}:${at}`
+        );
+      }
+      const subject = to || from;
+      this.store.events.log({
+        kind: to ? 'place_entered' : 'place_exited',
+        data: { placeId: subject.id, name: subject.name, from: from?.name || null, to: to?.name || null, distanceM: next?.distanceM ?? null, at },
+      });
+      this._changed('place_change', {
+        at,
+        from: from ? { id: from.id, name: from.name } : null,
+        to: to ? { id: to.id, name: to.name } : null,
+      });
+      lastChange = { at, from: from?.name || null, to: to?.name || null };
+      current = next;
+    }
+    return lastChange;
   }
 
   /** The owner corrects a stop: "ini warung Bu Yati". Stored and offered to personal memory. */
@@ -623,10 +726,26 @@ export class LocationService extends EventEmitter {
 
     let movement = { state: 'unknown', speedMps: null, since: null };
     let place = null;
+    let places = [];
     if (last) {
       const recent = this.store.samples.range(last.session_id, last.ts - 30 * 60_000, last.ts, 400);
       movement = movementState(recent);
       place = this._placeLabelAt(last.lat, last.lon, last.accuracy);
+      // Distance from every saved place, nearest first — the "jarak dari rumah"
+      // readout. Straight-line distance, computed here so no caller ever guesses.
+      places = this.store.places.list().map((p) => {
+        const d = haversineM(last.lat, last.lon, p.lat, p.lon);
+        return {
+          id: p.id,
+          name: p.name,
+          kind: p.kind,
+          radiusM: p.radius_m,
+          distanceM: Math.round(d),
+          inside: d <= p.radius_m,
+          visits: p.visits,
+          lastVisitAt: p.last_visit_at,
+        };
+      }).sort((a, b) => a.distanceM - b.distanceM);
     }
     const openTrip = this.store.trips.openTrip();
     const openStop = this.store.stops.open();
@@ -672,6 +791,7 @@ export class LocationService extends EventEmitter {
         : { accuracyM: null, level: 'unknown', message: 'Belum ada data lokasi.' },
       movement,
       place,
+      places,
       openTrip,
       openStop,
       today: {

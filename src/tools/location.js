@@ -31,7 +31,7 @@ export const locationTools = [
       name: 'location_status',
       description:
         'Posisi terkini atau terakhir yang diketahui dari pelacakan: koordinat, akurasi, umur data (live atau lokasi terakhir), tempat yang dikenal, ' +
-        'status bergerak/diam, dan ringkasan jarak hari ini (lintasan GPS). Jujur soal kesegaran data.',
+        'jarak garis lurus ke setiap tempat tersimpan (Rumah, Kantor, Toko, …), status bergerak/diam, dan ringkasan jarak hari ini (lintasan GPS). Jujur soal kesegaran data.',
       parameters: { type: 'object', properties: {}, required: [] },
     },
   },
@@ -187,6 +187,9 @@ export async function executeLocationTool(name, args = {}) {
             label: st.position.label, battery: st.position.battery,
           },
           place: st.place ? { name: st.place.label, kind: st.place.kind } : null,
+          places: (st.places || []).slice(0, 8).map((p) => ({
+            name: p.name, kind: KIND_LABELS[p.kind] || p.kind, distance: formatDistance(p.distanceM), inside: p.inside,
+          })),
           movement: st.movement.state,
           today: { distance: formatDistance(st.today.distanceM), trips: st.today.trips, stops: st.today.stops },
           honesty: 'Jarak adalah lintasan GPS, bukan odometer. "Lokasi terakhir" bukan posisi live bila data sudah lama.',

@@ -293,6 +293,129 @@ describe('location store + service pipeline', () => {
   });
 });
 
+// ======================================================== geofence transitions
+
+describe('geofence transitions: "tiba di" / "meninggalkan"', () => {
+  /** A named place with a geohash, exactly like the dashboard creates it. */
+  const savedPlace = (t, { name, kind, lat, lon, radiusM }) => t.store.places.create({
+    name, kind, lat, lon, radiusM, source: 'user', confirmState: 'confirmed', geohash: geohash(lat, lon, 6),
+  });
+
+  it('announces arrival, departure and the next arrival — each exactly once', () => {
+    const t = build();
+    savedPlace(t, { name: 'Rumah', kind: 'home', lat: BASE.lat, lon: BASE.lon, radiusM: 150 });
+    const kantor = move(BASE.lat, BASE.lon, 3000);
+    savedPlace(t, { name: 'Kantor', kind: 'office', lat: kantor.lat, lon: kantor.lon, radiusM: 200 });
+
+    // 1) The first fix lands inside Rumah → "Tiba di Rumah".
+    t.set(T0 + 1000);
+    t.svc.ingest([{ ts: T0 + 1000, lat: BASE.lat, lon: BASE.lon, accuracy: 10, speed: 0 }], { sessionId: t.session.id });
+
+    // 2) Three minutes later the phone is 600 m east — clearly outside → "Meninggalkan Rumah".
+    t.set(T0 + 3 * 60_000);
+    const midway = move(BASE.lat, BASE.lon, 600);
+    t.svc.ingest([{ ts: T0 + 3 * 60_000, lat: midway.lat, lon: midway.lon, accuracy: 15, speed: 8 }], { sessionId: t.session.id });
+
+    // 3) The ride reaches the office → "Tiba di Kantor".
+    t.set(T0 + 6 * 60_000);
+    t.svc.ingest([{ ts: T0 + 6 * 60_000, lat: kantor.lat, lon: kantor.lon, accuracy: 15, speed: 8 }], { sessionId: t.session.id });
+
+    let notices = t.store.notices.list();
+    expect(notices.find((n) => n.kind === 'arrival' && /Tiba di Rumah/.test(n.text))).toBeTruthy();
+    expect(notices.find((n) => n.kind === 'departure' && /Meninggalkan Rumah/.test(n.text))).toBeTruthy();
+    expect(notices.find((n) => n.kind === 'arrival' && /Tiba di Kantor/.test(n.text))).toBeTruthy();
+    expect(notices.filter((n) => n.kind === 'departure')).toHaveLength(1);
+
+    // The phone retries the last batch after a network gap: nothing fires twice.
+    t.svc.ingest([{ ts: T0 + 6 * 60_000, lat: kantor.lat, lon: kantor.lon, accuracy: 15, speed: 8 }], { sessionId: t.session.id });
+    notices = t.store.notices.list();
+    expect(notices.filter((n) => n.kind === 'arrival' && /Tiba di Kantor/.test(n.text))).toHaveLength(1);
+
+    const kinds = t.store.events.recent().map((e) => e.kind);
+    expect(kinds).toContain('place_entered');
+    expect(kinds).toContain('place_exited');
+  });
+
+  it('refuses to believe one noisy fix left home (hysteresis)', () => {
+    const t = build();
+    savedPlace(t, { name: 'Rumah', kind: 'home', lat: BASE.lat, lon: BASE.lon, radiusM: 120 });
+    t.set(T0 + 1000);
+    t.svc.ingest([{ ts: T0 + 1000, lat: BASE.lat, lon: BASE.lon, accuracy: 10 }], { sessionId: t.session.id });
+
+    // 130 m out with ±25 m accuracy sits inside the noise margin → still "home".
+    t.set(T0 + 3 * 60_000);
+    const edge = move(BASE.lat, BASE.lon, 130);
+    t.svc.ingest([{ ts: T0 + 3 * 60_000, lat: edge.lat, lon: edge.lon, accuracy: 25 }], { sessionId: t.session.id });
+    expect(t.store.notices.list().filter((n) => n.kind === 'departure')).toHaveLength(0);
+
+    // 400 m out is a real departure and is reported.
+    t.set(T0 + 6 * 60_000);
+    const away = move(BASE.lat, BASE.lon, 400);
+    t.svc.ingest([{ ts: T0 + 6 * 60_000, lat: away.lat, lon: away.lon, accuracy: 25 }], { sessionId: t.session.id });
+    expect(t.store.notices.list().filter((n) => n.kind === 'departure')).toHaveLength(1);
+  });
+
+  it('refuses an entry the GPS accuracy cannot support', () => {
+    const t = build();
+    const kantor = move(BASE.lat, BASE.lon, 1000);
+    savedPlace(t, { name: 'Kantor', kind: 'office', lat: kantor.lat, lon: kantor.lon, radiusM: 150 });
+
+    // A fix on the office door with ±400 m accuracy proves nothing about a 150 m area.
+    t.set(T0 + 1000);
+    t.svc.ingest([{ ts: T0 + 1000, lat: kantor.lat, lon: kantor.lon, accuracy: 400 }], { sessionId: t.session.id });
+    expect(t.store.notices.list().filter((n) => n.kind === 'arrival')).toHaveLength(0);
+
+    // A clean fix a moment later is believed.
+    t.set(T0 + 3 * 60_000);
+    t.svc.ingest([{ ts: T0 + 3 * 60_000, lat: kantor.lat, lon: kantor.lon, accuracy: 10 }], { sessionId: t.session.id });
+    expect(t.store.notices.list().filter((n) => n.kind === 'arrival')).toHaveLength(1);
+  });
+
+  it('can silence departure messages without losing the event record', () => {
+    const t = build();
+    savedPlace(t, { name: 'Rumah', kind: 'home', lat: BASE.lat, lon: BASE.lon, radiusM: 120 });
+    t.svc.updateSettings({ notify: { departure: false } });
+    t.set(T0 + 1000);
+    t.svc.ingest([{ ts: T0 + 1000, lat: BASE.lat, lon: BASE.lon, accuracy: 10 }], { sessionId: t.session.id });
+    t.set(T0 + 3 * 60_000);
+    const away = move(BASE.lat, BASE.lon, 500);
+    t.svc.ingest([{ ts: T0 + 3 * 60_000, lat: away.lat, lon: away.lon, accuracy: 15 }], { sessionId: t.session.id });
+    expect(t.store.notices.list().filter((n) => n.kind === 'departure')).toHaveLength(0);
+    expect(t.store.events.recent().map((e) => e.kind)).toContain('place_exited');
+  });
+
+  it('reports straight-line distance to every saved place in currentStatus()', () => {
+    const t = build();
+    savedPlace(t, { name: 'Rumah', kind: 'home', lat: BASE.lat, lon: BASE.lon, radiusM: 120 });
+    const kantor = move(BASE.lat, BASE.lon, 3000);
+    savedPlace(t, { name: 'Kantor', kind: 'office', lat: kantor.lat, lon: kantor.lon, radiusM: 200 });
+
+    const p = move(BASE.lat, BASE.lon, 250);
+    t.set(T0 + 1000);
+    t.svc.ingest([{ ts: T0 + 1000, lat: p.lat, lon: p.lon, accuracy: 10 }], { sessionId: t.session.id });
+
+    const st = t.svc.currentStatus();
+    expect(st.places).toHaveLength(2);
+    expect(st.places[0]).toMatchObject({ name: 'Rumah', inside: false, radiusM: 120 });
+    expect(st.places[0].distanceM).toBeGreaterThanOrEqual(245);
+    expect(st.places[0].distanceM).toBeLessThanOrEqual(255);
+    expect(st.places[1]).toMatchObject({ name: 'Kantor', inside: false });
+    expect(st.places[1].distanceM).toBeGreaterThan(2700);
+    expect(st.place).toBeNull(); // outside both fences — never guessed
+
+    // Step inside home: the detected place carries its name, kind, distance and radius.
+    t.set(T0 + 4 * 60_000);
+    const inside = move(BASE.lat, BASE.lon, 60);
+    t.svc.ingest([{ ts: T0 + 4 * 60_000, lat: inside.lat, lon: inside.lon, accuracy: 8 }], { sessionId: t.session.id });
+    const st2 = t.svc.currentStatus();
+    expect(st2.place).toMatchObject({ label: 'Rumah', kind: 'home', radiusM: 120, source: 'geofence' });
+    expect(st2.place.distanceM).toBeGreaterThanOrEqual(55);
+    expect(st2.place.distanceM).toBeLessThanOrEqual(65);
+    expect(st2.place.placeId).toBeTruthy();
+    expect(st2.places[0].inside).toBe(true);
+  });
+});
+
 // ================================================================== routes
 
 function makeApp(module) {
@@ -344,6 +467,39 @@ describe('location routes', () => {
     expect(status.body.status.tracking.enabled).toBe(true);
   });
 
+  it('accepts a browser-GPS fix and reports it as the live position', async () => {
+    const db = new Database(':memory:');
+    const store = createLocationStore(db);
+    const svc = new LocationService({ store, now: () => T0, env: {} });
+    const app = makeApp({ store, service: svc });
+
+    // This is the endpoint the dashboard's "Gunakan lokasi saat ini" calls
+    // after the browser shows its permission prompt.
+    const res = await request(app).post('/api/location/here')
+      .send({ lat: -6.2445669, lon: 106.9933984, accuracy: 14, ts: T0 });
+    expect(res.status).toBe(200);
+    expect(res.body.inserted).toBe(1);
+    expect(res.body.status.position).toMatchObject({ lat: -6.2445669, lon: 106.9933984 });
+    expect(res.body.status.position.source).toBe('browser');
+    expect(store.samples.count()).toBe(1);
+
+    // Empty or null coordinates are refused, never stored as 0,0.
+    const bad = await request(app).post('/api/location/here').send({ lat: '', lon: null });
+    expect(bad.status).toBe(400);
+  });
+
+  it('never mixes a browser-GPS fix into a synthetic ride', async () => {
+    const db = new Database(':memory:');
+    const store = createLocationStore(db);
+    const svc = new LocationService({ store, now: () => T0, env: {} });
+    svc.startSession({ label: 'simulasi (data sintetis, bukan GPS nyata)' });
+    const app = makeApp({ store, service: svc });
+    const res = await request(app).post('/api/location/here')
+      .send({ lat: -6.2445669, lon: 106.9933984, accuracy: 14, ts: T0 });
+    expect(res.status).toBe(409);
+    expect(store.samples.count()).toBe(0);
+  });
+
   it('runs the simulated ride without mixing it into a live session', async () => {
     const db = new Database(':memory:');
     const store = createLocationStore(db);
@@ -384,7 +540,40 @@ describe('location routes', () => {
     expect(sanitizeLocationSettings({ maxAccuracyM: 99_999 }).maxAccuracyM).toBe(5_000);
     expect(() => sanitizeLocationSettings({ minMoveM: 'abc' })).toThrow();
     expect(sanitizeLocationSettings({ notify: { tripStart: false } }).notify.tripStart).toBe(false);
+    expect(sanitizeLocationSettings({ notify: { departure: false } }).notify.departure).toBe(false);
     expect(DEFAULT_SETTINGS.adaptiveIntervalMs).toBe(8_000);
+    expect(DEFAULT_SETTINGS.notify.departure).toBe(true);
+  });
+
+  it('creates, moves and reclassifies places through the API', async () => {
+    const db = new Database(':memory:');
+    const store = createLocationStore(db);
+    const svc = new LocationService({ store, now: () => T0, env: {} });
+    const app = makeApp({ store, service: svc });
+
+    const created = await request(app).post('/api/location/places')
+      .send({ name: 'ASHAR GROSIR PARFUM BEKASI', kind: 'shop', lat: -6.2356042, lon: 107.0072126, radiusM: 120 });
+    expect(created.status).toBe(201);
+    expect(created.body.place).toMatchObject({ name: 'ASHAR GROSIR PARFUM BEKASI', kind: 'shop', radius_m: 120 });
+    expect(created.body.place.geohash).toBe(geohash(-6.2356042, 107.0072126, 6));
+
+    // Corrected coordinates move the fence and refresh its geohash.
+    const moved = await request(app).patch(`/api/location/places/${created.body.place.id}`)
+      .send({ lat: -6.2445669, lon: 106.9933984 });
+    expect(moved.status).toBe(200);
+    expect(moved.body.place.lat).toBeCloseTo(-6.2445669, 6);
+    expect(moved.body.place.lon).toBeCloseTo(106.9933984, 6);
+    expect(moved.body.place.geohash).toBe(geohash(-6.2445669, 106.9933984, 6));
+
+    const badKind = await request(app).patch(`/api/location/places/${created.body.place.id}`).send({ kind: 'hangout' });
+    expect(badKind.status).toBe(400);
+    const badCoords = await request(app).patch(`/api/location/places/${created.body.place.id}`).send({ lat: 99 });
+    expect(badCoords.status).toBe(400);
+    // Empty/null must be refused, never coerced to 0,0 (Null Island).
+    const nullCoords = await request(app).patch(`/api/location/places/${created.body.place.id}`).send({ lat: null });
+    expect(nullCoords.status).toBe(400);
+    const nullCreate = await request(app).post('/api/location/places').send({ name: 'Tanpa koordinat', lat: null, lon: null });
+    expect(nullCreate.status).toBe(400);
   });
 });
 
@@ -405,6 +594,42 @@ describe('quick location intents (code, no model)', () => {
     const t = build();
     expect(quickLocation(t.svc, 'berapa jam saya kerja hari ini?')).toBeNull();
     expect(quickLocation(t.svc, 'tolong buatkan email')).toBeNull();
+  });
+
+  // ------------------------------------------------- distance from places
+
+  it('answers "berapa jauh dari rumah?" and "jarak rumah ke kantor?" from saved data', () => {
+    const t = build();
+    // No places saved yet: the question matches nothing and is not guessed.
+    expect(quickLocation(t.svc, 'berapa jauh dari rumah?')).toBeNull();
+
+    t.store.places.create({
+      name: 'Rumah', kind: 'home', lat: BASE.lat, lon: BASE.lon, radiusM: 120,
+      source: 'user', confirmState: 'confirmed', geohash: geohash(BASE.lat, BASE.lon, 6),
+    });
+    const kantor = move(BASE.lat, BASE.lon, 3000);
+    t.store.places.create({
+      name: 'Kantor', kind: 'office', lat: kantor.lat, lon: kantor.lon, radiusM: 200,
+      source: 'user', confirmState: 'confirmed', geohash: geohash(kantor.lat, kantor.lon, 6),
+    });
+
+    // Home is known but no position has ever been stored: say so, don't invent one.
+    expect(quickLocation(t.svc, 'berapa jauh dari rumah?')).toMatch(/Belum ada posisi tersimpan/);
+
+    const p = move(BASE.lat, BASE.lon, 300);
+    t.set(T0 + 1000);
+    t.svc.ingest([{ ts: T0 + 1000, lat: p.lat, lon: p.lon, accuracy: 10 }], { sessionId: t.session.id });
+
+    const one = quickLocation(t.svc, 'berapa jauh dari rumah?');
+    expect(one).toMatch(/📏 Jarak ke "Rumah"/);
+    expect(one).toMatch(/dari posisi terkini/);
+    expect(one).toMatch(/Anda di luar area "Rumah" \(±\d+ m dari batas area, radius 120 m\)/);
+
+    // Two names in the message keep the owner's order: Rumah → Kantor.
+    const two = quickLocation(t.svc, 'jarak rumah ke kantor?');
+    expect(two).toMatch(/📏 Jarak "Rumah" → "Kantor"/);
+    expect(two).toMatch(/km/);
+    expect(two).toMatch(/garis lurus/);
   });
 
   // ------------------------------------------------- places from chat (pins)

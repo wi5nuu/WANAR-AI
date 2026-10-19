@@ -16,6 +16,7 @@
  *   GET    /overview  /status  /day  /range  /stops  /places  /devices  /privacy
  *   GET    /events                      SSE (live position, trips, stops, notices)
  *   POST   /session/start|pause|resume|stop
+ *   POST   /here                        live fix from the dashboard's browser GPS
  *   POST   /stops/:id/correct           "ini warung Bu Yati"
  *   POST   /places            PATCH /places/:id    DELETE /places/:id
  *   POST   /devices           DELETE /devices/:id  (revoke token)
@@ -32,6 +33,7 @@ import { createAccessGuard, issueStreamTicket } from '../automation/routes.js';
 import { LocationError } from './service.js';
 import { hashToken } from './store.js';
 import { PLACE_KINDS } from './classify.js';
+import { geohash } from './geo.js';
 
 const STATUS_FOR_CODE = {
   not_found: 404,
@@ -78,7 +80,7 @@ export function sanitizeLocationSettings(patch = {}) {
   if (patch.enabled !== undefined) out.enabled = BOOL(patch.enabled);
   if (patch.notify && typeof patch.notify === 'object') {
     const n = {};
-    for (const key of ['tripStart', 'tripEnd', 'arrival', 'unknownStop', 'longStop', 'quietHours']) {
+    for (const key of ['tripStart', 'tripEnd', 'arrival', 'departure', 'unknownStop', 'longStop', 'quietHours']) {
       if (patch.notify[key] !== undefined) n[key] = BOOL(patch.notify[key]);
     }
     if (patch.notify.maxPerHour !== undefined) {
@@ -236,6 +238,46 @@ export function createLocationRouter({ location, emergency = null, rateLimiters 
 
   router.get('/status', wrap((req, res) => res.json({ success: true, status: svc.currentStatus() })));
 
+  // The owner's dashboard can read the DEVICE's own GPS through the browser.
+  // This is the only path that makes the browser show its "izinkan lokasi"
+  // prompt; it feeds the same pipeline as the phone tracker (trip, geofence,
+  // distances), so nothing here is a separate or invented position.
+  router.post('/here', act, wrap((req, res) => {
+    const b = req.body || {};
+    const lat = b.lat === '' || b.lat == null ? NaN : Number(b.lat);
+    const lon = b.lon === '' || b.lon == null ? NaN : Number(b.lon);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) {
+      throw new LocationError('Koordinat GPS browser tidak valid.', 'bad_request');
+    }
+    const accuracy = b.accuracy == null || b.accuracy === '' ? null : Number(b.accuracy);
+    if (accuracy != null && (!Number.isFinite(accuracy) || accuracy < 0 || accuracy > 100_000)) {
+      throw new LocationError('Akurasi GPS browser tidak valid.', 'bad_request');
+    }
+    const open = store.sessions.active();
+    // Never mix a real browser fix into a synthetic ride: the simulation's
+    // tracks are deliberately labelled as not-real and must stay that way.
+    if (open && /^simulasi/i.test(open.label || '')) {
+      throw new LocationError('Sesi simulasi sedang berjalan. Hentikan dulu agar GPS browser tidak tercampur data sintetis.', 'bad_state');
+    }
+    // startSession() resumes a paused session; if tracking is off it throws.
+    const session = open && open.status === 'active' ? open : svc.startSession({ label: 'GPS browser' });
+    const ts = Number(b.ts);
+    const now = svc.now();
+    // A browser fix is live, not a queued batch. If the device clock is clearly
+    // wrong (a classic reason GPS "does not work"), use server time instead of
+    // rejecting every point as a future/old timestamp.
+    const safeTs = Number.isFinite(ts) && ts > 0 && Math.abs(ts - now) <= 5 * 60_000 ? ts : now;
+    const r = svc.ingest([{
+      ts: safeTs,
+      lat,
+      lon,
+      accuracy,
+      battery: Number.isFinite(Number(b.battery)) ? Number(b.battery) : null,
+      source: 'browser',
+    }], { sessionId: session.id });
+    res.json({ success: true, ...r, status: svc.currentStatus() });
+  }));
+
   router.get('/overview', wrap((req, res) => {
     const st = svc.currentStatus();
     const day = svc.daySummary(req.query.date || svc.today());
@@ -314,8 +356,9 @@ export function createLocationRouter({ location, emergency = null, rateLimiters 
   router.get('/places', wrap((req, res) => res.json({ success: true, places: store.places.list({ includeInactive: BOOL(req.query.all) }) })));
   router.post('/places', act, wrap((req, res) => {
     const b = req.body || {};
-    const lat = Number(b.lat);
-    const lon = Number(b.lon);
+    // A missing/empty value must never be coerced to 0,0 by Number(null).
+    const lat = b.lat === '' || b.lat == null ? NaN : Number(b.lat);
+    const lon = b.lon === '' || b.lon == null ? NaN : Number(b.lon);
     if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) {
       throw new LocationError('Koordinat tempat tidak valid.', 'bad_request');
     }
@@ -330,7 +373,7 @@ export function createLocationRouter({ location, emergency = null, rateLimiters 
       source: 'user',
       confirmState: b.confirmState === 'suggested' ? 'suggested' : 'confirmed',
       aliases: Array.isArray(b.aliases) ? b.aliases.slice(0, 10).map((a) => String(a).slice(0, 60)) : null,
-      geohash: null,
+      geohash: geohash(lat, lon, 6),
     });
     res.status(201).json({ success: true, place });
   }));
@@ -341,6 +384,21 @@ export function createLocationRouter({ location, emergency = null, rateLimiters 
     if (b.kind !== undefined) {
       if (!PLACE_KINDS.includes(b.kind)) throw new LocationError(`Kategori "${b.kind}" tidak dikenal.`, 'bad_request');
       patch.kind = b.kind;
+    }
+    if (b.lat !== undefined || b.lon !== undefined) {
+      const cur = store.places.get(req.params.id);
+      if (!cur) throw new LocationError('Tempat tidak ditemukan.', 'not_found');
+      // null/empty means "not provided", never the coordinate 0.
+      const rawLat = b.lat !== undefined ? b.lat : cur.lat;
+      const rawLon = b.lon !== undefined ? b.lon : cur.lon;
+      const lat = rawLat === '' || rawLat == null ? NaN : Number(rawLat);
+      const lon = rawLon === '' || rawLon == null ? NaN : Number(rawLon);
+      if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) {
+        throw new LocationError('Koordinat tempat tidak valid.', 'bad_request');
+      }
+      patch.lat = lat;
+      patch.lon = lon;
+      patch.geohash = geohash(lat, lon, 6);
     }
     if (b.radiusM !== undefined) patch.radius_m = INT(b.radiusM, 25, 2000) || 120;
     if (b.confirmState !== undefined && ['confirmed', 'suggested', 'rejected'].includes(b.confirmState)) patch.confirm_state = b.confirmState;

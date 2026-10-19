@@ -19,6 +19,7 @@
  */
 
 import { formatMinutes, formatRupiah, formatDateId } from '../worklog/time.js';
+import { formatDistance } from '../location/geo.js';
 
 const MAX_TOTAL = 5200;
 const SNIPPET = 320;
@@ -242,6 +243,10 @@ export function createOwnerContext({ db, automation = null, worklog = null, memo
         lines.push('- Posisi: belum ada data lokasi (pelacakan mati atau HP belum mengirim).');
       } else {
         lines.push(`- ${st.position.fresh ? 'Posisi terkini' : `Lokasi terakhir yang diketahui (${Math.round(st.position.ageMs / 60000)} menit lalu)`}: ${st.position.lat.toFixed(5)}, ${st.position.lon.toFixed(5)} (±${st.position.accuracy != null ? `${Math.round(st.position.accuracy)} m` : '?'})${st.place ? `, di area "${st.place.label}"` : ''}.`);
+        const near = Array.isArray(st.places) ? st.places.slice(0, 5) : [];
+        if (near.length) {
+          lines.push(`- Jarak dari titik terakhir (garis lurus): ${near.map((p) => `${p.name} ${formatDistance(p.distanceM)}${p.inside ? ' (di dalam area)' : ''}`).join('; ')}.`);
+        }
         lines.push(`- Hari ini: ${(st.today.distanceM / 1000).toFixed(1)} km lintasan GPS, ${st.today.trips} perjalanan, ${st.today.stops} kunjungan (jarak GPS ≠ odometer).`);
       }
       try {

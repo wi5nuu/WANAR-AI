@@ -270,11 +270,11 @@ bisa menyetujui, dan frasa "kirim" yang tidak jelas tetap jatuh ke alur biasa.
 
 ## Pelacakan Lokasi, Darurat, Motor & Memori Pribadi
 
-Dasbor: **http://localhost:3000/tracking** — halaman pelacak untuk HP: **http://localhost:3000/track**.
+Dasbor: **http://localhost:3000/tracking** — halaman pelacak untuk HP: **http://localhost:3000/track**. Untuk GPS dari HP, buka lewat **https://** (domain) atau **localhost**; browser memblokir lokasi di `http://192.168...` tanpa menampilkan izin.
 
 | Tab | Isi |
 | --- | --- |
-| **Live** | Peta Leaflet + OpenStreetMap (gratis, tanpa API key), posisi terakhir + kualitas GPS, kontrol sesi pelacakan (mulai/jeda/lanjutkan/hentikan), daftar perangkat + token perangkat, dan simulasi perjalanan untuk uji coba tanpa GPS nyata |
+| **Live** | Peta Leaflet + OpenStreetMap (gratis, tanpa API key), posisi terakhir + kualitas GPS, **GPS browser realtime** (prompt izin lokasi, kirim tiap ±5 dtk), kontrol sesi pelacakan (mulai/jeda/lanjutkan/hentikan), tautan **Buka di Google Maps**, daftar perangkat + token perangkat, dan simulasi perjalanan untuk uji coba tanpa GPS nyata |
 | **Riwayat** | Perjalanan (jarak lintasan GPS, durasi, kecepatan), jalur di peta, ringkasan harian, tanya "di mana saya tadi", koreksi titik berhenti ("saya berhenti di bengkel") |
 | **Tempat** | Tempat + geofence (rumah/kantor/bengkel/SPBU/…), tambah/ubah/hapus; klasifikasi berhenti memakai tempat terdekat — nama yang tidak pasti tetap "Belum teridentifikasi", tidak pernah dikarang |
 | **Darurat** | Mode (simulasi/nyata), kontak darurat (tambah → **verifikasi** → uji), hitung mundur 25 detik, riwayat kejadian beserta langkah eskalasi satu per satu |
@@ -305,6 +305,12 @@ Dasbor: **http://localhost:3000/tracking** — halaman pelacak untuk HP: **http:
 Buka `/track` di HP, tempel token perangkat (dibuat sekali di dasbor → perangkat), mulai. Halaman ini: `watchPosition` GPS dengan interval adaptif (rapat saat bergerak, hemat saat diam), gerbang gerak 25 m, antrean offline di `localStorage` saat sinyal hilang, Wake Lock agar layar tidak mati, dan DeviceMotion (bila diizinkan) untuk data guncangan + peringatan lokal ≥3 g dengan opsi auto-SOS. Status server (termasuk hitung mundur darurat) dipantau tiap 15 detik sehingga tombol "Saya aman" bisa ditekan dari HP.
 
 **Keterbatasan platform (jujur):** browser tidak bisa melacak saat halaman benar-benar ditutup. Untuk pelacakan latar belakang penuh dibutuhkan aplikasi native atau klien eksternal yang mengirim ke `POST /api/location/device/ingest` dengan header `x-device-token` (tidak ada klaim sebaliknya di UI).
+
+### GPS browser di dasbor & izin lokasi
+
+Tombol **Gunakan lokasi saat ini** (tab Tempat, termasuk saat mengubah titik tempat) dan **Aktifkan GPS browser** (tab Live) memanggil `navigator.geolocation` — inilah yang memunculkan prompt **"izinkan lokasi"**. GPS browser dikirim ke `POST /api/location/here` tiap ±5 detik dan masuk ke pipeline yang sama dengan HP (sesi, perjalanan, geofence, jarak), jadi peta dan jarak ikut bergerak. Watcher hanya hidup selama tab Live terbuka; ini bukan pelacakan latar belakang. Di komputer/laptop tanpa GPS, hasilnya bisa berupa perkiraan jaringan dengan akurasi ratusan meter — UI menampilkan akurasi itu apa adanya. Tautan **Buka di Google Maps** membuka titik terakhir di Google Maps; peta utama tetap Leaflet/OSM tanpa API key.
+
+Gunakan salah satu sumber saja: `/track` di HP **atau** GPS browser, agar titik tidak melompat antarperangkat. Sesi simulasi menolak GPS browser supaya data sintetis tidak tercampur data nyata.
 
 ### Tanya & simpan tempat lewat chat (Telegram / WhatsApp)
 
@@ -360,7 +366,10 @@ Item memori punya `kind`, `key`, `value`, `source` (pemilik/perangkat/modul) dan
 
 | Gejala | Sebab & solusi |
 | --- | --- |
-| Posisi live tidak muncul | Belum ada sesi aktif atau HP belum mengirim. Buka `/track`, pastikan token benar dan izin lokasi "selalu/aktif" |
+| Posisi live tidak muncul | Belum ada sesi aktif atau HP belum mengirim. Buka `/track`, pastikan token benar dan izin lokasi "selalu/aktif", atau nyalakan **GPS browser** di tab Live |
+| Izin lokasi tidak muncul saat klik "Gunakan lokasi saat ini" | Halaman dibuka lewat `http://` LAN (mis. `http://192.168...`) — browser memblokir GPS tanpa prompt. Buka lewat `https://` atau `localhost`. Jika izin pernah ditolak, reset lewat ikon gembok → Lokasi → Izinkan |
+| Posisi GPS browser meleset ratusan meter | Perangkat tidak punya GPS (PC/laptop); akurasi berasal dari jaringan. Gunakan `/track` di HP untuk titik presisi |
+| GPS browser berhenti saat pindah tab | Watcher hanya hidup selama tab Live terbuka (disengaja); nyalakan lagi atau pakai `/track` untuk pelacakan berkelanjutan |
 | Peta kosong | Vite dev / server hidup? Tiles OSM butuh internet; kegagalan tile tidak memblokir data |
 | Nama tempat "Belum teridentifikasi" | Tanpa POI/geofence yang cocok — koreksi sekali di tab Riwayat, tempat itu dikenali seterusnya |
 | Tidak ada nama jalan/POI | `LOCATION_GEOCODE=off` atau Nominatim tidak terjangkau; cek log `[LOCATION]` |
