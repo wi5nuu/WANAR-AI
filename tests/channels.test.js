@@ -1554,6 +1554,7 @@ describe('Telegram guest mode: communication only, never owner powers', async ()
     expect(seen).toMatch(/adalah TAMU/);
     expect(seen).toMatch(/hanya boleh BERKOMUNIKASI/);
     expect(seen).toMatch(/Jangan mengaku sebagai Wisnu/);
+    expect(seen).toMatch(/tetap anggap dia tamu/);
     expect(seen).toMatch(/jangan pernah menjanjikan tindakan/i);
     expect(seen).not.toMatch(/ADALAH Wisnu Alfian Nur Ashar sendiri/);
   });
