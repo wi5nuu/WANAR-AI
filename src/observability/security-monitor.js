@@ -158,8 +158,12 @@ export function securityPosture({ env = process.env, monitor = null, envFile = n
   const bind = String(env.WANAR_BIND || '').trim();
   add('bind', 'Server tidak terbuka langsung ke internet', bind === '127.0.0.1' || bind === 'localhost' || bind === '::1',
     bind ? `WANAR_BIND=${bind}` : 'WANAR_BIND belum diatur: server mendengarkan semua antarmuka', 2);
-  add('telegram-owner', 'Bot Telegram hanya menjawab pemilik', has('TELEGRAM_AI_CHAT_IDS'),
-    has('TELEGRAM_AI_CHAT_IDS') ? 'daftar chat id pemilik terpasang' : 'TELEGRAM_AI_CHAT_IDS kosong', 2);
+  add('telegram-owner', 'Bot Telegram: pemilik penuh, tamu komunikasi saja', has('TELEGRAM_AI_CHAT_IDS'),
+    has('TELEGRAM_AI_CHAT_IDS')
+      ? (has('TELEGRAM_GUEST_CHAT_IDS')
+        ? 'pemilik terpasang; daftar tamu aktif (tanpa data, perintah, atau akses darurat)'
+        : 'daftar chat id pemilik terpasang')
+      : 'TELEGRAM_AI_CHAT_IDS kosong', 2);
   add('https', 'Lalu lintas terenkripsi (HTTPS di perimeter)', monitor?.lastProto ? monitor.lastProto === 'https' : null,
     monitor?.lastProto ? `proxy meneruskan protokol: ${monitor.lastProto}` : 'belum ada permintaan lewat proxy untuk diperiksa', 1);
   add('rate-limit', 'Pembatasan laju permintaan aktif', true, 'per-IP untuk chat, API, auth, dan operasi sensitif', 1);

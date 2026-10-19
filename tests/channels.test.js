@@ -1455,3 +1455,106 @@ describe('Telegram AI persona: talks TO the owner, knows its real abilities', as
     expect(calls[0].commands).toEqual(expect.arrayContaining(['/mulai — mulai bekerja', '/help — daftar perintah']));
   });
 });
+
+describe('Telegram guest mode: communication only, never owner powers', async () => {
+  const { makeGuestResponder } = await import('../src/automation/telegram-inbox.js');
+  const OWNER = '1811580954';
+  const GUEST = '777000111';
+
+  const build = ({ replies = [], responder = async () => 'pemilik', guestResponder = async () => 'tamu', env = {} } = {}) => new TelegramInbox({
+    channel: { mode: 'live', reply: async (to, html) => replies.push({ to, html }), sendAction: async () => {} },
+    store: { subscribers: { upsert() {}, setActive() {}, counts: () => ({}) }, suppressions: { add() {}, remove() {} } },
+    env: { TELEGRAM_AI_CHAT_IDS: OWNER, TELEGRAM_GUEST_CHAT_IDS: GUEST, ...env },
+    responder,
+    guestResponder,
+  });
+
+  const guestMessage = (text, id = GUEST, update_id = 1) => ({
+    update_id,
+    message: { text, chat: { id: Number(id), type: 'private' }, from: { first_name: 'Zahra' } },
+  });
+
+  it('answers a guest with the guest responder, flags it, and hides owner commands', async () => {
+    const replies = [];
+    const guestCalls = [];
+    const exchanges = [];
+    const inbox = build({
+      replies,
+      guestResponder: async (args) => { guestCalls.push(args); return 'Halo, saya AI-nya Wisnu.'; },
+    });
+    inbox.registerCommands({ rahasia: { description: 'data pemilik', run: async () => 'rahasia' } });
+    inbox.onExchange = (e) => exchanges.push(e);
+
+    const r = await inbox.handleUpdate(guestMessage('halo'));
+    await r.done;
+
+    expect(r.guest).toBe(true);
+    expect(replies.map((x) => x.html)).toContain('Halo, saya AI-nya Wisnu.');
+    expect(guestCalls[0].commands).toEqual(['/id — tampilkan Chat ID']);
+    expect(guestCalls[0].commands.join(' ')).not.toContain('/rahasia');
+    expect(exchanges[0].guest).toBe(true);
+  });
+
+  it('never runs owner-only commands for a guest', async () => {
+    const replies = [];
+    let ran = 0;
+    const inbox = build({ replies });
+    inbox.registerCommands({ mulai: { description: 'mulai bekerja', run: async () => { ran += 1; return 'mulai'; } } });
+
+    const r = await inbox.handleUpdate(guestMessage('/mulai', GUEST, 2));
+
+    expect(r).toBeNull();
+    expect(ran).toBe(0);
+    expect(replies).toHaveLength(0);
+  });
+
+  it('keeps owner powers when a chat appears in both lists', async () => {
+    const replies = [];
+    const inbox = build({
+      replies,
+      env: { TELEGRAM_AI_CHAT_IDS: GUEST, TELEGRAM_GUEST_CHAT_IDS: GUEST },
+      responder: async () => 'jawaban pemilik',
+      guestResponder: async () => 'jawaban tamu',
+    });
+
+    const r = await inbox.handleUpdate(guestMessage('halo', GUEST, 3));
+    await r.done;
+
+    expect(r.guest).toBe(false);
+    expect(replies[0].html).toBe('jawaban pemilik');
+  });
+
+  it('does not subscribe a guest to broadcasts, but says chatting still works', async () => {
+    const replies = [];
+    const inbox = build({ replies });
+
+    const r = await inbox.handleUpdate(guestMessage('/start', GUEST, 4));
+
+    expect(r.action).toBe('rejected');
+    expect(r.reason).toBe('guest_no_subscribe');
+    expect(replies[0].html).toMatch(/mengobrol dengan AI/);
+  });
+
+  it('ignores a chat that is in neither list', async () => {
+    const replies = [];
+    const inbox = build({ replies });
+
+    const r = await inbox.handleUpdate(guestMessage('halo', '999000999', 5));
+
+    expect(r).toBeNull();
+    expect(replies).toHaveLength(0);
+  });
+
+  it('the guest prompt forbids owner access, impersonation, and promises', async () => {
+    let seen = '';
+    const ai = { async *chatStream(_m, opts) { seen = opts.systemPrompt; yield { type: 'content', content: 'ok' }; yield { type: 'done' }; } };
+    const respond = makeGuestResponder({ aiManager: ai, ownerName: 'Wisnu Alfian Nur Ashar' });
+    await respond({ history: [], text: 'kamu siapa', commands: ['/id — tampilkan Chat ID'] });
+
+    expect(seen).toMatch(/adalah TAMU/);
+    expect(seen).toMatch(/hanya boleh BERKOMUNIKASI/);
+    expect(seen).toMatch(/Jangan mengaku sebagai Wisnu/);
+    expect(seen).toMatch(/jangan pernah menjanjikan tindakan/i);
+    expect(seen).not.toMatch(/ADALAH Wisnu Alfian Nur Ashar sendiri/);
+  });
+});

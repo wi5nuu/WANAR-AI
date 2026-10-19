@@ -83,6 +83,7 @@ import { createCareerRouter } from './career/routes.js';
 import { createCommandCenterRouter } from './command-center/routes.js';
 import { createOwnerContext, createTelegramTranscript, createWhatsAppTranscript } from './memory/owner-context.js';
 import { makeAssistantResponder } from './worklog/assistant.js';
+import { makeGuestResponder } from './automation/telegram-inbox.js';
 import { createWhatsAppWebhookRouter } from './automation/whatsapp-webhook.js';
 import { traceHub, traceStep } from './observability/trace-hub.js';
 import { installHeaderCapture } from './observability/quota.js';
@@ -440,6 +441,10 @@ automation.inbox.responder = makeAssistantResponder({
   memory: personalMemory,
   context: ({ text, chatId }) => ownerContext({ text, excludeSessionId: chatId ? telegramTranscript.sessionId(chatId) : null }),
 });
+// Guest chats (mis. keluarga/kerabat yang diizinkan mengobrol): komunikasi
+// saja. Responder ini TIDAK diberi konteks pemilik, perintah owner, atau hook
+// darurat — jadi tamu tidak bisa melihat atau mengubah apa pun milik pemilik.
+automation.inbox.guestResponder = makeGuestResponder({ aiManager });
 automation.inbox.onExchange = (e) => telegramTranscript.record(e);
 automation.inbox.onOutgoing = (e) => telegramTranscript.recordOutgoing(e);
 automation.inbox.loadHistory = (chatId) => telegramTranscript.history(chatId);

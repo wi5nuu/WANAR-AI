@@ -248,6 +248,25 @@ dua arah dengan AI yang **gratis penuh tanpa batas**, pakai **Telegram** — Bot
 biaya per pesan, dan semua fitur (memori kontak, pelajaran malam, gerbang YA, pengingat/alarm)
 berjalan sama di sana.
 
+**Mode tamu di Telegram — komunikasi saja.** Selain pemilik (`TELEGRAM_AI_CHAT_IDS`), Anda bisa
+mengizinkan orang lain **mengobrol** dengan AI lewat `TELEGRAM_GUEST_CHAT_IDS=id1,id2` (ambil id
+dengan `/id`). Tamu hanya mendapat percakapan; seluruh akses lain ditutup oleh kode, bukan sekadar
+diminta di prompt:
+
+| | Pemilik | Tamu |
+| --- | --- | --- |
+| Ngobrol dengan AI | ✅ | ✅ (dibatasi 20 pesan/10 menit) |
+| Perintah pemilik (`/mulai`, `/catat`, `/hariini`, keuangan, email, alarm) | ✅ | ❌ tidak ada |
+| Konteks pribadi (jurnal, keuangan, lokasi, riwayat chat, otomasi) | ✅ | ❌ tidak disuntikkan sama sekali |
+| Menjawab/membatalkan darurat lewat chat ("aman"/"bantuan") | ✅ | ❌ tidak pernah sampai ke mesin darurat |
+| Siaran/broadcast (`/start`) | ✅ | ❌ ditolak dengan sopan |
+| Akses berkas, shell, browser, kirim pesan/email | ❌ (semua bot chat) | ❌ |
+
+Kalau satu chat id ada di kedua daftar, **daftar pemilik menang**. Kontak darurat **bukan** tamu:
+mendaftarkan `telegram_chat_id` di kontak darurat hanya membuat sistem bisa *mengirim* alarm
+kepadanya — ia tidak otomatis bisa mengobrol dengan AI. Sebaliknya, tamu tidak bisa memicu atau
+membatalkan eskalasi darurat siapa pun.
+
 **Memori kontak.** Setiap orang yang pernah mengirim pesan ke kanal Anda (WhatsApp/Telegram) dicatat
 otomatis di tabel `people`: nama profil, jumlah pesan, terakhir kapan, plus cuplikan pesan terakhir.
 AI pemilik bisa menjawab pertanyaan seperti "siapa yang chat tadi?" dari data itu; nomor/chat pemilik
