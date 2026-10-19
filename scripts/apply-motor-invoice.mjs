@@ -162,9 +162,11 @@ memModule.service.remember({
 console.log('✓ Personal memory ingested for AI assistant context.');
 
 // 5. Schedule proactive Telegram reminders in worklog
+const ownerChat = String(process.env.TELEGRAM_AI_CHAT_IDS || '1811580954').split(',')[0].trim() || '1811580954';
 try {
   wlModule.service.addReminder({
     at: '2026-11-26 09:00',
+    chatId: ownerChat,
     text: '🛵 Pengingat Servis Motor (H-7): 7 hari lagi menuju batas 2 bulan jadwal servis berkala Honda Vario 160 (B 4780 UDM) di AHASS Mitra Jaya Bekasi (jatuh tempo 03 Desember 2026). Hubungi AHASS di 021-88854053 untuk booking servis.',
     source: 'vehicle_module',
   });
@@ -176,6 +178,7 @@ try {
 try {
   wlModule.service.addReminder({
     at: '2026-12-02 09:00',
+    chatId: ownerChat,
     text: '🛵 Pengingat Servis Motor (H-1): Besok (03 Desember 2026) adalah batas rekomendasi servis berkala 2 bulan Honda Vario 160 (B 4780 UDM) di AHASS Mitra Jaya Bekasi. Pastikan kondisi oli, rem, dan ban siap diservis.',
     source: 'vehicle_module',
   });
@@ -187,6 +190,7 @@ try {
 try {
   wlModule.service.addReminder({
     at: '2026-12-03 08:30',
+    chatId: ownerChat,
     text: '🛵 Hari Ini Batas Jadwal Servis AHASS: Honda Vario 160 (B 4780 UDM) genap 2 bulan sejak servis sebelumnya di AHASS Mitra Jaya Bekasi (03 Okt 2026). Segera lakukan servis berkala dan tune up di bengkel resmi AHASS.',
     source: 'vehicle_module',
   });
@@ -194,6 +198,8 @@ try {
 } catch (e) {
   console.warn('Hari H reminder:', e.message);
 }
+
+sqliteDb.prepare("UPDATE wl_reminders SET chat_id = ? WHERE (chat_id IS NULL OR chat_id = '') AND source = 'vehicle_module'").run(ownerChat);
 
 // 6. Print final status
 const status = svc.status();
