@@ -111,6 +111,9 @@ const DUE_STATUS = { overdue: ['err', 'terlambat'], due: ['err', 'waktunya'], du
 
 const Chip = ({ kind = 'muted', title, children }) => <span className={`trk-chip ${kind}`} title={title || undefined}>{children}</span>;
 
+/** The same bot the owner already runs; contacts only need to send /id once. */
+const TELEGRAM_BOT = '@wisnu_ai_bot';
+
 /** Place categories in the language the owner actually says: Rumah, Kantor, Toko… */
 const KIND_LABELS_ID = {
   home: 'Rumah', office: 'Kantor', shop: 'Toko', mall: 'Mal', fuel: 'SPBU', food: 'Tempat makan',
@@ -1288,6 +1291,9 @@ function EmergencyTab({ emg, loc, notify, refresh, refreshKey }) {
         <div className="trk-honesty" style={{ marginTop: 6 }}>
           <b>Telepon otomatis belum tersedia.</b> {status.voiceCall?.reason || 'Sistem mengirim WhatsApp, email, Telegram, atau webhook.'}
         </div>
+        <div className="trk-honesty" style={{ marginTop: 6 }}>
+          <b>Alternatif gratis tanpa Meta:</b> email (sudah aktif) dan Telegram — minta kontak mengirim <code>/id</code> ke bot <b>{TELEGRAM_BOT}</b>, lalu isi Chat ID-nya di kontak. Telegram gratis, instan, dan tanpa batas 24 jam.
+        </div>
       </div>
 
       {open && (
@@ -1360,7 +1366,7 @@ function EmergencyTab({ emg, loc, notify, refresh, refreshKey }) {
           <Field label="Nama"><input className="au-input" value={contact.name} onChange={(e) => setContact({ ...contact, name: e.target.value })} /></Field>
           <Field label="Hubungan (opsional)"><input className="au-input" value={contact.relation} onChange={(e) => setContact({ ...contact, relation: e.target.value })} placeholder="mis. kakak" /></Field>
           <Field label="Nomor telepon (WhatsApp)"><input className="au-input" value={contact.phone} onChange={(e) => setContact({ ...contact, phone: e.target.value })} placeholder="08xx…" /></Field>
-          <Field label="Telegram chat id"><input className="au-input" value={contact.telegramChatId} onChange={(e) => setContact({ ...contact, telegramChatId: e.target.value })} /></Field>
+          <Field label="Telegram chat id" hint={`Gratis & instan: minta dia buka Telegram → ${TELEGRAM_BOT} → kirim /id → salin angka balasannya ke sini.`}><input className="au-input" value={contact.telegramChatId} onChange={(e) => setContact({ ...contact, telegramChatId: e.target.value })} /></Field>
           <Field label="Email"><input className="au-input" value={contact.email} onChange={(e) => setContact({ ...contact, email: e.target.value })} /></Field>
           <Field label="Prioritas (kecil = didahulukan)"><input className="au-input" type="number" min="1" value={contact.priority} onChange={(e) => setContact({ ...contact, priority: e.target.value })} /></Field>
         </div>
